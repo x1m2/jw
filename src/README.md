@@ -12,7 +12,7 @@ src
 ├── drivers/               # 传感器驱动
 │   └── livox_ros_driver2   # Livox 雷达 ROS2 驱动
 ├── slam/                  # SLAM、后端优化、定位
-│   ├── FAST_LIO            # 激光惯性里程计/建图前端
+│   ├── fast_lio            # 激光惯性里程计/建图前端
 │   ├── pgo_sc              # ScanContext 回环检测 + GTSAM 位姿图优化
 │   └── localization_sc     # 基于已有地图的 ScanContext 定位/重定位
 ├── navigation/            # 导航规划
@@ -36,7 +36,7 @@ ros2 launch livox_ros_driver2 msg_MID360s_launch.py
 
 ### 2. FAST-LIO 前端建图
 
-`slam/FAST_LIO` 负责激光惯性里程计估计和实时点云建图。
+`slam/fast_lio` 负责激光惯性里程计估计和实时点云建图。
 
 主要输出：
 
