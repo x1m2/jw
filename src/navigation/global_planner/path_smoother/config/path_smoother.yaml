@@ -1,0 +1,12 @@
+path_smoother:
+  ros__parameters:
+    global_frame: map
+
+    smoothing_factor: 1.0
+    smoothing_iterations: 3
+    neighbor_radius: 1.0
+    min_point_distance: 0.5
+    max_deviation: 1.5
+
+    enable_visualization: true
+    enable_point_filtering: true

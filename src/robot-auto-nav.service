@@ -1,0 +1,44 @@
+[Unit]
+Description=Robot Auto Relocalization And Navigation
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/robotfs/data
+
+[Service]
+Type=simple
+User=jw
+Group=jw
+WorkingDirectory=/home/jw/robot_rk3588_ws
+
+Environment=HOME=/home/jw
+Environment=ROS_DOMAIN_ID=0
+Environment=ROS_LOCALHOST_ONLY=0
+Environment=ROBOT_DATA_DIR=/robotfs/data/robot_data
+Environment=NAV_HEADLESS=1
+
+# 建议一直重试重定位
+Environment=AUTO_NAV_ATTEMPTS=999999
+Environment=AUTO_NAV_RETRY_DELAY=10
+
+# 可选：指定固定任务；不写则自动找 task 目录第一个 txt
+# Environment=AUTO_NAV_TASK=test
+# Environment=AUTO_NAV_LOOP=1
+
+ExecStart=/home/jw/robot_rk3588_ws/src/run_auto_nav.sh
+
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=45
+KillMode=control-group
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+#sudo nano /etc/systemd/system/robot-auto-nav.service
+#sudo systemctl daemon-reload
+#sudo systemctl enable robot-auto-nav.service
+#sudo systemctl start robot-auto-nav.service
+#sudo systemctl status robot-auto-nav.service --no-pager

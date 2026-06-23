@@ -1,0 +1,26 @@
+costmap_2d_node:
+  ros__parameters:
+    # 坐标系参数
+    global_frame: "map"
+    robot_base_frame: "base_link"
+    scan_topic: "/scan"
+
+    # 地图参数
+    resolution: 0.05
+    width: 400
+    height: 400
+
+    # 障碍物检测参数
+    max_obstacle_range: 10.0
+    min_obstacle_range: 0.05
+    inflation_radius: 0.38
+
+    # 俯仰角检测参数
+    enable_pitch_detection: true
+    max_pitch_angle: 18.0
+    pitch_recovery_time: 2.0
+
+    # 时间衰减参数
+    use_time_decay: false
+    obstacle_max_age: 1.0
+    decay_rate: 0.80

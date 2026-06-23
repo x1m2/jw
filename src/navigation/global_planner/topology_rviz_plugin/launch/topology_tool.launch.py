@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+
+from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+
+
+def generate_launch_description():
+    topology_share = get_package_share_directory('topology_rviz_plugin')
+
+    cloud_publisher_launch = os.path.join(
+        get_package_share_directory('pcd_publisher'),
+        'launch',
+        'pcd_publisher.launch.py'
+    )
+
+    target_points_visualizer_launch = os.path.join(
+        topology_share,
+        'launch',
+        'target_points_visualizer.launch.py'
+    )
+
+    rviz_config_file = os.path.join(
+        topology_share,
+        'rviz',
+        'topology_demo.rviz'
+    )
+
+    topology_tool_config = os.path.join(
+        topology_share,
+        'config',
+        'topology_tool.yaml'
+    )
+
+    return LaunchDescription([
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(cloud_publisher_launch)
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(target_points_visualizer_launch)
+        ),
+
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz_topology',
+            output='screen',
+            arguments=['-d', rviz_config_file],
+            parameters=[topology_tool_config]
+        ),
+    ])

@@ -1,0 +1,20 @@
+navigation_task_state_machine_node:
+  ros__parameters:
+    task_folder_path: "/robotfs/data/robot_data/task"
+
+    # 目标点文件路径：状态机从这里读取目标点。
+    # 如果要使用手动打点生成的新目标点，保持下面这个路径。
+    # 如果仍要使用包内默认目标点，可改为：$(find user_interface)/config/generated_map_target_points.txt
+    target_points_file: "/robotfs/data/robot_data/topology_map/generated_map_target_points.txt"
+
+    # 状态机运行频率 Hz
+    state_machine_frequency: 10.0
+
+     # 是否启用：重定位后离第一个任务点很近就跳过第一个点
+    enable_skip_first_target: true
+
+    # 距离第一个任务点小于这个值，就认为已经在1号点附近，直接从2号点开始
+    skip_first_target_threshold: 0.8
+
+    # 状态机用来判断当前位置的话题，要和全局规划器/定位输出一致
+    pose_topic: "/pose_stamped_localization"

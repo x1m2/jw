@@ -1,0 +1,75 @@
+dual_radar_traversable_extractor:
+  ros__parameters:
+    # 双雷达可行区域提取器配置文件
+
+    # 模式配置
+    use_dual_radar: false                      # 是否使用双雷达模式（false=单雷达模式，true=双雷达模式）
+    use_patchworkpp: true                      # 是否使用PatchWorkpp高级地面分割（可检测台阶/楼梯）
+
+    # 话题配置
+    lidar_topic: "/cloud_registered_body"    # 激光雷达点云话题 (在laser_link坐标系下)
+    radar_topic: "/lidar/points"               # 毫米波雷达点云话题 (仅在双雷达模式下使用)
+    odom_topic: "/baselink2map"                # 里程计话题（可选）
+
+    # 坐标系配置
+    base_frame: "base_link"                    # 机器人基坐标系（水平坐标系，用于地面分割）
+    lidar_frame: "base_link"                  # 激光雷达坐标系 (cloud_registered_body_1实际在此坐标系下)
+    radar_frame: "radar"                       # 毫米波雷达坐标系
+
+    # 数据同步配置
+    time_sync_threshold: 0.05                 # 时间同步阈值（秒）
+
+    # 点云处理参数
+    voxel_leaf_size: 0.05                     # 体素滤波器叶子大小（米）
+    height_threshold: 0.5                     # 地面高度阈值（米），参考PGO设置
+    refined_height_threshold: 0.1             # PatchWorkpp精细高度过滤阈值（米）
+    robot_radius: 0.3                         # 机器人半径（米）
+    max_range: 10.0                           # 最大处理距离（米）
+
+    # 滤波参数
+    use_statistical_filter: true              # 是否使用统计滤波
+    statistical_filter_k: 50                  # 统计滤波邻居数
+    statistical_filter_std: 1.0               # 统计滤波标准差倍数
+
+    # PatchWorkpp地面分割参数
+    patchworkpp:
+      verbose: false
+      sensor_height: 1.723
+      num_iter: 3
+      num_lpr: 20
+      num_min_pts: 6                           # 减少最小点数要求
+      th_seeds: 0.32                           # 使用PGO的种子阈值
+      th_dist: 0.05                            # 使用PGO的距离阈值
+      th_seeds_v: 0.25                         # 垂直结构种子阈值
+      th_dist_v: 0.1                           # 垂直结构距离阈值
+      max_r: 10.0                              # 减少最大范围到合理值
+      min_r: 0.01                              # 使用PGO的最小范围，避免忽略近距离点
+      uprightness_thr: 0.707                   # 使用PGO的直立度阈值
+      adaptive_seed_selection_margin: -1.1
+      RNR_ver_angle_thr: -15.0
+      RNR_intensity_thr: 0.2
+      max_flatness_storage: 1000
+      max_elevation_storage: 1000
+      enable_RNR: true
+      enable_RVPF: true
+      enable_TGR: true
+      visualize: false
+  
+      # 同心圆区域模型 (CZM) 参数 - 使用PGO的配置
+      czm:
+        num_zones: 4
+        num_sectors_each_zone: [4, 8, 12, 8]    # 使用PGO的扇区配置
+        mum_rings_each_zone: [4, 4, 4, 4]       # 使用PGO的环形配置
+        elevation_thresholds: [0.1, 0.1, 0.1, 0.1]  # 使用PGO的高度阈值
+        flatness_thresholds: [0.0, 0.0, 0.0, 0.0]
+
+    # 地面点云膨胀参数
+    use_ground_expansion: true                 # 启用地面点云膨胀（用于处理楼梯等场景）
+    expansion_radius: 0.3                     # 膨胀半径（米）- 地面点周围多少米内的点视为可行区域
+    expansion_height: 0.3                     # 膨胀高度范围（米）- 地面点上下多少米内的点视为可行区域
+
+    # 障碍物点云聚类滤波参数
+    use_obstacle_clustering: true             # 启用障碍物点云聚类滤波（去除孤立点）
+    cluster_tolerance: 0.4                   # 聚类容忍距离（米）- 点之间的最大距离
+    min_cluster_size: 10                     # 最小聚类大小（点数）- 小于此值的聚类将被过滤掉
+    max_cluster_size: 25000                  # 最大聚类大小（点数）- 防止过大的聚类

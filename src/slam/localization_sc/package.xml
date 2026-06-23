@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>localization_sc</name>
+  <version>0.0.0</version>
+
+  <description>
+    Map-based localization implementation combining FAST-LIO2 with Quatro, Nano-GICP, and ScanContext
+  </description>
+
+  <maintainer email="eungchang_mason@kaist.ac.kr">Eungchang Mason Lee</maintainer>
+  <license>TODO</license>
+
+  <!-- Build tool for ROS 2 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Build dependencies -->
+  <depend>rclcpp</depend>
+  <depend>rosbag2</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_eigen</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_msgs</depend>
+  <depend>message_filters</depend>
+  <depend>nano_gicp</depend>
+  <depend>quatro</depend>
+  <depend>angles</depend>
+  <!-- Test dependencies (可选) -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

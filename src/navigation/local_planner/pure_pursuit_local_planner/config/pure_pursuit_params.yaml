@@ -1,0 +1,73 @@
+pure_pursuit_local_planner:
+  ros__parameters:
+    use_sim_time: false
+
+    enable_local_replanning: false
+    use_smoothed_path: false
+
+    lookahead_distance_min: 0.4
+    lookahead_distance_max: 0.7
+    goal_tolerance: 0.3
+
+    max_linear_velocity: 0.4    ##最大线速度x
+    max_linear_velocity_y: 0.3
+    max_angular_velocity: 0.5  ##最大角速度
+    min_linear_velocity: 0.1
+    acceleration_limit: 0.5
+    deceleration_limit: 0.8
+
+    local_planning_frequency: 10.0
+    local_lookahead_distance: 1.0
+    local_min_lookahead_distance: 1.0
+    local_max_lookahead_distance: 3.0
+
+    dijkstra_obstacle_threshold: 10.0
+    dijkstra_allow_diagonal: true
+    dijkstra_diagonal_cost: 5.4
+    dijkstra_straight_cost: 5.0
+    dijkstra_safety_margin: 0
+    dijkstra_path_deviation_weight: 0.0
+    dijkstra_obstacle_avoidance_weight: 20.0
+
+    costmap_threshold: 50.0
+
+    potential_field:
+      attractive_gain: 8.0
+      repulsive_gain: 1.0
+      influence_radius: 0.2
+      safety_radius: 0.1
+      force_limit: 10.0
+      angular_gain: 0.3
+      speed_factor_gain: 1.0
+      y_force_threshold: 0.5
+      y_velocity_gain: 0.2
+      y_smoothing_factor: 0.3
+      y_dead_zone: 0.05
+      angular_smoothing_factor: 0.4
+      bilateral_threshold: 0.8
+      bilateral_damping: 0.1
+
+    front_obstacle_detector:
+      detection_shape: "sector"
+      detection_width: 0.3
+      detection_length: 1.0
+      sector_radius: 0.9
+      sector_angle: 60.0
+      obstacle_threshold: 50
+      linear_velocity_factor: 0.0
+      angular_velocity_factor: 0.0
+      debug_mode: true
+      enable_visualization: true
+
+    control_frequency: 20.0
+    transform_tolerance: 0.1
+
+    global_frame: "map"
+    robot_frame: "base_link"
+
+    curvature_smoothing_window: 3.0
+    max_curvature: 2.0
+    #角度 角速度相关参数
+    yaw_tolerance: 0.26
+    yaw_adjustment_gain: 0.9
+    final_yaw_min_angular_velocity: 0.28

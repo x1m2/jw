@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+
+  <name>quatro</name>
+  <version>1.0.0</version>
+  <description>quatro</description>
+
+  <maintainer email="eungchang_mason@kaist.ac.kr">Eungchang Mason Lee</maintainer>
+  <maintainer email="shapelim@kaist.ac.kr">Hyungtae Lim</maintainer>
+
+  <license>GPL-3.0</license>
+
+  <!-- build tool -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- dependencies -->
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_ros</depend>
+
+  <!-- teaserpp 如果是系统库，可以不写；如果是ROS包才写 -->
+  <!-- <depend>teaserpp</depend> -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+
+</package>

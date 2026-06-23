@@ -1,0 +1,18 @@
+rviz_topology:
+  ros__parameters:
+    tool_manager.tool_plugins:
+      - topology_rviz_plugin/TopologyTool
+
+    topology_tool:
+      marker_topic: "topology_markers"
+      point_topic: "topology_points"
+      pointcloud_topic: "/free_space_cloud"
+
+      default_mode: "Add Node"
+      node_label: "节点"
+
+      max_connection_distance: 2.0
+      selection_threshold: 0.3
+      bidirectional: true
+
+      save_file: "/robotfs/data/robot_data/topology_map/connected_topology_map.txt"

@@ -1,0 +1,64 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3             # 原始点云预处理时的抽点间隔 / 降采样比例
+        max_iteration: 3
+        filter_size_surf: 0.5           # 前帧点云的体素降采样大小
+        filter_size_map: 0.3            # ikdtree 地图体素分辨率  默认值:0.5
+        cube_side_length: 1000.0        # 局部地图立方体区域的边长
+        runtime_pos_log_enable: false
+        align_gravity: true
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/livox/imu"
+            time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
+            time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
+                                        # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
+
+        preprocess:
+            lidar_type: 1              # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 4 for any other pointcloud input
+            scan_line:  4
+            blind: 0.5                  # 最小有效距离
+            timestamp_unit: 3
+            scan_rate: 10
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree:    360.0
+            det_range:     100.0           # 最大有效距离
+            extrinsic_est_en:  false      # true: enable the online estimation of IMU-LiDAR extrinsic
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            extrinsic_R: [ 1., 0., 0.,
+                           0., 1., 0.,
+                           0., 0., 1.]
+            base_to_imu_T: [ 0.0, 0.0, 0.0 ]
+            base_to_imu_R: 0.4119  #23.6
+
+        # IMU约束增强配置（防止特征点稀疏时的漂移）
+        imu_constraint:
+            enable_auto_constraint: true    # 是否启用自动IMU约束
+            enable_velocity_constraint: false # 是否约束速度
+            enable_rotation_constraint: true # 是否约束旋转
+            feature_threshold_strong: 100   # 触发强约束的特征点阈值
+            feature_threshold_medium: 180   # 触发中等约束的特征点阈值
+            strong_constraint_weight: 2.0   # 强约束时的IMU权重
+            medium_constraint_weight: 1.0   # 中等约束时的IMU权重
+            max_rotation_correction: 0.12    # 最大旋转修正量（弧度）
+
+        publish:
+            path_en: true                # true: publish Path
+            effect_map_en: false         # true: publish Effects
+            map_en: true                 # true: publish Map cloud
+            scan_publish_en:  true       # false: close all the point cloud output
+            dense_publish_en: false      # false: low down the points number in a global-frame point clouds scan.
+            scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1                 # how many LiDAR frames saved in each pcd file; 
+                                        # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
