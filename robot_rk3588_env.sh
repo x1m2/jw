@@ -47,6 +47,8 @@ PARALLEL_WORKERS="${PARALLEL_WORKERS:-2}"
 FORCE_THIRD_PARTY="${FORCE_THIRD_PARTY:-0}"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 TZ_VALUE="${TZ_VALUE:-Asia/Shanghai}"
+# 第三方库临时构建目录：默认使用启动脚本时的当前目录。
+BUILD_TMP_ROOT="${BUILD_TMP_ROOT:-${PWD}/.build_tmp}"
 
 info() { echo -e "\033[1;32m[INFO]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
@@ -302,7 +304,7 @@ build_gtsam_411() {
   fi
 
   info "源码安装 GTSAM 4.1.1：${zip_path}"
-  local build_root="/robotfs/data/gtsam_build_$$"
+  local build_root="${BUILD_TMP_ROOT}/gtsam_build_$$"
   rm -rf "${build_root}"
   mkdir -p "${build_root}"
   unzip -q "${zip_path}" -d "${build_root}"
@@ -334,7 +336,7 @@ build_livox_sdk2() {
   fi
 
   info "源码安装 Livox-SDK2"
-  local build_root="/robotfs/data/livox_sdk2_build_$$"
+  local build_root="${BUILD_TMP_ROOT}/livox_sdk2_build_$$"
   rm -rf "${build_root}"
   mkdir -p "${build_root}"
 
@@ -365,7 +367,7 @@ build_teaserpp() {
   fi
 
   info "源码安装 TEASER++"
-  local build_root="/robotfs/data/teaserpp_build_$$"
+  local build_root="${BUILD_TMP_ROOT}/teaserpp_build_$$"
   rm -rf "${build_root}"
   mkdir -p "${build_root}"
 
@@ -498,14 +500,17 @@ setup_bashrc_source() {
 
   local ros_source="source /opt/ros/${ROS_DISTRO}/setup.bash"
   local ws_source="source ${WS}/install/setup.bash"
+  local display_export="export DISPLAY=192.168.50.50:0.0"
 
   grep -qxF "${ros_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ros_source}" >> "${HOME}/.bashrc"
   grep -qxF "${ws_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ws_source}" >> "${HOME}/.bashrc"
+  grep -qxF "${display_export}" "${HOME}/.bashrc" 2>/dev/null || echo "${display_export}" >> "${HOME}/.bashrc"
 
   cat > "${WS}/source_robot_env.sh" <<EOF
 #!/usr/bin/env bash
 source /opt/ros/${ROS_DISTRO}/setup.bash
 source ${WS}/install/setup.bash
+export DISPLAY=192.168.50.50:0.0
 EOF
   chmod +x "${WS}/source_robot_env.sh"
 
@@ -517,6 +522,7 @@ main() {
   info "脚本目录：${SCRIPT_DIR}"
   info "工作空间：${WS}"
   info "第三方目录：${THIRD_PARTY_DIR}"
+  info "临时构建目录：${BUILD_TMP_ROOT}"
   info "并行编译数：${PARALLEL_WORKERS}"
 
   need_cmd sudo
@@ -543,7 +549,8 @@ main() {
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
     # shellcheck disable=SC1090
     source "${WS}/install/setup.bash"
-    info "当前终端已 source 完成"
+    export DISPLAY=192.168.50.50:0.0
+    info "当前终端已 source 完成，DISPLAY=${DISPLAY}"
   else
     warn "脚本正常执行完毕，但无法修改当前父终端环境"
     warn "当前终端请执行：source ${WS}/install/setup.bash"
