@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -9,6 +11,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     pkg_share = FindPackageShare('global_path_planner')
 
     default_config_file = PathJoinSubstitution([
@@ -28,7 +31,16 @@ def generate_launch_description():
         executable='global_path_planner_node',
         name='global_path_planner_node',
         output='screen',
-        parameters=[LaunchConfiguration('config_file')]
+        parameters=[
+            LaunchConfiguration('config_file'),
+            {
+                'topology_map_file': os.path.join(
+                    robot_data_dir,
+                    'topology_map',
+                    'connected_topology_map.txt',
+                )
+            },
+        ]
     )
 
     return LaunchDescription([

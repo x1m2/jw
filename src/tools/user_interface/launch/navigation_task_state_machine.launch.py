@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -10,6 +12,7 @@ from launch.substitutions import PathJoinSubstitution
 
 
 def generate_launch_description():
+    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     user_interface_share = FindPackageShare('user_interface')
 
     default_params_file = PathJoinSubstitution([
@@ -36,6 +39,16 @@ def generate_launch_description():
             executable='navigation_task_state_machine_node',
             name=LaunchConfiguration('node_name'),
             output='screen',
-            parameters=[LaunchConfiguration('params_file')]
+            parameters=[
+                LaunchConfiguration('params_file'),
+                {
+                    'task_folder_path': os.path.join(robot_data_dir, 'task'),
+                    'target_points_file': os.path.join(
+                        robot_data_dir,
+                        'topology_map',
+                        'generated_map_target_points.txt',
+                    ),
+                },
+            ]
         )
     ])

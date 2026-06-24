@@ -11,6 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     topology_share = get_package_share_directory("topology_rviz_plugin")
 
     config_file = os.path.join(
@@ -41,6 +42,16 @@ def generate_launch_description():
                     "marker_topic": "/topology_markers",
                     "frame_id": "map",
                     "publish_period": 1.0,
+                    "input_file": os.path.join(
+                        robot_data_dir,
+                        "topology_map",
+                        "generated_map.txt",
+                    ),
+                    "output_file": os.path.join(
+                        robot_data_dir,
+                        "topology_map",
+                        "connected_topology_map.txt",
+                    ),
                 }
             ],
         )

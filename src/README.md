@@ -290,7 +290,7 @@ colcon build --packages-select quatro --cmake-args -DCMAKE_BUILD_TYPE=Release -D
 再编译整个工作空间：
 
 ```bash
-colcon build --symlink-install --parallel-workers 2  --packages-skip quatro --cmake-args  -DCMAKE_BUILD_TYPE=Release -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+colcon build --symlink-install --parallel-workers 1  --packages-skip quatro --cmake-args  -DCMAKE_BUILD_TYPE=Release -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
 source install/setup.bash
 ```
 

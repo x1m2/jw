@@ -9,6 +9,7 @@ import os
 
 
 def generate_launch_description():
+    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
 
     config_file = LaunchConfiguration('config_file')
 
@@ -31,6 +32,15 @@ def generate_launch_description():
             executable='topology_map_generator_node',
             name='topology_map_generator',
             output='screen',
-            parameters=[config_file]
+            parameters=[
+                config_file,
+                {
+                    'output_file': os.path.join(
+                        robot_data_dir,
+                        'topology_map',
+                        'generated_map.txt',
+                    )
+                },
+            ]
         )
     ])

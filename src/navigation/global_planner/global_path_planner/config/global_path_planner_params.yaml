@@ -2,7 +2,7 @@ global_path_planner_node:
   ros__parameters:
     # 基本参数 
     # 实时定位位姿话题，类型：geometry_msgs/msg/PoseStamped
-    topology_map_file: "/robotfs/data/robot_data/topology_map/connected_topology_map.txt"
+    topology_map_file: "${ROBOT_DATA_DIR}/topology_map/connected_topology_map.txt"
     global_frame: "map"
     pose_topic: "/pose_stamped_localization"
     # 路径规划参数

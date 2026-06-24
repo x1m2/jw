@@ -1,11 +1,11 @@
 navigation_task_state_machine_node:
   ros__parameters:
-    task_folder_path: "/robotfs/data/robot_data/task"
+    task_folder_path: "${ROBOT_DATA_DIR}/task"
 
     # 目标点文件路径：状态机从这里读取目标点。
     # 如果要使用手动打点生成的新目标点，保持下面这个路径。
     # 如果仍要使用包内默认目标点，可改为：$(find user_interface)/config/generated_map_target_points.txt
-    target_points_file: "/robotfs/data/robot_data/topology_map/generated_map_target_points.txt"
+    target_points_file: "${ROBOT_DATA_DIR}/topology_map/generated_map_target_points.txt"
 
     # 状态机运行频率 Hz
     state_machine_frequency: 10.0

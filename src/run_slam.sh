@@ -9,6 +9,8 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
+source "${SCRIPT_DIR}/load_robot_env.sh"
+
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
     exit 1
@@ -27,7 +29,6 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-export ROBOT_DATA_DIR=${ROBOT_DATA_DIR:-/robotfs/data/robot_data}
 mkdir -p "${ROBOT_DATA_DIR}"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then
@@ -36,7 +37,6 @@ else
     LOG_ROOT="${ROBOT_DATA_DIR}/log/$(date +%Y%m%d_%H%M%S)"
 fi
 
-BAG_DIR="${LOG_ROOT}/map_bag"
 SLAM_LOG_DIR="${LOG_ROOT}/slam"
 mkdir -p "${SLAM_LOG_DIR}"
 
@@ -61,12 +61,12 @@ LIVOX_PID=""
 FASTLIO_PID=""
 PGO_PID=""
 TOPOLOGY_PID=""
-BAG_PID=""
 CLEANING=0
 
 SAVE_POPUP_PID=""
-SAVE_POPUP_SIGNAL="/robotfs/data/run_slam_save_popup_done_$$"
-SAVE_POPUP_STATUS="/robotfs/data/run_slam_save_popup_status_$$"
+ROBOT_RUNTIME_DIR="$(dirname "${ROBOT_DATA_DIR}")"
+SAVE_POPUP_SIGNAL="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_done_$$"
+SAVE_POPUP_STATUS="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_status_$$"
 
 show_save_popup_with_done_button() {
     rm -f "${SAVE_POPUP_SIGNAL}" "${SAVE_POPUP_STATUS}"
@@ -87,7 +87,7 @@ root.attributes("-topmost", True)
 
 label = tk.Label(
     root,
-    text="检测到 Ctrl+C\\n\\n正在保存地图和轨迹\\n正在结束 bag 录制\\n请不要关闭终端...",
+    text="检测到 Ctrl+C\n\n正在保存地图和轨迹\n请不要关闭终端...",
     font=("WenQuanYi Micro Hei", 15),
     justify="center",
 )
@@ -192,10 +192,7 @@ cleanup() {
 
     show_save_popup_with_done_button
 
-    kill_process_group_safe "${BAG_PID}" "ros2 bag record"
-    info "bag 已停止: ${BAG_DIR}"
-
-    SAVE_DONE_FLAG="/robotfs/data/pgo_sc_save_done_$$"
+    SAVE_DONE_FLAG="${ROBOT_RUNTIME_DIR}/pgo_sc_save_done_$$"
     rm -f "${SAVE_DONE_FLAG}"
 
     timeout 120s bash -c "
@@ -242,7 +239,6 @@ touch '${SAVE_DONE_FLAG}'
     for pid in "${PIDS[@]}"; do
         [ -z "${pid}" ] && continue
         [ "${pid}" = "${PGO_PID}" ] && continue
-        [ "${pid}" = "${BAG_PID}" ] && continue
 
         if [ "${pid}" = "${TOPOLOGY_PID}" ]; then
             kill_process_group_safe "${pid}" "topology_map_generator"
@@ -304,26 +300,6 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
     ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true
 
-info "启动 ros2 bag record..."
-setsid ros2 bag record \
-  /livox/lidar \
-  /livox/imu \
-  /tf \
-  /tf_static \
-  -o "${BAG_DIR}" \
-  > "/dev/null" 2>&1 &
-BAG_PID=$!
-PIDS+=("${BAG_PID}")
-
-sleep 2
-
-if ! kill -0 "${BAG_PID}" 2>/dev/null; then
-    err "ros2 bag record 启动失败，请检查 bag 输出目录是否已存在: ${BAG_DIR}"
-    exit 1
-fi
-
-info "ros2 bag record 启动成功"
-
 start_bg TOPOLOGY_PID "topology_map_generator" "${TOPOLOGY_LOG_FILE}" 1 \
     ros2 launch topology_map_generator topology_map_generator.launch.py
 
@@ -333,7 +309,6 @@ start_bg TOPOLOGY_PID "topology_map_generator" "${TOPOLOGY_LOG_FILE}" 1 \
 echo ""
 info "键盘控制已启动，开始建图打点"
 info "结束建图：在当前终端按 Ctrl+C"
-info "bag 目录: ${BAG_DIR}"
 echo ""
 
 python3 -u "${WORKSPACE_DIR}/src/scripts/keyboard_control.py" || true

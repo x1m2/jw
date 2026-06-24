@@ -10,6 +10,8 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
+source "${SCRIPT_DIR}/load_robot_env.sh"
+
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
     exit 1
@@ -27,7 +29,6 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-export ROBOT_DATA_DIR=${ROBOT_DATA_DIR:-/robotfs/data/robot_data}
 
 RUN_KILL_SCRIPT="${SCRIPT_DIR}/run_kill_node.sh"
 RUN_RELOCALIZATION_SCRIPT="${SCRIPT_DIR}/run_relocalization.sh"
@@ -46,12 +47,15 @@ AUTO_NAV_STARTUP_WAIT=${AUTO_NAV_STARTUP_WAIT:-60}
 # 不删除地图、任务、拓扑点等数据。
 # ==================================================
 LOG_BASE_DIR="${ROBOT_DATA_DIR}/log"
+ROBOT_DATA_PARENT="$(dirname "${ROBOT_DATA_DIR}")"
+ROBOT_HOME_PARENT="$(dirname "${ROBOT_HOME}")"
 
 # 防止目录变量异常时误删上层目录。
 if [ -z "${ROBOT_DATA_DIR}" ] || \
    [ "${ROBOT_DATA_DIR}" = "/" ] || \
-   [ "${ROBOT_DATA_DIR}" = "/robotfs" ] || \
-   [ "${ROBOT_DATA_DIR}" = "/robotfs/data" ]; then
+   [ "${ROBOT_DATA_DIR}" = "${ROBOT_HOME_PARENT}" ] || \
+   [ "${ROBOT_DATA_DIR}" = "${ROBOT_HOME}" ] || \
+   [ "${ROBOT_DATA_DIR}" = "${ROBOT_DATA_PARENT}" ]; then
     err "ROBOT_DATA_DIR 异常，拒绝清理日志: ${ROBOT_DATA_DIR}"
     exit 1
 fi

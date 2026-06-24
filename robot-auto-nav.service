@@ -2,18 +2,14 @@
 Description=Robot Auto Relocalization And Navigation
 After=network-online.target
 Wants=network-online.target
-RequiresMountsFor=/robotfs/data
 
 [Service]
 Type=simple
 User=jw
 Group=jw
-WorkingDirectory=/home/jw/robot_rk3588_ws
 
-Environment=HOME=/home/jw
 Environment=ROS_DOMAIN_ID=0
 Environment=ROS_LOCALHOST_ONLY=0
-Environment=ROBOT_DATA_DIR=/robotfs/data/robot_data
 Environment=NAV_HEADLESS=1
 
 # 建议一直重试重定位
@@ -24,7 +20,8 @@ Environment=AUTO_NAV_RETRY_DELAY=10
 # Environment=AUTO_NAV_TASK=test
 # Environment=AUTO_NAV_LOOP=1
 
-ExecStart=/home/jw/robot_rk3588_ws/src/run_auto_nav.sh
+# 使用 jw 用户登录目录找到 robot.env；实际工作空间和数据路径均由 robot.env 决定。
+ExecStart=/bin/bash -lc 'source "$HOME/robot_rk3588_ws/src/robot.env" && exec "$ROBOT_WS/src/run_autostart_nav.sh"'
 
 Restart=on-failure
 RestartSec=15

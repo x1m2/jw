@@ -10,6 +10,8 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
+source "${SCRIPT_DIR}/load_robot_env.sh"
+
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
     exit 1
@@ -28,7 +30,6 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-export ROBOT_DATA_DIR=${ROBOT_DATA_DIR:-/robotfs/data/robot_data}
 mkdir -p "${ROBOT_DATA_DIR}"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then

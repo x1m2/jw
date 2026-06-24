@@ -3,7 +3,7 @@
     basic:
       map_frame: "map"                              # 发布坐标系
       map_match_hz: 2.0                             # 地图匹配频率
-      saved_map: "/robotfs/data/robot_data/map/result_bag"   # 地图包路径，必须使用绝对路径
+      saved_map: "${ROBOT_DATA_DIR}/map/result_bag"   # 启动时由 launch 用环境变量覆盖为绝对路径
       visualize_voxel_size: 0.3                     # 可视化时的体素降采样分辨率
 
     keyframe:

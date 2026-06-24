@@ -12,6 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     topology_share = get_package_share_directory('topology_rviz_plugin')
 
     config_file = os.path.join(
@@ -37,7 +38,16 @@ def generate_launch_description():
         executable='target_points_visualizer_node',
         name='target_points_visualizer',
         output='screen',
-        parameters=[config_file]
+        parameters=[
+            config_file,
+            {
+                'target_points_file': os.path.join(
+                    robot_data_dir,
+                    'topology_map',
+                    'generated_map_target_points.txt',
+                )
+            },
+        ]
     )
 
     rviz_node = Node(

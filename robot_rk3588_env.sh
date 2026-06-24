@@ -565,16 +565,24 @@ setup_bashrc_source() {
 
   local ros_source="source /opt/ros/${ROS_DISTRO}/setup.bash"
   local ws_source="source ${WS}/install/setup.bash"
+  local robot_env_source="source ${WS}/src/load_robot_env.sh"
   local display_export="export DISPLAY=192.168.50.50:0.0"
+
+  if [[ ! -f "${WS}/src/load_robot_env.sh" ]]; then
+    err "找不到机器人环境加载脚本：${WS}/src/load_robot_env.sh"
+    exit 1
+  fi
 
   grep -qxF "${ros_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ros_source}" >> "${HOME}/.bashrc"
   grep -qxF "${ws_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ws_source}" >> "${HOME}/.bashrc"
+  grep -qxF "${robot_env_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${robot_env_source}" >> "${HOME}/.bashrc"
   grep -qxF "${display_export}" "${HOME}/.bashrc" 2>/dev/null || echo "${display_export}" >> "${HOME}/.bashrc"
 
   cat > "${WS}/source_robot_env.sh" <<EOF
 #!/usr/bin/env bash
 source /opt/ros/${ROS_DISTRO}/setup.bash
 source ${WS}/install/setup.bash
+source ${WS}/src/load_robot_env.sh
 export DISPLAY=192.168.50.50:0.0
 EOF
   chmod +x "${WS}/source_robot_env.sh"
@@ -616,11 +624,13 @@ main() {
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
     # shellcheck disable=SC1090
     source "${WS}/install/setup.bash"
+    # shellcheck disable=SC1090
+    source "${WS}/src/load_robot_env.sh"
     export DISPLAY=192.168.50.50:0.0
-    info "当前终端已 source 完成，DISPLAY=${DISPLAY}"
+    info "当前终端已 source 完成，ROBOT_DATA_DIR=${ROBOT_DATA_DIR}，DISPLAY=${DISPLAY}"
   else
     warn "脚本正常执行完毕，但无法修改当前父终端环境"
-    warn "当前终端请执行：source ${WS}/install/setup.bash"
+    warn "当前终端请执行：source ${WS}/source_robot_env.sh"
     warn "或者重新打开终端，~/.bashrc 会自动 source"
   fi
 

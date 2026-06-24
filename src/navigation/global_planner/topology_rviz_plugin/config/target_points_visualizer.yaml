@@ -1,6 +1,6 @@
 target_points_visualizer:
   ros__parameters:
-    target_points_file: "/robotfs/data/robot_data/topology_map/generated_map_target_points.txt"
+    target_points_file: "${ROBOT_DATA_DIR}/topology_map/generated_map_target_points.txt"
     frame_id: "map"
     arrow_scale: 1.5
     text_scale: 0.8

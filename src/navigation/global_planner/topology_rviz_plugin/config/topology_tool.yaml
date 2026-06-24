@@ -15,4 +15,4 @@ rviz_topology:
       selection_threshold: 0.3
       bidirectional: true
 
-      save_file: "/robotfs/data/robot_data/topology_map/connected_topology_map.txt"
+      save_file: "${ROBOT_DATA_DIR}/topology_map/connected_topology_map.txt"

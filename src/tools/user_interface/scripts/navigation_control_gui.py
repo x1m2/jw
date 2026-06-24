@@ -8,8 +8,7 @@
 - 可视化控制导航任务
 - 显示当前目标点和导航状态
 - 支持开始任务、循环任务、停止任务、继续任务、回家、紧急停止
-- 固定读取 user_interface/config/navigation_task_state_machine.yaml
-- 从 YAML 中读取 navigation_task_state_machine_node.ros__parameters.task_folder_path
+- 从 ROBOT_DATA_DIR 环境变量读取任务目录
 - 自动加载 task_folder_path 目录下的 .txt 任务文件
 """
 
@@ -122,30 +121,15 @@ class NavigationControlGUI(Node):
     # ==================================================
     def resolve_task_folder_path(self) -> str:
         try:
-            package_path = get_package_share_directory("user_interface")
-
-            yaml_file = os.path.join(
-                package_path,
-                "config",
-                self.state_machine_yaml_name,
+            robot_data_dir = os.environ["ROBOT_DATA_DIR"]
+            task_folder = os.path.join(robot_data_dir, "task")
+            self.get_logger().info(
+                f"从 ROBOT_DATA_DIR 读取任务目录: {task_folder}"
             )
-
-            self.get_logger().info(f"固定读取 YAML 文件: {yaml_file}")
-
-            task_folder = self.read_task_folder_from_yaml(yaml_file)
-
-            if not task_folder:
-                self.get_logger().error(
-                    f"没有从 YAML 中读取到 task_folder_path: {yaml_file}"
-                )
-                return ""
-
-            self.get_logger().info(f"从 YAML 读取任务目录: {task_folder}")
-
             return task_folder
 
         except Exception as e:
-            self.get_logger().error(f"读取固定 YAML 文件失败: {e}")
+            self.get_logger().error(f"读取 ROBOT_DATA_DIR 失败: {e}")
             return ""
 
     def expand_path(self, path: str) -> str:
@@ -162,7 +146,7 @@ class NavigationControlGUI(Node):
 
         navigation_task_state_machine_node:
           ros__parameters:
-            task_folder_path: "/robotfs/data/robot_data/task"
+            task_folder_path: "${ROBOT_DATA_DIR}/task"
         """
         yaml_file = self.expand_path(yaml_file)
 

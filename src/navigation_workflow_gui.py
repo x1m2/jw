@@ -6,7 +6,7 @@
 
 功能：
 1. 启动一次 GUI，创建一个统一日志目录：
-   /robotfs/data/robot_data/log/YYYYMMDD_HHMMSS
+   ${ROBOT_DATA_DIR}/log/YYYYMMDD_HHMMSS
 
 2. 开始建图：
    - 新终端运行 run_slam.sh
@@ -41,12 +41,34 @@ from tkinter import ttk, messagebox
 import tkinter.font as tkfont
 
 
+def load_robot_env(env_file: str) -> None:
+    if not os.path.isfile(env_file):
+        raise RuntimeError(f"找不到机器人环境配置: {env_file}")
+
+    with open(env_file, "r", encoding="utf-8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, separator, value = line.partition("=")
+            if not separator:
+                raise RuntimeError(f"robot.env 配置格式错误: {raw_line.rstrip()}")
+            os.environ[key.strip()] = os.path.expandvars(
+                os.path.expanduser(value.strip())
+            )
+
+
 class NavigationWorkflowGUI:
     def __init__(self):
         self.gui_file_path = os.path.realpath(__file__)
         self.script_dir = os.path.dirname(self.gui_file_path)
         self.workspace_dir = os.path.dirname(self.script_dir)
         self.script_dir = os.path.join(self.workspace_dir, "src")
+
+        load_robot_env(os.path.join(self.script_dir, "robot.env"))
+        self.robot_home = os.environ["ROBOT_HOME"]
+        self.robot_data_dir = os.environ["ROBOT_DATA_DIR"]
+        self.robot_runtime_dir = os.path.dirname(self.robot_data_dir)
 
         # GUI 每次启动时先执行该脚本，清理上一次残留的 ROS2 节点 / launch / rviz2
         self.run_kill_node_script = os.path.join(self.script_dir, "run_kill_node.sh")
@@ -69,10 +91,7 @@ class NavigationWorkflowGUI:
 
         self.workflow_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        self.runtime_robot_data_dir = os.environ.get(
-            "ROBOT_DATA_RUNTIME_DIR",
-            "/robotfs/data/robot_data",
-        )
+        self.runtime_robot_data_dir = self.robot_data_dir
 
         # 先创建 Tk root，后面才能弹 messagebox。
         # 先隐藏主窗口，避免确认框弹出时背后出现半初始化界面。
@@ -337,8 +356,8 @@ class NavigationWorkflowGUI:
     def clean_tmp_launch_params_and_runtime_logs_before_gui_start(self):
         """
         GUI 每次启动时弹窗询问是否清理：
-        1. /robotfs/data/launch_params_*：ROS2 launch 临时参数文件。
-        2. /robotfs/data/robot_data/log：上一次运行产生的运行日志。
+        1. ${ROBOT_DATA_DIR} 上级目录的 launch_params_*：ROS2 launch 临时参数文件。
+        2. ${ROBOT_DATA_DIR}/log：上一次运行产生的运行日志。
 
         """
         outputs = []
@@ -352,13 +371,17 @@ class NavigationWorkflowGUI:
         record("==================================================")
 
         log_dir = os.path.join(self.runtime_robot_data_dir, "log")
+        launch_params_pattern = os.path.join(
+            self.robot_runtime_dir,
+            "launch_params_*",
+        )
 
         try:
             should_clean = messagebox.askyesno(
                 "清理旧日志",
                 "是否删除旧日志？\n\n"
                 "会删除：\n"
-                "- /robotfs/data/launch_params_*\n"
+                f"- {launch_params_pattern}\n"
                 f"- {log_dir}\n\n"
                 "不会删除地图、拓扑点和任务文件。\n\n"
                 "选择“是”删除，选择“否”保留。",
@@ -368,15 +391,18 @@ class NavigationWorkflowGUI:
             record(f"[WARN] 弹出清理确认框失败，默认不删除旧日志: {e}")
 
         if not should_clean:
-            record("[INFO] 用户选择不删除旧日志，跳过 /robotfs/data/launch_params_* 和运行日志清理")
+            record(
+                f"[INFO] 用户选择不删除旧日志，跳过 {launch_params_pattern} "
+                "和运行日志清理"
+            )
             self.startup_tmp_cleanup_output = "\n".join(outputs) + "\n"
             return
 
         record("[INFO] 用户选择删除旧日志，开始清理")
 
-        # 1. 清理 /robotfs/data/launch_params_*
+        # 1. 清理 ROBOT_DATA_DIR 上级目录的 launch_params_*
         try:
-            launch_param_files = glob.glob("/robotfs/data/launch_params_*")
+            launch_param_files = glob.glob(launch_params_pattern)
             removed_count = 0
 
             for file_path in launch_param_files:
@@ -390,7 +416,7 @@ class NavigationWorkflowGUI:
             record(f"[INFO] 已删除 ROS2 launch 临时参数文件数量: {removed_count}")
 
         except Exception as e:
-            record(f"[WARN] 清理 /robotfs/data/launch_params_* 失败: {e}")
+            record(f"[WARN] 清理 {launch_params_pattern} 失败: {e}")
 
         # 2./log
         try:
@@ -672,7 +698,7 @@ class NavigationWorkflowGUI:
         tips_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
 
         tips_text = (
-            "1. 启动 GUI 会自动清理旧 ROS2 节点，并弹窗询问是否删除 /robotfs/data/launch_params_* 和 /robotfs/data/log。\n"
+            "1. 启动 GUI 会自动清理旧 ROS2 节点，并弹窗询问是否删除旧日志。\n"
             "2. 建图、地图编辑、键盘控制、自主导航都会在新终端中运行。\n"
             "3. 自主导航会先重定位，确认位置正确后再启动导航。\n"
             "4. 一键清理节点用于停止残留 ROS2 节点、RViz、bag。"

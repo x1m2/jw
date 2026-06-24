@@ -10,6 +10,8 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
+source "${SCRIPT_DIR}/load_robot_env.sh"
+
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
     exit 1
@@ -28,7 +30,6 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-export ROBOT_DATA_DIR=${ROBOT_DATA_DIR:-/robotfs/data/robot_data}
 mkdir -p "${ROBOT_DATA_DIR}"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then
@@ -44,7 +45,7 @@ log_time() {
     date +%Y%m%d_%H%M%S
 }
 
-# 关键日志统一放到 /robotfs/data/robot_data/log/本次时间/relocalization
+# 关键日志统一放到 ${ROBOT_DATA_DIR}/log/本次时间/relocalization
 FASTLIO_LOG_FILE="${RELOCALIZATION_DIR}/fast_lio_$(log_time).log"
 LOCALIZATION_LOG_FILE="${RELOCALIZATION_DIR}/localization_sc_$(log_time).log"
 
@@ -205,7 +206,8 @@ start_bg PCD2PGM_PID "pcd2pgm" "/dev/null" "${PCD2PGM_PID_FILE}" 2 \
 # 依赖 localization_sc 发布：
 # /reloc_success std_msgs/msg/Bool true
 # ==================================================
-WAIT_SCRIPT="/robotfs/data/wait_reloc_success_$$.py"
+ROBOT_RUNTIME_DIR="$(dirname "${ROBOT_DATA_DIR}")"
+WAIT_SCRIPT="${ROBOT_RUNTIME_DIR}/wait_reloc_success_$$.py"
 
 cat > "${WAIT_SCRIPT}" <<'PY'
 #!/usr/bin/env python3

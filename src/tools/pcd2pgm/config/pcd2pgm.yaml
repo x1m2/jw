@@ -1,6 +1,6 @@
 pcd2pgm:
   ros__parameters:
-    pcd_file: /robotfs/data/robot_data/map/result.pcd
+    pcd_file: "${ROBOT_DATA_DIR}/map/result.pcd"
     odom_to_lidar_odom: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     # odom_to_lidar_odom: [-0.16, 0.0, -0.18, -0.523599, 0.0, -1.5707963]
     flag_pass_through: false #false 保留区间，true 删除区间
