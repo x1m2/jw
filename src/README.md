@@ -284,14 +284,13 @@ ros2 launch user_interface navigation_task_state_machine.launch.py
 建议先编译基础依赖包：
 
 ```bash
-colcon build --packages-select nano_gicp --cmake-args -DCMAKE_BUILD_TYPE=Release
 colcon build --packages-select quatro --cmake-args -DCMAKE_BUILD_TYPE=Release -DQUATRO_TBB=ON
 ```
 
 再编译整个工作空间：
 
 ```bash
-colcon build --symlink-install --parallel-workers 2 --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+colcon build --symlink-install --parallel-workers 2  --packages-skip quatro --cmake-args  -DCMAKE_BUILD_TYPE=Release -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
 source install/setup.bash
 ```
 

@@ -526,20 +526,7 @@ build_workspace() {
   fi
   info "检测到 ${pkg_count} 个 ROS2 包"
 
-  if colcon_package_exists "nano_gicp"; then
-    info "先单独编译 nano_gicp"
-    colcon build \
-      --packages-select nano_gicp \
-      --cmake-args \
-      -DCMAKE_BUILD_TYPE=Release
-  else
-    warn "未找到 nano_gicp 包，跳过单独编译"
-  fi
-
-  source "/opt/ros/${ROS_DISTRO}/setup.bash"
-  if [[ -f "${WS}/install/setup.bash" ]]; then
-    source "${WS}/install/setup.bash"
-  fi
+  # quattro 需要额外的 QUATRO_TBB=ON 配置，因此先单独处理。
 
   if colcon_package_exists "quatro"; then
     info "再单独编译 quatro，开启 TBB"
@@ -560,6 +547,7 @@ build_workspace() {
   info "编译整个工作空间"
   colcon build --symlink-install \
     --parallel-workers "${PARALLEL_WORKERS}" \
+    --packages-skip quatro \
     --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
