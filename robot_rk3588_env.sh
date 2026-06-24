@@ -28,6 +28,7 @@ set -eo pipefail
 #
 # 可选环境变量：
 #   WS=/path/to/robot_rk3588_ws ./setup_robot_rk3588_env.sh
+#   WS_ZIP=/path/to/robot_rk3588_ws.zip ./setup_robot_rk3588_env.sh
 #   THIRD_PARTY_DIR=/path/to/third_party ./setup_robot_rk3588_env.sh
 #   PARALLEL_WORKERS=4 ./setup_robot_rk3588_env.sh
 #   FORCE_THIRD_PARTY=1 ./setup_robot_rk3588_env.sh   # 强制重装 GTSAM/Livox/TEASER++
@@ -40,10 +41,15 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${WS:-${SCRIPT_DIR}/robot_rk3588_ws}"
+WS="${WS%/}"
+# 工作空间可直接是目录；目录不存在时，自动尝试解压同名 zip。
+# 默认：${SCRIPT_DIR}/robot_rk3588_ws.zip
+# 可覆盖：WS_ZIP=/path/to/robot_rk3588_ws.zip ./setup_robot_rk3588_env.sh
+WS_ZIP="${WS_ZIP:-${WS}.zip}"
 SRC_DIR="${WS}/src"
 # 默认第三方源码
 THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-${WS}/env}"
-PARALLEL_WORKERS="${PARALLEL_WORKERS:-2}"
+PARALLEL_WORKERS="${PARALLEL_WORKERS:-1}"
 FORCE_THIRD_PARTY="${FORCE_THIRD_PARTY:-0}"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 TZ_VALUE="${TZ_VALUE:-Asia/Shanghai}"
@@ -59,6 +65,77 @@ need_cmd() {
     err "缺少命令：$1"
     exit 1
   }
+}
+
+prepare_workspace_from_zip() {
+  # 目录已经存在时不重复解压，也不会覆盖现有工作空间。
+  if [[ -d "${WS}" ]]; then
+    return 0
+  fi
+
+  # 没有工作空间目录且没有 zip，交给 check_workspace() 输出统一错误。
+  if [[ ! -f "${WS_ZIP}" ]]; then
+    return 0
+  fi
+
+  need_cmd unzip
+
+  local ws_parent ws_name tmp_dir
+  ws_parent="$(dirname "${WS}")"
+  ws_name="$(basename "${WS}")"
+
+  mkdir -p "${ws_parent}"
+  tmp_dir="$(mktemp -d "${ws_parent}/.${ws_name}.extract.XXXXXX")"
+
+  info "检测到工作空间压缩包：${WS_ZIP}"
+  info "临时解压目录：${tmp_dir}"
+
+  if ! unzip -q "${WS_ZIP}" -d "${tmp_dir}"; then
+    rm -rf "${tmp_dir}"
+    err "工作空间压缩包解压失败：${WS_ZIP}"
+    exit 1
+  fi
+
+  # 支持以下三种常见压缩包结构：
+  # 1) robot_rk3588_ws/src/...           -> 直接取同名顶层目录
+  # 2) 其他目录名/src/...                 -> 将那个唯一顶层目录重命名为 WS
+  # 3) src/...、env/... 直接在 zip 根目录 -> 创建 WS 后移动所有根内容进去
+  if [[ -d "${tmp_dir}/${ws_name}/src" ]]; then
+    mv "${tmp_dir}/${ws_name}" "${WS}"
+
+  elif [[ -d "${tmp_dir}/src" ]]; then
+    mkdir -p "${WS}"
+    # find 能保留隐藏文件；比 "${tmp_dir}"/* 更可靠。
+    find "${tmp_dir}" -mindepth 1 -maxdepth 1 -exec mv -t "${WS}" {} +
+
+  else
+    local -a top_dirs=()
+    mapfile -t top_dirs < <(
+      find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d \
+        ! -name "__MACOSX" -print
+    )
+
+    if [[ "${#top_dirs[@]}" -eq 1 && -d "${top_dirs[0]}/src" ]]; then
+      mv "${top_dirs[0]}" "${WS}"
+    else
+      rm -rf "${tmp_dir}"
+      err "无法识别工作空间 zip 结构：${WS_ZIP}"
+      err "压缩包内应满足以下任一种结构："
+      err "  robot_rk3588_ws/src/..."
+      err "  任意单一顶层目录/src/..."
+      err "  src/... 直接位于压缩包根目录"
+      exit 1
+    fi
+  fi
+
+  rm -rf "${tmp_dir}"
+
+  if [[ ! -d "${WS}/src" ]]; then
+    err "解压后仍未找到 ${WS}/src，压缩包结构不正确"
+    exit 1
+  fi
+
+  info "工作空间解压完成：${WS}"
 }
 
 check_workspace() {
@@ -521,6 +598,7 @@ main() {
   info "开始部署 robot_rk3588 环境"
   info "脚本目录：${SCRIPT_DIR}"
   info "工作空间：${WS}"
+  info "工作空间压缩包：${WS_ZIP}"
   info "第三方目录：${THIRD_PARTY_DIR}"
   info "临时构建目录：${BUILD_TMP_ROOT}"
   info "并行编译数：${PARALLEL_WORKERS}"
@@ -528,6 +606,7 @@ main() {
   need_cmd sudo
   sudo -v
 
+  prepare_workspace_from_zip
   check_workspace
 
   setup_locale_and_timezone
