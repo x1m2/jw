@@ -1,6 +1,8 @@
 #ifndef PGO_SC_LOOP_CLOSURE_HPP_
 #define PGO_SC_LOOP_CLOSURE_HPP_
 #include <Scancontext.h>
+#include <pcl/common/centroid.h>
+#include <pcl/common/common.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <quatro/quatro_module.h>

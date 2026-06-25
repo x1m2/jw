@@ -80,15 +80,15 @@ PcdPair LoopClosure::setSrcAndDstCloud(const std::vector<PosePcd> &keyframes,
   src_accum.reserve(num_approx);
   dst_accum.reserve(num_approx);
   if (enable_submap_matching) {
-    // 对源帧和目标帧周围若干帧累积点云
+    // 当前子地图 ↔ 历史子地图
     for (int i = src_idx - submap_range; i < src_idx + submap_range + 1; ++i) {
-      if (i >= 0 && i < static_cast<int>(keyframes.size() - 1)) {
+      if (i >= 0 && i < static_cast<int>(keyframes.size())) {
         src_accum +=
             transformPcd(keyframes[i].pcd_, keyframes[i].pose_corrected_eig_);
       }
     }
     for (int i = dst_idx - submap_range; i < dst_idx + submap_range + 1; ++i) {
-      if (i >= 0 && i < static_cast<int>(keyframes.size() - 1)) {
+      if (i >= 0 && i < static_cast<int>(keyframes.size())) {
         dst_accum +=
             transformPcd(keyframes[i].pcd_, keyframes[i].pose_corrected_eig_);
       }
@@ -98,14 +98,14 @@ PcdPair LoopClosure::setSrcAndDstCloud(const std::vector<PosePcd> &keyframes,
     src_accum = transformPcd(keyframes[src_idx].pcd_,
                              keyframes[src_idx].pose_corrected_eig_);
     if (enable_quatro) {
+      //当前单帧 ↔ 历史单帧
       dst_accum = transformPcd(keyframes[dst_idx].pcd_,
                                keyframes[dst_idx].pose_corrected_eig_);
     } else {
-      // For ICP matching,
-      // empirically scan-to-submap matching works better
+      // 当前单帧 ↔ 历史子地图
       for (int i = dst_idx - submap_range; i < dst_idx + submap_range + 1;
            ++i) {
-        if (i >= 0 && i < static_cast<int>(keyframes.size() - 1)) {
+        if (i >= 0 && i < static_cast<int>(keyframes.size())) {
           dst_accum +=
               transformPcd(keyframes[i].pcd_, keyframes[i].pose_corrected_eig_);
         }
@@ -159,21 +159,75 @@ RegistrationOutput LoopClosure::coarseToFineAlignment(
     const pcl::PointCloud<PointType> &dst) {
   RegistrationOutput reg_output;
   coarse_aligned_.clear();
-  // Quatro 粗配准
+
+  {
+    auto printCloudInfo = [&](const char *name,
+                              const pcl::PointCloud<PointType> &cloud) {
+      Eigen::Vector4f centroid;
+      pcl::compute3DCentroid(cloud, centroid);
+
+      PointType min_pt, max_pt;
+      pcl::getMinMax3D(cloud, min_pt, max_pt);
+
+      RCLCPP_WARN(rclcpp::get_logger("MapMatcher"),
+                  "[CLOUD_INFO] %s size=%zu centroid=[%.3f %.3f %.3f] "
+                  "range_x=[%.3f %.3f] range_y=[%.3f %.3f]",
+                  name, cloud.size(), centroid.x(), centroid.y(), centroid.z(),
+                  min_pt.x, max_pt.x, min_pt.y, max_pt.y);
+    };
+
+    printCloudInfo("src", src);
+    printCloudInfo("dst", dst);
+  }
+  constexpr double kRad2Deg = 180.0 / M_PI;
+  auto logPose = [&](const char *tag, const auto &T) {
+    const Eigen::Matrix3d R = T.template block<3, 3>(0, 0);
+
+    const double roll = std::atan2(R(2, 1), R(2, 2)) * kRad2Deg;
+
+    const double pitch =
+        std::atan2(-R(2, 0), std::sqrt(R(0, 0) * R(0, 0) + R(1, 0) * R(1, 0))) *
+        kRad2Deg;
+
+    const double yaw = std::atan2(R(1, 0), R(0, 0)) * kRad2Deg;
+
+    RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
+                "[LOOP_REG_POSE] %s "
+                "t=[%.3f %.3f %.3f], "
+                "rpy=[%.2f %.2f %.2f] deg",
+                tag, T(0, 3), T(1, 3), T(2, 3), roll, pitch, yaw);
+  };
+
+  // ==========================================================
+  // 1. Quatro 粗配准
+  // ==========================================================
   reg_output.pose_between_eig_ =
-      (quatro_handler_->align(src, dst, reg_output.is_converged_));
+      quatro_handler_->align(src, dst, reg_output.is_converged_);
+
   if (!reg_output.is_converged_) {
     return reg_output;
-  } else  // if valid,
-  {
-    // 粗配准结果作为 ICP 输入进行精细对齐
-    coarse_aligned_ = transformPcd(src, reg_output.pose_between_eig_);
-    const auto &fine_output = icpAlignment(coarse_aligned_, dst);
-    // 合并粗配准和 ICP 结果
-    const auto quatro_tf_ = reg_output.pose_between_eig_;
-    reg_output = fine_output;
-    reg_output.pose_between_eig_ = fine_output.pose_between_eig_ * quatro_tf_;
   }
+
+  const auto quatro_tf = reg_output.pose_between_eig_;
+
+  logPose("quatro_tf_src_to_dst", quatro_tf);
+
+  // ==========================================================
+  // 2. 使用 Quatro 输出作为 ICP 初值
+  // ==========================================================
+  coarse_aligned_ = transformPcd(src, quatro_tf);
+
+  const auto &fine_output = icpAlignment(coarse_aligned_, dst);
+
+  logPose("icp_delta_coarse_to_dst", fine_output.pose_between_eig_);
+
+  const auto final_tf = fine_output.pose_between_eig_ * quatro_tf;
+
+  logPose("final_tf_src_to_dst", final_tf);
+
+  reg_output = fine_output;
+  reg_output.pose_between_eig_ = final_tf;
+
   return reg_output;
 }
 

@@ -7,7 +7,7 @@
       package_path: "${ROBOT_DATA_DIR}/map"
     keyframe:
       keyframe_threshold: 1.5                     # unit [meter] every this distance, generate keyframe
-      num_submap_keyframes: 10                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
+      num_submap_keyframes: 2                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
       enable_submap_matching: true               # If it is set to be `true`, submap-level (coarse-to-)fine alignment will be performed
       # note: without Quatro, anyway scan-to-submap matching is performed, as that shows better performance
 
@@ -31,7 +31,7 @@
       enable: true                                # whether or not to use quatro, if false -> FAST-LIO-SAM-N (Nano-GICP only)
       optimize_matching: true                     # whether or not to use Optimized matching
       distance_threshold: 35.0                    # when optimized matching, use only correspondences within this radius, unit [meter]
-      max_correspondences: 500                    # max correspondences to use for optimized matching
+      max_correspondences: 200                    # max correspondences to use for optimized matching
       fpfh_normal_radius: 0.9                     # It should be 2.5 - 3.0 * `quatro_nano_gicp_voxel_resolution`
       fpfh_radius: 1.5                            # It should be 5.0 * `quatro_nano_gicp_voxel_resolution`
       estimating_scale: false

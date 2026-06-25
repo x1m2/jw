@@ -11,10 +11,7 @@
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
 PgoSc::PgoSc()
-    : Node("pgo_sc"),
-      is_initialized_(false),
-      loop_added_flag_(false),
-      loop_added_flag_vis_(false) {
+    : Node("pgo_sc"), is_initialized_(false), loop_added_flag_vis_(false) {
   ////// ROS2 params
   double loop_update_hz, vis_hz;
   LoopClosureConfig lc_config;
@@ -30,7 +27,7 @@ PgoSc::PgoSc()
   this->declare_parameter<double>("quatro_nano_gicp_voxel_resolution", 0.3);
 
   this->declare_parameter<double>("keyframe.keyframe_threshold", 1.0);
-  this->declare_parameter<int>("keyframe.nusubmap_keyframes", 5);
+  this->declare_parameter<int>("keyframe.num_submap_keyframes", 5);
   this->declare_parameter<bool>("keyframe.enable_submap_matching", false);
 
   this->declare_parameter<double>("scancontext_max_correspondence_distance",
@@ -51,7 +48,7 @@ PgoSc::PgoSc()
   this->declare_parameter<bool>("quatro.enable", false);
   this->declare_parameter<bool>("quatro.optimize_matching", true);
   this->declare_parameter<double>("quatro.distance_threshold", 30.0);
-  this->declare_parameter<int>("quatro.max_nucorrespondences", 200);
+  this->declare_parameter<int>("quatro.max_correspondences", 200);
   this->declare_parameter<double>("quatro.fpfh_normal_radius", 0.3);
   this->declare_parameter<double>("quatro.fpfh_radius", 0.5);
   this->declare_parameter<bool>("quatro.estimating_scale", false);
@@ -59,7 +56,7 @@ PgoSc::PgoSc()
   this->declare_parameter<double>("quatro.rotation.gnc_factor", 1.4);
   this->declare_parameter<double>("quatro.rotation.rot_cost_diff_threshold",
                                   0.0001);
-  this->declare_parameter<int>("quatro.rotation.numax_iter", 50);
+  this->declare_parameter<int>("quatro.rotation.num_max_iter", 50);
 
   this->declare_parameter<bool>("result.save_map_bag", false);
   this->declare_parameter<bool>("result.save_map_pcd", false);
@@ -77,7 +74,7 @@ PgoSc::PgoSc()
                       lc_config.voxel_res_);
 
   this->get_parameter("keyframe.keyframe_threshold", keyframe_thr_);
-  this->get_parameter("keyframe.nusubmap_keyframes",
+  this->get_parameter("keyframe.num_submap_keyframes",
                       lc_config.num_submap_keyframes_);
   this->get_parameter("keyframe.enable_submap_matching",
                       lc_config.enable_submap_matching_);
@@ -104,8 +101,7 @@ PgoSc::PgoSc()
   this->get_parameter("quatro.optimize_matching", qc.use_optimized_matching_);
   this->get_parameter("quatro.distance_threshold",
                       qc.quatro_distance_threshold_);
-  this->get_parameter("quatro.max_nucorrespondences",
-                      qc.quatro_max_num_corres_);
+  this->get_parameter("quatro.max_correspondences", qc.quatro_max_num_corres_);
   this->get_parameter("quatro.fpfh_normal_radius", qc.fpfh_normal_radius_);
   this->get_parameter("quatro.fpfh_radius", qc.fpfh_radius_);
   this->get_parameter("quatro.estimating_scale", qc.estimat_scale_);
@@ -113,7 +109,7 @@ PgoSc::PgoSc()
   this->get_parameter("quatro.rotation.gnc_factor", qc.rot_gnc_factor_);
   this->get_parameter("quatro.rotation.rot_cost_diff_threshold",
                       qc.rot_cost_diff_thr_);
-  this->get_parameter("quatro.rotation.numax_iter", qc.quatro_max_iter_);
+  this->get_parameter("quatro.rotation.num_max_iter", qc.quatro_max_iter_);
 
   this->get_parameter("result.save_map_bag", save_map_bag_);
   this->get_parameter("result.save_map_pcd", save_map_pcd_);
@@ -207,6 +203,8 @@ PgoSc::PgoSc()
 
   RCLCPP_INFO(this->get_logger(), "Main class, starting node...");
 }
+
+PgoSc::~PgoSc() {}
 
 // ====================== odom + pcd callback ======================
 // 功能：前端位姿估计 + 关键帧管理 + 后端图优化
@@ -313,7 +311,7 @@ void PgoSc::odomPcdCallback(
   }
 
   // ==== 2. 判断是否是新关键帧 ====
-  auto t2 = std::chrono::high_resolution_clock::now();
+  // auto t2 = std::chrono::high_resolution_clock::now();
   if (checkIfKeyframe(current_frame_, keyframes_.back())) {
     {
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
@@ -343,49 +341,15 @@ void PgoSc::odomPcdCallback(
     loop_closure_->updateScancontext(current_frame_.pcd_);
 
     // ==== 4. 更新可视化 ====
-    auto t3 = std::chrono::high_resolution_clock::now();
+    // auto t3 = std::chrono::high_resolution_clock::now();
     {
       std::lock_guard<std::mutex> lock(vis_mutex_);
       updateOdomsAndPaths(current_frame_);
     }
 
     // ==== 5. 图优化（ISAM2） ====
-    auto t4 = std::chrono::high_resolution_clock::now();
-    {
-      std::lock_guard<std::mutex> lock(graph_mutex_);
-      isam_handler_->update(gtsam_graph_, init_esti_);
-      isam_handler_->update();
-
-      if (loop_added_flag_) {
-        // 处理回环
-        isam_handler_->update();
-        isam_handler_->update();
-        isam_handler_->update();
-      }
-
-      gtsam_graph_.resize(0);
-      init_esti_.clear();
-    }
-
-    // ==== 6. 更新校正位姿 ====
-    auto t5 = std::chrono::high_resolution_clock::now();
-    {
-      std::lock_guard<std::mutex> lock(realtime_pose_mutex_);
-      corrected_esti_ = isam_handler_->calculateEstimate();
-      last_corrected_pose_ = gtsamPoseToPoseEig(
-          corrected_esti_.at<gtsam::Pose3>(corrected_esti_.size() - 1));
-      odom_delta_ = Eigen::Matrix4d::Identity();
-    }
-
-    if (loop_added_flag_) {
-      std::lock_guard<std::mutex> lock(keyframes_mutex_);
-      for (size_t i = 0; i < corrected_esti_.size(); ++i) {
-        keyframes_[i].pose_corrected_eig_ =
-            gtsamPoseToPoseEig(corrected_esti_.at<gtsam::Pose3>(i));
-      }
-      loop_added_flag_ = false;
-    }
-
+    // auto t4 = std::chrono::high_resolution_clock::now();
+    optimizeGraph(false);
     // ==== 7. ROS2 中可以省略详细时间统计，保留简单日志 ====
     auto t6 = std::chrono::high_resolution_clock::now();
     RCLCPP_INFO(
@@ -393,6 +357,7 @@ void PgoSc::odomPcdCallback(
         std::chrono::duration_cast<std::chrono::milliseconds>(t6 - t1).count());
   }
 }
+
 // ====================== loop closure timer ======================
 void PgoSc::loopTimerFunc() {
   if (!is_initialized_ || keyframes_.empty()) return;
@@ -402,12 +367,18 @@ void PgoSc::loopTimerFunc() {
   latest_keyframe.processed_ = true;
 
   auto t1 = std::chrono::high_resolution_clock::now();
+  constexpr int kloop_cooldown_keyframes = 10;
+  const int latest_idx = latest_keyframe.idx_;
 
-  // ==== 1. 查找候选关键帧进行 loop closure ====
+  if (last_loop_src_idx_ >= 0 &&
+      latest_idx - last_loop_src_idx_ < kloop_cooldown_keyframes) {
+    return;
+  }
+
+  // ==== 1. ScanContext 找到回环候选中心帧 ====
   int closest_keyframe_idx =
       loop_closure_->fetchCandidateKeyframeIdx(latest_keyframe, keyframes_);
   if (closest_keyframe_idx < 0) return;
-
   RegistrationOutput reg_output = loop_closure_->performLoopClosure(
       latest_keyframe, keyframes_, closest_keyframe_idx);
 
@@ -436,11 +407,11 @@ void PgoSc::loopTimerFunc() {
           latest_keyframe.idx_, closest_keyframe_idx,
           pose_from.between(pose_to), loop_noise));
     }
-
+    optimizeGraph(true);
     // 保存 loop closure 信息用于可视化
     loop_idx_pairs_.push_back({latest_keyframe.idx_, closest_keyframe_idx});
     loop_added_flag_vis_ = true;
-    loop_added_flag_ = true;
+    last_loop_src_idx_ = latest_keyframe.idx_;
   } else {
     RCLCPP_WARN(this->get_logger(), "Loop closure rejected. Score: %.3f",
                 reg_output.score_);
@@ -606,6 +577,61 @@ void PgoSc::visTimerFunc() {
           1e3);
 }
 
+// ====================== optimizeGraph ======================
+void PgoSc::optimizeGraph(bool is_loop) {
+  gtsam::Values new_estimate;
+
+  // 1. 更新 iSAM2
+  {
+    std::lock_guard<std::mutex> lock(graph_mutex_);
+
+    isam_handler_->update(gtsam_graph_, init_esti_);
+    isam_handler_->update();
+
+    if (is_loop) {
+      // 回环约束加入后，多更新几次促进重线性化
+      isam_handler_->update();
+      isam_handler_->update();
+      isam_handler_->update();
+    }
+
+    gtsam_graph_.resize(0);
+    init_esti_.clear();
+
+    new_estimate = isam_handler_->calculateEstimate();
+  }
+
+  if (new_estimate.empty()) {
+    RCLCPP_WARN(this->get_logger(), "[optimizeGraph] new_estimate is empty");
+    return;
+  }
+
+  // 2. 更新实时位姿基准
+  {
+    std::lock_guard<std::mutex> lock(realtime_pose_mutex_);
+
+    corrected_esti_ = new_estimate;
+    last_corrected_pose_ = gtsamPoseToPoseEig(
+        corrected_esti_.at<gtsam::Pose3>(corrected_esti_.size() - 1));
+
+    if (is_loop) {
+      odom_delta_ =
+          keyframes_.back().pose_eig_.inverse() * current_frame_.pose_eig_;
+    } else {
+      odom_delta_ = Eigen::Matrix4d::Identity();
+    }
+  }
+
+  // 3. 回环后更新全部关键帧
+  if (is_loop) {
+    std::lock_guard<std::mutex> lock(keyframes_mutex_);
+
+    for (size_t i = 0; i < new_estimate.size(); ++i) {
+      keyframes_[i].pose_corrected_eig_ =
+          gtsamPoseToPoseEig(new_estimate.at<gtsam::Pose3>(i));
+    }
+  }
+}
 // ====================== save callback ======================
 void PgoSc::saveFlagCallback() {
   std::string seq_directory = package_path_ + "/" + seq_name_;
@@ -819,9 +845,6 @@ void PgoSc::saveFlagCallback() {
 
   RCLCPP_INFO(this->get_logger(), "Map save finished, published /save_done.");
 }
-
-// ====================== Destructor ======================
-PgoSc::~PgoSc() {}
 
 // ====================== Keyframe Utilities ======================
 void PgoSc::updateOdomsAndPaths(const PosePcd &pose_pcd_in) {

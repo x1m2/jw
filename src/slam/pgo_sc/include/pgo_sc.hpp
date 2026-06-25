@@ -48,6 +48,7 @@
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
+#include <limits>
 ///// Coded headers
 #include "loop_closure.hpp"
 #include "pose_pcd.hpp"
@@ -61,7 +62,6 @@ typedef message_filters::sync_policies::ApproximateTime<
     nav_msgs::msg::Odometry, sensor_msgs::msg::PointCloud2>
     odom_pcd_sync_pol;
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
 class PgoSc : public rclcpp::Node {
  public:
   explicit PgoSc();
@@ -83,7 +83,6 @@ class PgoSc : public rclcpp::Node {
 
   ///// Graph and values
   bool is_initialized_;
-  bool loop_added_flag_;
   bool loop_added_flag_vis_;
   std::shared_ptr<gtsam::ISAM2> isam_handler_;
   gtsam::NonlinearFactorGraph gtsam_graph_;
@@ -92,6 +91,7 @@ class PgoSc : public rclcpp::Node {
   double keyframe_thr_;
   double voxel_res_;
   int sub_key_num_;
+  int last_loop_src_idx_ = -1;
   std::vector<std::pair<size_t, size_t>> loop_idx_pairs_;  // for vis
 
   ///// Visualize
@@ -147,6 +147,7 @@ class PgoSc : public rclcpp::Node {
                        const PosePcd &latest_pose_pcd);
   visualization_msgs::msg::Marker getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
+  void optimizeGraph(bool is_loop);
 
   // Callbacks
   void odomPcdCallback(
