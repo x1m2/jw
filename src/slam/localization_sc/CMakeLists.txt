@@ -38,6 +38,7 @@ find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(nano_gicp REQUIRED)
 find_package(quatro REQUIRED)
+find_package(scancontext REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
 find_package(angles REQUIRED)
@@ -46,7 +47,6 @@ find_package(angles REQUIRED)
 # -----------------------------
 include_directories(
   include
-  src/scancontext
   ${PCL_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${TEASER_INCLUDE_DIRS}
@@ -72,6 +72,7 @@ set(COMMON_DEPENDENCIES
   pcl_ros
   nano_gicp
   quatro
+  scancontext
   rosbag2_cpp
   rosbag2_storage
 )
@@ -80,7 +81,6 @@ set(COMMON_DEPENDENCIES
 # Build library
 # -----------------------------
 add_library(${PROJECT_NAME}_modules
-  src/scancontext/Scancontext.cpp
   src/localization_sc.cpp
   src/map_matcher.cpp
 )

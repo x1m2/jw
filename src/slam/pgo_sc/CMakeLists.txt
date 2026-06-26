@@ -46,11 +46,10 @@ find_package(GTSAM REQUIRED)
 # 假设 nano_gicp 和 quatro 也是作为 ament 包安装的
 find_package(nano_gicp REQUIRED)
 find_package(quatro REQUIRED)
-
+find_package(scancontext REQUIRED)
 ## 3. 头文件目录
 include_directories(
   include
-  src/scancontext_tro
   ${PCL_INCLUDE_DIRS}
   ${GTSAM_INCLUDE_DIR}
   ${TEASER_INCLUDE_DIRS}
@@ -87,13 +86,13 @@ set(ROS_DEPENDENCIES
   ament_index_cpp
   nano_gicp
   quatro
+  scancontext
   rosbag2_cpp
   rosbag2_storage
 )
 
 # A. 构建核心功能库 (Modules)
 add_library(${PROJECT_NAME}_modules SHARED
-  src/scancontext_tro/Scancontext.cpp
   src/loop_closure.cpp
   src/pgo_sc.cpp
 )

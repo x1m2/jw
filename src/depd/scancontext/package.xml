@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>scancontext</name>
+  <version>0.0.1</version>
+  <description>Scan context loop-closure descriptor library packaged as a ROS 2 ament_cmake package.</description>
+  <maintainer email="user@example.com">scancontext</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <build_export_depend>ament_cmake</build_export_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -18,7 +18,7 @@
 ///// Quatro
 #include <quatro/quatro_module.h>
 ///// ScanContext
-#include <Scancontext.h>
+#include <scancontext/Scancontext.h>
 ///// coded headers
 #include "pose_pcd.hpp"
 #include "utilities.hpp"
