@@ -20,10 +20,12 @@
 #include <Eigen/Dense>
 #include <Eigen/Eigen>
 #include <Eigen/Geometry>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform.hpp>
 #include <memory>
 #include <mutex>
@@ -52,6 +54,8 @@ typedef message_filters::sync_policies::ApproximateTime<
 
 class FastLioLocalizationScQn : public rclcpp::Node {
  private:
+  enum class LocalizationState { IDLE, GLOBAL_RELOCALIZING, LOCAL_TRACKING };
+
   std::string map_frame_;
   std::mutex keyframes_mutex_, vis_mutex_;
   bool is_initialized_ = false;
@@ -90,6 +94,9 @@ class FastLioLocalizationScQn : public rclcpp::Node {
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr localization_odom_pub_;
   rclcpp::TimerBase::SharedPtr match_timer_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr reloc_success_pub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+      sub_initial_pose_;
+
   // Message filters
   std::shared_ptr<message_filters::Synchronizer<odom_pcd_sync_pol>>
       sub_odom_pcd_sync_;
@@ -101,19 +108,24 @@ class FastLioLocalizationScQn : public rclcpp::Node {
   // Map matcher
   std::shared_ptr<MapMatcher> map_matcher_;
   bool global_reloc_done_ = false;
+  bool need_apply_initial_pose_ = false;
   int last_matched_keyframe_idx_ = -1;
   // -----------------------
   // reloc stable check
   // -----------------------
-  double reloc_score_threshold_ = 0.5;
   int reloc_stable_required_ = 3;
   double reloc_trans_diff_threshold_ = 0.15;
   double reloc_yaw_diff_threshold_deg_ = 5.0;
   bool reloc_use_xy_yaw_only_ = true;
+  bool reloc_use_initial_pose_ = true;
 
   int reloc_stable_count_ = 0;
   bool has_last_reloc_candidate_ = false;
   Eigen::Matrix4d last_reloc_candidate_tf_ = Eigen::Matrix4d::Identity();
+
+  Eigen::Matrix4d initial_pose_eig_ = Eigen::Matrix4d::Identity();
+
+  LocalizationState localization_state_ = LocalizationState::IDLE;
 
  public:
   explicit FastLioLocalizationScQn(const std::string &node_name);
@@ -133,9 +145,24 @@ class FastLioLocalizationScQn : public rclcpp::Node {
       const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg,
       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pcd_msg);
   void matchingTimerFunc();
+
+  void initialPoseCallback(
+      const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
+  std::vector<std::pair<int, double>> findCandidateKeyframesByPose(
+      const Eigen::Matrix4d &query_pose,
+      const std::vector<PosePcdReduced> &saved_keyframes);
+  bool isRelocalizationCandidateStable(const Eigen::Matrix4d &last_tf,
+                                       const Eigen::Matrix4d &new_tf);
+  void handleGlobalRelocalization(const PosePcd &last_keyframe_copy);
+  void handleLocalTracking(const PosePcd &last_keyframe_copy);
+
   int findNearestKeyframeByPose(
       const Eigen::Matrix4d &query_pose,
       const std::vector<PosePcdReduced> &saved_keyframes);
+
+  void publishMatchedResult(const PosePcd &last_keyframe_copy,
+                            const Eigen::Matrix4d &tfed_pose);
+  void resetRelocStableState();
 };
 
 #endif  // LOCALIZATION_SC_MAIN_H

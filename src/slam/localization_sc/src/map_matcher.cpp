@@ -62,10 +62,9 @@ PcdPair MapMatcher::setSrcAndDstCloud(
   pcl::PointCloud<PointType> dst_accum, src_out;
   int num_approx = saved_keyframes[dst_idx].pcd_.size() * 2 * submap_range;
   dst_accum.reserve(num_approx);
-
   src_out =
       transformPcd(query_keyframe.pcd_, query_keyframe.pose_corrected_eig_);
-  if (enable_quatro) {
+  if (enable_quatro && !global_reloc_done_) {
     dst_accum = saved_keyframes[dst_idx].pcd_;
   } else {
     // For ICP matching,
@@ -81,7 +80,7 @@ PcdPair MapMatcher::setSrcAndDstCloud(
 
 RegistrationOutput MapMatcher::icpAlignment(
     const pcl::PointCloud<PointType> &src,
-    const pcl::PointCloud<PointType> &dst, bool global_reloc_done) {
+    const pcl::PointCloud<PointType> &dst) {
   RegistrationOutput reg_output;
   aligned_.clear();
   // merge subkeyframes before ICP
@@ -99,7 +98,7 @@ RegistrationOutput MapMatcher::icpAlignment(
   reg_output.score_ = nano_gicp_.getFitnessScore();
   // if matchness score is lower than threshold, (lower is better)
   float score_threshold = config_.gicp_config_.icp_score_thr_;
-  if (!global_reloc_done) {
+  if (!global_reloc_done_) {
     score_threshold = config_.gicp_config_.reloc_icp_score_thr_;
   }
   RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
@@ -116,7 +115,7 @@ RegistrationOutput MapMatcher::icpAlignment(
 
 RegistrationOutput MapMatcher::coarseToFineAlignment(
     const pcl::PointCloud<PointType> &src,
-    const pcl::PointCloud<PointType> &dst, bool global_reloc_done) {
+    const pcl::PointCloud<PointType> &dst) {
   RegistrationOutput reg_output;
   coarse_aligned_.clear();
   // Quatro 做粗配准
@@ -144,8 +143,7 @@ RegistrationOutput MapMatcher::coarseToFineAlignment(
     }
     coarse_aligned_ = transformPcd(src, reg_output.pose_between_eig_);
     // icp refine
-    const auto &fine_output =
-        icpAlignment(coarse_aligned_, dst, global_reloc_done);
+    const auto &fine_output = icpAlignment(coarse_aligned_, dst);
     {
       Eigen::Matrix4d fine_tf = fine_output.pose_between_eig_;
 
@@ -187,6 +185,7 @@ RegistrationOutput MapMatcher::performMapMatcher(
     const int closest_keyframe_idx, bool global_reloc_done) {
   RegistrationOutput reg_output;
   closest_keyframe_idx_ = closest_keyframe_idx;
+  global_reloc_done_ = global_reloc_done;
   if (closest_keyframe_idx_ >= 0) {
     // Quatro + NANO-GICP to check loop (from front_keyframe to closest
     // keyframe's neighbor)
@@ -198,11 +197,11 @@ RegistrationOutput MapMatcher::performMapMatcher(
     *src_cloud_ = src_cloud;
     *dst_cloud_ = dst_cloud;
 
-    if (config_.enable_quatro_ && !global_reloc_done) {
+    if (config_.enable_quatro_ && !global_reloc_done_) {
       RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
                   "Execute quatro alignment: %d vs %d", src_cloud.size(),
                   dst_cloud.size());
-      return coarseToFineAlignment(src_cloud, dst_cloud, global_reloc_done);
+      return coarseToFineAlignment(src_cloud, dst_cloud);
     } else {
       RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
                   "Execute GICP alignment: %d vs %d", src_cloud.size(),

@@ -33,24 +33,13 @@ Eigen::Matrix4d keepXYYawOnly(const Eigen::Matrix4d &T) {
 
   return out;
 }
-
-bool isRelocalizationCandidateStable(const Eigen::Matrix4d &last_tf,
-                                     const Eigen::Matrix4d &new_tf,
-                                     double trans_thresh, double yaw_thresh_deg,
-                                     double &trans_diff, double &yaw_diff_deg) {
-  const Eigen::Vector2d last_xy(last_tf(0, 3), last_tf(1, 3));
-  const Eigen::Vector2d new_xy(new_tf(0, 3), new_tf(1, 3));
-
-  trans_diff = (new_xy - last_xy).norm();
-
-  const double last_yaw = getYawFromMatrix(last_tf);
-  const double new_yaw = getYawFromMatrix(new_tf);
-
-  yaw_diff_deg =
-      std::fabs(angles::normalize_angle(new_yaw - last_yaw)) * 180.0 / M_PI;
-
-  return trans_diff < trans_thresh && yaw_diff_deg < yaw_thresh_deg;
-}
+struct RelocMatchCandidate {
+  int idx = -1;
+  double pose_dist = 0.0;
+  double score = std::numeric_limits<double>::max();
+  Eigen::Matrix4d candidate_tf = Eigen::Matrix4d::Identity();
+  RegistrationOutput reg_output;
+};
 
 }  // namespace
 
@@ -154,6 +143,8 @@ FastLioLocalizationScQn::FastLioLocalizationScQn(const std::string &node_name)
 
   this->declare_parameter<bool>("reloc.use_xy_yaw_only", true);
   this->get_parameter("reloc.use_xy_yaw_only", reloc_use_xy_yaw_only_);
+  this->declare_parameter<bool>("reloc.use_initial_pose", true);
+  this->get_parameter("reloc.use_initial_pose", reloc_use_initial_pose_);
   // -----------------------
   // 2. Initialize map matcher
   // -----------------------
@@ -218,7 +209,11 @@ FastLioLocalizationScQn::FastLioLocalizationScQn(const std::string &node_name)
   sub_odom_pcd_sync_->registerCallback(
       std::bind(&FastLioLocalizationScQn::odomPcdCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
-
+  sub_initial_pose_ =
+      this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          "/initialpose", 10,
+          std::bind(&FastLioLocalizationScQn::initialPoseCallback, this,
+                    std::placeholders::_1));
   // -----------------------
   // 5. Timer
   // -----------------------
@@ -233,12 +228,42 @@ FastLioLocalizationScQn::FastLioLocalizationScQn(const std::string &node_name)
 
   RCLCPP_WARN(this->get_logger(), "FastLioLocalizationScQn node started...");
 }
+
+void FastLioLocalizationScQn::initialPoseCallback(
+    const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
+  global_reloc_done_ = false;
+  resetRelocStableState();
+  last_matched_keyframe_idx_ = -1;
+  Eigen::Quaterniond q(
+      msg->pose.pose.orientation.w, msg->pose.pose.orientation.x,
+      msg->pose.pose.orientation.y, msg->pose.pose.orientation.z);
+
+  q.normalize();
+
+  initial_pose_eig_ = Eigen::Matrix4d::Identity();
+  initial_pose_eig_.block<3, 3>(0, 0) = q.toRotationMatrix();
+  initial_pose_eig_(0, 3) = msg->pose.pose.position.x;
+  initial_pose_eig_(1, 3) = msg->pose.pose.position.y;
+  initial_pose_eig_(2, 3) = msg->pose.pose.position.z;
+
+  need_apply_initial_pose_ = true;
+  localization_state_ = LocalizationState::GLOBAL_RELOCALIZING;
+  RCLCPP_WARN(this->get_logger(),
+              "Received initial pose from RViz: x=%.3f, y=%.3f, z=%.3f",
+              initial_pose_eig_(0, 3), initial_pose_eig_(1, 3),
+              initial_pose_eig_(2, 3));
+}
+
 // ----------------------
 // odom+pcd 同步回调
 // ----------------------
 void FastLioLocalizationScQn::odomPcdCallback(
     const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg,
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pcd_msg) {
+  if (reloc_use_initial_pose_ &&
+      localization_state_ == LocalizationState::IDLE) {
+    return;
+  }
   PosePcd current_frame(*odom_msg, *pcd_msg, current_keyframe_idx_);
   // 1. 打印原始里程计位姿 (pose_eig_)
   {
@@ -276,6 +301,13 @@ void FastLioLocalizationScQn::odomPcdCallback(
                 last_corrected_TF_(0, 3), last_corrected_TF_(1, 3),
                 last_corrected_TF_(2, 3), roll * 180.0 / M_PI,
                 pitch * 180.0 / M_PI, yaw * 180.0 / M_PI);
+  }
+  if (reloc_use_initial_pose_ && need_apply_initial_pose_) {
+    last_corrected_TF_ = initial_pose_eig_ * current_frame.pose_eig_.inverse();
+    need_apply_initial_pose_ = false;
+
+    RCLCPP_WARN(this->get_logger(),
+                "Applied initial pose to map->odom transform.");
   }
   // 1. 实时 pose = last TF * odom
   current_frame.pose_corrected_eig_ =
@@ -357,14 +389,14 @@ void FastLioLocalizationScQn::odomPcdCallback(
   }
 
   // 检查 keyframe
-  //   if (checkIfKeyframe(current_frame, last_keyframe_)) {
-  std::lock_guard<std::mutex> lock(keyframes_mutex_);
-  last_keyframe_ = current_frame;
-  current_keyframe_idx_++;
+  if (checkIfKeyframe(current_frame, last_keyframe_) || !global_reloc_done_) {
+    std::lock_guard<std::mutex> lock(keyframes_mutex_);
+    last_keyframe_ = current_frame;
+    current_keyframe_idx_++;
 
-  std::lock_guard<std::mutex> lock2(vis_mutex_);
-  updateOdomsAndPaths(current_frame);
-  //   }
+    std::lock_guard<std::mutex> lock2(vis_mutex_);
+    updateOdomsAndPaths(current_frame);
+  }
 }
 
 // ----------------------
@@ -382,169 +414,22 @@ void FastLioLocalizationScQn::matchingTimerFunc() {
     last_keyframe_.processed_ = true;
   }
   if (last_keyframe_copy.idx_ == 0 || last_keyframe_copy.processed_) return;
-
-  //   int closest_keyframe_idx = map_matcher_->fetchClosestKeyframeIdx(
-  //       last_keyframe_copy, saved_map_from_bag_);
-  //   if (closest_keyframe_idx < 0) return;
-  int closest_keyframe_idx = -1;
-
-  if (!global_reloc_done_) {
-    // 第一次：用 ScanContext 做全局重定位
-    closest_keyframe_idx = map_matcher_->fetchClosestKeyframeIdx(
-        last_keyframe_copy, saved_map_from_bag_);
-    if (closest_keyframe_idx < 0) {
-      RCLCPP_WARN(this->get_logger(),
-                  "Global reloc failed: no ScanContext candidate.");
-      return;
-    }
-
-    RCLCPP_INFO(this->get_logger(), "Global reloc candidate idx: %d",
-                closest_keyframe_idx);
-  } else {
-    // 全局重定位成功后：不再用
-    // ScanContext，直接根据当前预测位姿找最近地图关键帧
-    closest_keyframe_idx = findNearestKeyframeByPose(
-        last_keyframe_copy.pose_corrected_eig_, saved_map_from_bag_);
-
-    if (closest_keyframe_idx < 0) {
-      RCLCPP_WARN(this->get_logger(),
-                  "Local tracking failed: no nearest keyframe.");
-      return;
-    }
-
-    RCLCPP_INFO(this->get_logger(), "Local tracking nearest keyframe idx: %d",
-                closest_keyframe_idx);
+  if (!reloc_use_initial_pose_ &&
+      localization_state_ == LocalizationState::IDLE) {
+    localization_state_ = LocalizationState::GLOBAL_RELOCALIZING;
   }
+  switch (localization_state_) {
+    case LocalizationState::GLOBAL_RELOCALIZING:
+      handleGlobalRelocalization(last_keyframe_copy);
+      break;
 
-  const RegistrationOutput &reg_output =
-      map_matcher_->performMapMatcher(last_keyframe_copy, saved_map_from_bag_,
-                                      closest_keyframe_idx, global_reloc_done_);
-  if (reg_output.is_valid_) {
-    RCLCPP_INFO(this->get_logger(), "Map matching accepted. Score: %.3f",
-                reg_output.score_);
-
-    Eigen::Matrix4d TFed_pose;
-
-    if (!global_reloc_done_) {
-      // reg_output.pose_between_eig_ T_delta
-      Eigen::Matrix4d candidate_tf =
-          reg_output.pose_between_eig_ * last_corrected_TF_;
-
-      if (reloc_use_xy_yaw_only_) {
-        candidate_tf = keepXYYawOnly(candidate_tf);
-      }
-
-      double candidate_yaw_deg = getYawFromMatrix(candidate_tf) * 180.0 / M_PI;
-
-      RCLCPP_INFO(this->get_logger(),
-                  "[RELOCALIZATION] candidate map->odom: "
-                  "x=%.3f, y=%.3f, z=%.3f, yaw=%.2f deg, score=%.3f",
-                  candidate_tf(0, 3), candidate_tf(1, 3), candidate_tf(2, 3),
-                  candidate_yaw_deg, reg_output.score_);
-
-      if (!has_last_reloc_candidate_) {
-        last_reloc_candidate_tf_ = candidate_tf;
-        has_last_reloc_candidate_ = true;
-        reloc_stable_count_ = 1;
-
-        RCLCPP_WARN(this->get_logger(),
-                    "[RELOCALIZATION] candidate %d/%d, waiting stable matches",
-                    reloc_stable_count_, reloc_stable_required_);
-
-        return;
-      }
-
-      double trans_diff = 0.0;
-      double yaw_diff_deg = 0.0;
-
-      bool stable = isRelocalizationCandidateStable(
-          last_reloc_candidate_tf_, candidate_tf, reloc_trans_diff_threshold_,
-          reloc_yaw_diff_threshold_deg_, trans_diff, yaw_diff_deg);
-
-      if (!stable) {
-        last_reloc_candidate_tf_ = candidate_tf;
-        reloc_stable_count_ = 1;
-
-        RCLCPP_WARN(this->get_logger(),
-                    "[RELOCALIZATION] candidate unstable, reset count. "
-                    "trans_diff=%.3f m, yaw_diff=%.2f deg, score=%.3f",
-                    trans_diff, yaw_diff_deg, reg_output.score_);
-
-        return;
-      }
-
-      reloc_stable_count_++;
-
-      RCLCPP_WARN(this->get_logger(),
-                  "[RELOCALIZATION] stable candidate %d/%d. "
-                  "trans_diff=%.3f m, yaw_diff=%.2f deg, score=%.3f",
-                  reloc_stable_count_, reloc_stable_required_, trans_diff,
-                  yaw_diff_deg, reg_output.score_);
-
-      if (reloc_stable_count_ < reloc_stable_required_) {
-        return;
-      }
-      // --------------------------------------------------
-      // 连续稳定后，才真正更新 map->odom 并发布成功
-      // --------------------------------------------------
-      last_corrected_TF_ = candidate_tf;
-      // T_map_base = T_map_odom * T_odom_base
-      TFed_pose = last_corrected_TF_ * last_keyframe_copy.pose_eig_;
-
-      last_matched_keyframe_idx_ = closest_keyframe_idx;
-      global_reloc_done_ = true;
-
-      std_msgs::msg::Bool msg;
-      msg.data = true;
-      reloc_success_pub_->publish(msg);
-
-      RCLCPP_INFO(this->get_logger(),
-                  "[RELOCALIZATION] success after %d stable matches, "
-                  "published /reloc_success = true",
-                  reloc_stable_count_);
-
-      RCLCPP_INFO(this->get_logger(),
-                  "[RELOCALIZATION] final map->odom: "
-                  "x=%.3f, y=%.3f, z=%.3f, yaw=%.2f deg",
-                  last_corrected_TF_(0, 3), last_corrected_TF_(1, 3),
-                  last_corrected_TF_(2, 3),
-                  getYawFromMatrix(last_corrected_TF_) * 180.0 / M_PI);
-
-    } else {
-      // --------------------------------------------------
-      // 已经重定位成功后的局部跟踪阶段
-      // --------------------------------------------------
-      last_corrected_TF_ = reg_output.pose_between_eig_ * last_corrected_TF_;
-      // T_map_base_new = T_delta * T_map_base_old
-      TFed_pose =
-          reg_output.pose_between_eig_ * last_keyframe_copy.pose_corrected_eig_;
-      last_matched_keyframe_idx_ = closest_keyframe_idx;
-    }
-
-    std::lock_guard<std::mutex> lock(vis_mutex_);
-
-    corrected_odoms_.points[last_keyframe_copy.idx_] =
-        pcl::PointXYZ(TFed_pose(0, 3), TFed_pose(1, 3), TFed_pose(2, 3));
-
-    corrected_odom_path_.poses[last_keyframe_copy.idx_] =
-        poseEigToPoseStamped(TFed_pose, map_frame_);
-
-    matched_pairs_xyz_.push_back(
-        {corrected_odoms_.points[last_keyframe_copy.idx_],
-         raw_odoms_.points[last_keyframe_copy.idx_]});
-
-    map_match_pub_->publish(getMatchMarker(matched_pairs_xyz_));
-
-    publishMapToOdom(this->now());
-
-  } else {
-    if (!global_reloc_done_) {
-      reloc_stable_count_ = 0;
-      has_last_reloc_candidate_ = false;
-
-      RCLCPP_WARN(this->get_logger(),
-                  "[RELOCALIZATION] rejected: registration invalid");
-    }
+    case LocalizationState::LOCAL_TRACKING:
+      handleLocalTracking(last_keyframe_copy);
+      break;
+    default:
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                           "Localization state is IDLE, skip map matching.");
+      return;
   }
 
   // 发布 debug 点云
@@ -576,6 +461,255 @@ void FastLioLocalizationScQn::matchingTimerFunc() {
               duration_cast<microseconds>(t2 - t1).count() / 1e3);
 }
 
+void FastLioLocalizationScQn::handleGlobalRelocalization(
+    const PosePcd &last_keyframe_copy) {
+  if (reloc_use_initial_pose_ &&
+      localization_state_ == LocalizationState::IDLE) {
+    resetRelocStableState();
+    return;
+  }
+
+  int closest_keyframe_idx = -1;
+  RegistrationOutput reg_output;
+  Eigen::Matrix4d candidate_tf = Eigen::Matrix4d::Identity();
+
+  if (reloc_use_initial_pose_) {
+    //找附近所有候选帧
+    auto pose_candidates =
+        findCandidateKeyframesByPose(initial_pose_eig_, saved_map_from_bag_);
+
+    if (pose_candidates.empty()) {
+      resetRelocStableState();
+      RCLCPP_WARN(this->get_logger(),
+                  "[RELOCALIZATION] failed: no keyframe near initial pose.");
+      return;
+    }
+
+    std::vector<RelocMatchCandidate> valid_matches;
+
+    for (const auto &[candidate_idx, pose_dist] : pose_candidates) {
+      RegistrationOutput output = map_matcher_->performMapMatcher(
+          last_keyframe_copy, saved_map_from_bag_, candidate_idx, false);
+      RCLCPP_INFO(this->get_logger(),
+                  "[RELOCALIZATION] candidate idx=%d, pose_dist=%.3f, "
+                  "valid=%d, converged=%d, score=%.3f",
+                  candidate_idx, pose_dist, output.is_valid_,
+                  output.is_converged_, output.score_);
+      if (!output.is_valid_) continue;
+
+      Eigen::Matrix4d tf = output.pose_between_eig_ * last_corrected_TF_;
+
+      if (reloc_use_xy_yaw_only_) {
+        tf = keepXYYawOnly(tf);
+      }
+
+      valid_matches.push_back(
+          {candidate_idx, pose_dist, output.score_, tf, output});
+    }
+
+    if (valid_matches.empty()) {
+      resetRelocStableState();
+      RCLCPP_WARN(this->get_logger(),
+                  "[RELOCALIZATION] failed: no valid registration.");
+      return;
+    }
+
+    auto chosen_it = std::min_element(
+        valid_matches.begin(), valid_matches.end(),
+        [](const RelocMatchCandidate &a, const RelocMatchCandidate &b) {
+          return a.score < b.score;
+        });
+
+    closest_keyframe_idx = chosen_it->idx;
+    reg_output = chosen_it->reg_output;
+    candidate_tf = chosen_it->candidate_tf;
+    RCLCPP_INFO(
+        this->get_logger(),
+        "[RELOCALIZATION] chosen candidate idx=%d, pose_dist=%.3f, score=%.3f",
+        chosen_it->idx, chosen_it->pose_dist, chosen_it->score);
+  } else {
+    closest_keyframe_idx = map_matcher_->fetchClosestKeyframeIdx(
+        last_keyframe_copy, saved_map_from_bag_);
+
+    if (closest_keyframe_idx < 0) {
+      resetRelocStableState();
+      RCLCPP_WARN(this->get_logger(),
+                  "[RELOCALIZATION] failed: no ScanContext candidate.");
+      return;
+    }
+
+    reg_output = map_matcher_->performMapMatcher(
+        last_keyframe_copy, saved_map_from_bag_, closest_keyframe_idx, false);
+
+    if (!reg_output.is_valid_) {
+      RCLCPP_WARN(this->get_logger(),
+                  "[RELOCALIZATION] rejected: registration invalid.");
+      resetRelocStableState();
+      return;
+    }
+
+    candidate_tf = reg_output.pose_between_eig_ * last_corrected_TF_;
+
+    if (reloc_use_xy_yaw_only_) {
+      candidate_tf = keepXYYawOnly(candidate_tf);
+    }
+  }
+
+  if (!has_last_reloc_candidate_) {
+    last_reloc_candidate_tf_ = candidate_tf;
+    has_last_reloc_candidate_ = true;
+    reloc_stable_count_ = 1;
+    RCLCPP_WARN(this->get_logger(),
+                "[RELOCALIZATION] candidate 1/%d, waiting stable matches. "
+                "idx=%d, score=%.3f",
+                reloc_stable_required_, closest_keyframe_idx,
+                reg_output.score_);
+    return;
+  }
+
+  bool stable =
+      isRelocalizationCandidateStable(last_reloc_candidate_tf_, candidate_tf);
+
+  if (!stable) {
+    last_reloc_candidate_tf_ = candidate_tf;
+    reloc_stable_count_ = 1;
+    RCLCPP_WARN(this->get_logger(),
+                "[RELOCALIZATION] candidate unstable, reset stable count. "
+                "idx=%d, score=%.3f",
+                closest_keyframe_idx, reg_output.score_);
+    return;
+  }
+
+  reloc_stable_count_++;
+  RCLCPP_WARN(this->get_logger(),
+              "[RELOCALIZATION] stable candidate %d/%d. idx=%d, score=%.3f",
+              reloc_stable_count_, reloc_stable_required_, closest_keyframe_idx,
+              reg_output.score_);
+  if (reloc_stable_count_ < reloc_stable_required_) {
+    return;
+  }
+
+  last_corrected_TF_ = candidate_tf;
+  last_matched_keyframe_idx_ = closest_keyframe_idx;
+  global_reloc_done_ = true;
+  localization_state_ = LocalizationState::LOCAL_TRACKING;
+  RCLCPP_WARN(this->get_logger(),
+              "[RELOCALIZATION] success. idx=%d, score=%.3f, "
+              "map_to_odom=[x=%.3f, y=%.3f, z=%.3f, yaw=%.2f deg]",
+              closest_keyframe_idx, reg_output.score_, last_corrected_TF_(0, 3),
+              last_corrected_TF_(1, 3), last_corrected_TF_(2, 3),
+              getYawFromMatrix(last_corrected_TF_) * 180.0 / M_PI);
+  Eigen::Matrix4d tfed_pose = last_corrected_TF_ * last_keyframe_copy.pose_eig_;
+
+  std_msgs::msg::Bool msg;
+  msg.data = true;
+  reloc_success_pub_->publish(msg);
+  publishMatchedResult(last_keyframe_copy, tfed_pose);
+}
+
+void FastLioLocalizationScQn::handleLocalTracking(
+    const PosePcd &last_keyframe_copy) {
+  int closest_keyframe_idx = findNearestKeyframeByPose(
+      last_keyframe_copy.pose_corrected_eig_, saved_map_from_bag_);
+  RCLCPP_INFO(this->get_logger(), "Local tracking nearest keyframe idx: %d",
+              closest_keyframe_idx);
+
+  if (closest_keyframe_idx < 0) {
+    RCLCPP_WARN(this->get_logger(),
+                "[LOCAL_TRACKING] failed: no nearest keyframe.");
+    return;
+  }
+
+  const RegistrationOutput &reg_output = map_matcher_->performMapMatcher(
+      last_keyframe_copy, saved_map_from_bag_, closest_keyframe_idx, true);
+
+  if (!reg_output.is_valid_) {
+    double delta_yaw_deg =
+        getYawFromMatrix(reg_output.pose_between_eig_) * 180.0 / M_PI;
+
+    RCLCPP_WARN(this->get_logger(),
+                "[LOCAL_TRACKING] rejected: registration invalid. "
+                "idx=%d, converged=%d, score=%.3f, "
+                "delta=[x=%.3f, y=%.3f, z=%.3f, yaw=%.2f deg]",
+                closest_keyframe_idx, reg_output.is_converged_,
+                reg_output.score_, reg_output.pose_between_eig_(0, 3),
+                reg_output.pose_between_eig_(1, 3),
+                reg_output.pose_between_eig_(2, 3), delta_yaw_deg);
+    return;
+  }
+
+  last_corrected_TF_ = reg_output.pose_between_eig_ * last_corrected_TF_;
+
+  Eigen::Matrix4d tfed_pose =
+      reg_output.pose_between_eig_ * last_keyframe_copy.pose_corrected_eig_;
+
+  last_matched_keyframe_idx_ = closest_keyframe_idx;
+  publishMatchedResult(last_keyframe_copy, tfed_pose);
+}
+
+bool FastLioLocalizationScQn::isRelocalizationCandidateStable(
+    const Eigen::Matrix4d &last_tf, const Eigen::Matrix4d &new_tf) {
+  const Eigen::Vector2d last_xy(last_tf(0, 3), last_tf(1, 3));
+  const Eigen::Vector2d new_xy(new_tf(0, 3), new_tf(1, 3));
+
+  double trans_diff = (new_xy - last_xy).norm();
+
+  const double last_yaw = getYawFromMatrix(last_tf);
+  const double new_yaw = getYawFromMatrix(new_tf);
+
+  double yaw_diff_deg =
+      std::fabs(angles::normalize_angle(new_yaw - last_yaw)) * 180.0 / M_PI;
+  bool stable = trans_diff < reloc_trans_diff_threshold_ &&
+                yaw_diff_deg < reloc_yaw_diff_threshold_deg_;
+  RCLCPP_WARN(this->get_logger(),
+              "[RELOCALIZATION] stable check: stable=%d, "
+              "trans_diff=%.3f/%.3f m, yaw_diff=%.2f/%.2f deg",
+              stable, trans_diff, reloc_trans_diff_threshold_, yaw_diff_deg,
+              reloc_yaw_diff_threshold_deg_);
+  return stable;
+}
+
+void FastLioLocalizationScQn::resetRelocStableState() {
+  reloc_stable_count_ = 0;
+  has_last_reloc_candidate_ = false;
+}
+
+std::vector<std::pair<int, double>>
+FastLioLocalizationScQn::findCandidateKeyframesByPose(
+    const Eigen::Matrix4d &query_pose,
+    const std::vector<PosePcdReduced> &saved_keyframes) {
+  constexpr double search_radius = 3.0;
+  constexpr int max_candidates = 10;
+  std::vector<std::pair<int, double>> candidates;
+
+  if (saved_keyframes.empty()) {
+    return candidates;
+  }
+
+  Eigen::Vector3d query_pos = query_pose.block<3, 1>(0, 3);
+
+  for (int i = 0; i < static_cast<int>(saved_keyframes.size()); ++i) {
+    Eigen::Vector3d map_pos = saved_keyframes[i].pose_eig_.block<3, 1>(0, 3);
+
+    double dx = query_pos.x() - map_pos.x();
+    double dy = query_pos.y() - map_pos.y();
+    double dist = std::hypot(dx, dy);
+
+    if (dist <= search_radius) {
+      candidates.emplace_back(i, dist);
+    }
+  }
+
+  std::sort(candidates.begin(), candidates.end(),
+            [](const auto &a, const auto &b) { return a.second < b.second; });
+
+  if (max_candidates > 0 &&
+      static_cast<int>(candidates.size()) > max_candidates) {
+    candidates.resize(max_candidates);
+  }
+  return candidates;
+}
+
 int FastLioLocalizationScQn::findNearestKeyframeByPose(
     const Eigen::Matrix4d &query_pose,
     const std::vector<PosePcdReduced> &saved_keyframes) {
@@ -585,19 +719,18 @@ int FastLioLocalizationScQn::findNearestKeyframeByPose(
 
   Eigen::Vector3d query_pos = query_pose.block<3, 1>(0, 3);
 
-  int search_range = 10;
   int start_idx = 0;
   int end_idx = static_cast<int>(saved_keyframes.size()) - 1;
-
+  constexpr int ksearch_range = 3;
   if (last_matched_keyframe_idx_ >= 0) {
-    start_idx = std::max(0, last_matched_keyframe_idx_ - search_range);
+    start_idx = std::max(0, last_matched_keyframe_idx_ - ksearch_range);
     end_idx = std::min(static_cast<int>(saved_keyframes.size()) - 1,
-                       last_matched_keyframe_idx_ + search_range);
+                       last_matched_keyframe_idx_ + ksearch_range);
   }
 
   double min_dist = std::numeric_limits<double>::max();
   int nearest_idx = -1;
-
+  //找距离 query_pose 最近的地图关键帧
   for (int i = start_idx; i <= end_idx; ++i) {
     Eigen::Vector3d map_pos = saved_keyframes[i].pose_eig_.block<3, 1>(0, 3);
     double dist = (query_pos - map_pos).norm();
@@ -608,7 +741,7 @@ int FastLioLocalizationScQn::findNearestKeyframeByPose(
     }
   }
 
-  double max_nearest_dist = 10.0;
+  double max_nearest_dist = 6.0;
   if (min_dist > max_nearest_dist) {
     RCLCPP_WARN(this->get_logger(), "Nearest keyframe too far: %.3f m",
                 min_dist);
@@ -616,6 +749,25 @@ int FastLioLocalizationScQn::findNearestKeyframeByPose(
   }
 
   return nearest_idx;
+}
+
+void FastLioLocalizationScQn::publishMatchedResult(
+    const PosePcd &last_keyframe_copy, const Eigen::Matrix4d &tfed_pose) {
+  std::lock_guard<std::mutex> lock(vis_mutex_);
+
+  corrected_odoms_.points[last_keyframe_copy.idx_] =
+      pcl::PointXYZ(tfed_pose(0, 3), tfed_pose(1, 3), tfed_pose(2, 3));
+
+  corrected_odom_path_.poses[last_keyframe_copy.idx_] =
+      poseEigToPoseStamped(tfed_pose, map_frame_);
+
+  matched_pairs_xyz_.push_back(
+      {corrected_odoms_.points[last_keyframe_copy.idx_],
+       raw_odoms_.points[last_keyframe_copy.idx_]});
+
+  map_match_pub_->publish(getMatchMarker(matched_pairs_xyz_));
+
+  publishMapToOdom(this->now());
 }
 // ----------------------
 // 发布 map->odom

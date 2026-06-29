@@ -8,7 +8,7 @@
 
     keyframe:
       keyframe_threshold: 1.5                       # 关键帧距离阈值，单位 [米]，每移动这么远生成一帧关键帧
-      num_submap_keyframes: 5                       # 构建子地图时使用的关键帧数量，范围通常为 [closest-this, closest+this]（如果存在）
+      num_submap_keyframes: 2                       # 构建子地图时使用的关键帧数量，范围通常为 [closest-this, closest+this]（如果存在）
 
     match:
       quatro_nano_gicp_voxel_resolution: 0.3        # Quatro 和 Nano-GICP 匹配时使用的体素分辨率
@@ -16,7 +16,7 @@
 
     nano_gicp:                                      # 以下参数来自 Nano-GICP 官方仓库（Direct LiDAR Odometry）
       thread_number: 0                              # 线程数，若为 0 则使用 CPU 最大核心数
-      icp_score_threshold: 1.0                      # ICP 匹配分数阈值，越小表示匹配越准确，用于地图-扫描匹配结果判定
+      icp_score_threshold: 0.5                      # ICP 匹配分数阈值，越小表示匹配越准确，用于地图-扫描匹配结果判定
       reloc_icp_score_threshold: 2.5 
       correspondences_number: 15                    # 每个点用于建立匹配关系的对应点数量
       max_correspondence_distance: 15.0             # 最大对应点距离，同时也可用于候选帧筛选
@@ -42,7 +42,8 @@
         rot_cost_diff_threshold: 0.0001             # 相邻两次迭代的代价函数差值阈值，小于该值则认为旋转优化收敛
         # 当连续两次迭代的代价差小于该阈值时，旋转优化结束
     reloc:
-      stable_required: 3                            #重定位结果稳定的连续帧数要求，只有当连续多帧匹配结果都满足分数阈值时，才认为重定位成功
-      trans_diff_threshold: 0.15                    #重定位结果与当前位姿的平移差异阈值，单位 [米]，用于判断重定位结果是否合理
-      yaw_diff_threshold_deg: 5.0                   #重定位结果与当前位姿的航向差异阈值，单位 [度]，用于判断重定位结果是否合理
+      use_initial_pose: true                        # 提供初始位姿
+      stable_required: 2                            # 重定位结果稳定的连续帧数要求，只有当连续多帧匹配结果都满足分数阈值时，才认为重定位成功
+      trans_diff_threshold: 0.15                    # 连续两次重定位候选 map->odom 之间的平移差阈值，单位 [米]
+      yaw_diff_threshold_deg: 5.0                   # 连续两次重定位候选 map->odom 之间的航向差阈值，单位 [度]
       use_xy_yaw_only: true                         # 是否仅使用平面位置和航向进行重定位结果合理性判断，通常建议设置为 true，因为激光雷达在 z 轴和俯仰角上的估计不够稳定

@@ -78,6 +78,7 @@ class MapMatcher {
   pcl::PointCloud<PointType> coarse_aligned_;
   pcl::PointCloud<PointType> aligned_;
   MapMatcherConfig config_;
+  bool global_reloc_done_ = false;
 
  public:
   explicit MapMatcher(const MapMatcherConfig &config);
@@ -90,11 +91,10 @@ class MapMatcher {
                             const int dst_idx, const int submap_range,
                             const double voxel_res, const bool enable_quatro);
   RegistrationOutput icpAlignment(const pcl::PointCloud<PointType> &src,
-                                  const pcl::PointCloud<PointType> &dst,
-                                  bool global_reloc_done = true);
+                                  const pcl::PointCloud<PointType> &dst);
   RegistrationOutput coarseToFineAlignment(
       const pcl::PointCloud<PointType> &src,
-      const pcl::PointCloud<PointType> &dst, bool global_reloc_done);
+      const pcl::PointCloud<PointType> &dst);
   RegistrationOutput performMapMatcher(
       const PosePcd &query_keyframe,
       const std::vector<PosePcdReduced> &saved_keyframes,
