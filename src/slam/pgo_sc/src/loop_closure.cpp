@@ -97,20 +97,19 @@ PcdPair LoopClosure::setSrcAndDstCloud(const std::vector<PosePcd> &keyframes,
     // 仅使用单帧或 Quatro 对齐
     src_accum = transformPcd(keyframes[src_idx].pcd_,
                              keyframes[src_idx].pose_corrected_eig_);
-    if (enable_quatro) {
-      //当前单帧 ↔ 历史单帧
-      dst_accum = transformPcd(keyframes[dst_idx].pcd_,
-                               keyframes[dst_idx].pose_corrected_eig_);
-    } else {
-      // 当前单帧 ↔ 历史子地图
-      for (int i = dst_idx - submap_range; i < dst_idx + submap_range + 1;
-           ++i) {
-        if (i >= 0 && i < static_cast<int>(keyframes.size())) {
-          dst_accum +=
-              transformPcd(keyframes[i].pcd_, keyframes[i].pose_corrected_eig_);
-        }
+    // if (enable_quatro) {
+    //   //当前单帧 ↔ 历史单帧
+    //   dst_accum = transformPcd(keyframes[dst_idx].pcd_,
+    //                            keyframes[dst_idx].pose_corrected_eig_);
+    // } else {
+    // 当前单帧 ↔ 历史子地图
+    for (int i = dst_idx - submap_range; i < dst_idx + submap_range + 1; ++i) {
+      if (i >= 0 && i < static_cast<int>(keyframes.size())) {
+        dst_accum +=
+            transformPcd(keyframes[i].pcd_, keyframes[i].pose_corrected_eig_);
       }
     }
+    // }
   }
   // Voxel 化点云，减小点云密度，提高配准效率
   return {*voxelizePcd(src_accum, voxel_res),

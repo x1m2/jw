@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
-WORKSPACE_DIR="/home/jw-zkl/robotics_platform/robot_ws"
-LOG_ROOT="/home/jw-zkl/log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_ROOT="${WORKSPACE_DIR}/log"
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
