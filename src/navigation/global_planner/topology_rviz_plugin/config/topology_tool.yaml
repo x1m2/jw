@@ -6,13 +6,12 @@ rviz_topology:
     topology_tool:
       marker_topic: "topology_markers"
       point_topic: "topology_points"
-      pointcloud_topic: "/free_space_cloud"
+      pcd_file: "${ROBOT_DATA_DIR}/map/result_free_space.pcd"
 
-      default_mode: "Add Node"
       node_label: "节点"
 
-      max_connection_distance: 2.0
       selection_threshold: 0.3
       bidirectional: true
 
       save_file: "${ROBOT_DATA_DIR}/topology_map/connected_topology_map.txt"
+      auto_load_topology: true

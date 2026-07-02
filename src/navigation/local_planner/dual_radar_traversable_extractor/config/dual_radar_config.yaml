@@ -34,7 +34,7 @@ dual_radar_traversable_extractor:
     # PatchWorkpp地面分割参数
     patchworkpp:
       verbose: false
-      sensor_height: 1.723
+      sensor_height: 0.7
       num_iter: 3
       num_lpr: 20
       num_min_pts: 6                           # 减少最小点数要求
@@ -59,7 +59,7 @@ dual_radar_traversable_extractor:
       czm:
         num_zones: 4
         num_sectors_each_zone: [4, 8, 12, 8]    # 使用PGO的扇区配置
-        mum_rings_each_zone: [4, 4, 4, 4]       # 使用PGO的环形配置
+        num_rings_each_zone: [4, 4, 4, 4]       # 使用PGO的环形配置
         elevation_thresholds: [0.1, 0.1, 0.1, 0.1]  # 使用PGO的高度阈值
         flatness_thresholds: [0.0, 0.0, 0.0, 0.0]
 

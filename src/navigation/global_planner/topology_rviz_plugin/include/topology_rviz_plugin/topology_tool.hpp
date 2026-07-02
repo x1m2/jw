@@ -9,7 +9,7 @@
 #include <rviz_common/properties/string_property.hpp>
 #include <rviz_common/properties/bool_property.hpp>
 #include <rviz_common/properties/float_property.hpp>
-#include <rviz_common/properties/enum_property.hpp>
+#include <rviz_common/properties/int_property.hpp>
 #include <rviz_common/properties/property.hpp>
 
 #include <OgreVector3.h>
@@ -21,21 +21,15 @@
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <visualization_msgs/msg/interactive_marker_control.hpp>
 #include <visualization_msgs/msg/interactive_marker_feedback.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
 
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
 
-#include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
 
 #include <QObject>
-#include <QInputDialog>
-#include <QLineEdit>
-#include <QMessageBox>
-
 #include <memory>
 #include <stdexcept>
 #include <mutex>
@@ -89,6 +83,10 @@ private Q_SLOTS:
   void clearAll();
   void saveTopology();
   void loadTopology();
+  void connectNodesFromProperties();
+  void loadEditNodeToProperties();
+  void applyEditNodeFromProperties();
+  void deleteNodeFromProperties();
 
 private:
   // 鼠标事件处理
@@ -98,15 +96,16 @@ private:
 
   // 节点和边管理
   void addNode(double x, double y, double z);
-  void addNodeAutoConnect(double x, double y, double z);
   void addEdge(int from_id, int to_id);
   void removeNode(int node_id);
   void removeEdge(int edge_id);
 
   // 可视化
   void updateVisualization();
+  void clearVisualization();
   void publishNodes();
   void publishEdges();
+  void rebuildInteractiveMarkers();
 
   // 交互标记相关
   void createInteractiveMarker(const TopologyNode& node);
@@ -116,16 +115,19 @@ private:
 
   // 工具函数
   double calculateDistance(const TopologyNode& n1, const TopologyNode& n2);
-  int findNearestNode(double x, double y, double z, double max_distance = 1.0);
+  int nextNodeId() const;
+  int nextEdgeId() const;
+  int findNodeIndexById(int node_id) const;
+  int findEdgeIndexById(int edge_id) const;
+  void updateEdgeWeightsForNode(int node_id);
   bool getPoint(rviz_common::ViewportMouseEvent& event, Ogre::Vector3& point_out);
   bool findNearestCloudPoint(const Ogre::Vector3& ray_point, Ogre::Vector3& cloud_point);
-  void pointcloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg);
+  bool loadPointCloudFromPcd(const std::string& pcd_file);
 
   // ROS2相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr point_pub_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
 
   // 点云数据
   pcl::PointCloud<pcl::PointXYZ>::Ptr current_cloud_;
@@ -141,25 +143,27 @@ private:
   std::vector<TopologyEdge> edges_;
 
   // 状态变量
-  enum ToolMode {
-    MODE_ADD_NODE,
-    MODE_CONNECT_NODES,
-    MODE_EDIT_NODE,
-    MODE_DELETE,
-    MODE_AUTO_CONNECT
-  };
-  ToolMode current_mode_;
   int selected_node_id_;
   int connecting_from_id_;
   int last_added_node_id_;
 
   // 属性
-  rviz_common::properties::EnumProperty* mode_property_;
   rviz_common::properties::StringProperty* node_label_property_;
-  rviz_common::properties::FloatProperty* connection_distance_property_;
   rviz_common::properties::FloatProperty* selection_threshold_property_;
   rviz_common::properties::BoolProperty* bidirectional_property_;
   rviz_common::properties::StringProperty* save_file_property_;
+  rviz_common::properties::IntProperty* connect_from_id_property_;
+  rviz_common::properties::IntProperty* connect_to_id_property_;
+  rviz_common::properties::BoolProperty* connect_button_property_;
+  rviz_common::properties::IntProperty* edit_node_id_property_;
+  rviz_common::properties::StringProperty* edit_label_property_;
+  rviz_common::properties::FloatProperty* edit_x_property_;
+  rviz_common::properties::FloatProperty* edit_y_property_;
+  rviz_common::properties::FloatProperty* edit_z_property_;
+  rviz_common::properties::BoolProperty* load_edit_button_property_;
+  rviz_common::properties::BoolProperty* apply_edit_button_property_;
+  rviz_common::properties::IntProperty* delete_node_id_property_;
+  rviz_common::properties::BoolProperty* delete_button_property_;
 };
 
 }  // namespace topology_rviz_plugin

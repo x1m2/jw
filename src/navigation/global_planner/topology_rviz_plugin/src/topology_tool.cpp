@@ -5,11 +5,9 @@
 #include <OgreRenderWindow.h>
 #include <OgreVector3.h>
 #include <OgreViewport.h>
+#include <pcl/io/pcd_io.h>
 #include <pcl/search/kdtree.h>
-#include <pcl_conversions/pcl_conversions.h>
 
-#include <QInputDialog>
-#include <QLineEdit>
 #include <QVariant>
 #include <algorithm>
 #include <cmath>
@@ -31,11 +29,10 @@
 namespace topology_rviz_plugin {
 
 TopologyTool::TopologyTool()
-    : current_mode_(MODE_ADD_NODE),
+    : cloud_received_(false),
       selected_node_id_(-1),
       connecting_from_id_(-1),
-      last_added_node_id_(-1),
-      cloud_received_(false) {
+      last_added_node_id_(-1) {
   shortcut_key_ = 't';
   current_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
   kdtree_.reset(new pcl::search::KdTree<pcl::PointXYZ>);
@@ -86,10 +83,8 @@ void TopologyTool::onInitialize() {
   // 对应 YAML 参数名：
   // topology_tool.marker_topic
   // topology_tool.point_topic
-  // topology_tool.pointcloud_topic
-  // topology_tool.default_mode
+  // topology_tool.pcd_file
   // topology_tool.node_label
-  // topology_tool.max_connection_distance
   // topology_tool.selection_threshold
   // topology_tool.bidirectional
   // topology_tool.save_file
@@ -101,17 +96,11 @@ void TopologyTool::onInitialize() {
   const std::string point_topic =
       declare_string_param("topology_tool.point_topic", "topology_points");
 
-  const std::string pointcloud_topic = declare_string_param(
-      "topology_tool.pointcloud_topic", "/free_space_cloud");
-
-  const std::string default_mode =
-      declare_string_param("topology_tool.default_mode", "Add Node");
+  const std::string pcd_file =
+      declare_string_param("topology_tool.pcd_file", "");
 
   const std::string default_node_label =
       declare_string_param("topology_tool.node_label", "节点");
-
-  const double max_connection_distance =
-      declare_double_param("topology_tool.max_connection_distance", 2.0);
 
   const double selection_threshold =
       declare_double_param("topology_tool.selection_threshold", 0.3);
@@ -122,6 +111,9 @@ void TopologyTool::onInitialize() {
   const std::string save_file =
       declare_string_param("topology_tool.save_file", "topology_map.txt");
 
+  const bool auto_load_topology =
+      declare_bool_param("topology_tool.auto_load_topology", true);
+
   // 创建发布者
   marker_pub_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
       marker_topic, rclcpp::QoS(1).transient_local().reliable());
@@ -129,81 +121,107 @@ void TopologyTool::onInitialize() {
   point_pub_ = node_->create_publisher<geometry_msgs::msg::PointStamped>(
       point_topic, rclcpp::QoS(1));
 
-  // 订阅点云数据
-  pointcloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
-      pointcloud_topic, rclcpp::SensorDataQoS(),
-      std::bind(&TopologyTool::pointcloudCallback, this,
-                std::placeholders::_1));
+  if (!loadPointCloudFromPcd(pcd_file)) {
+    RCLCPP_WARN(node_->get_logger(),
+                "拓扑工具未加载可行域 PCD，添加/编辑节点将无法通过点云拾取。");
+  }
 
   // 创建交互标记服务器
   server_.reset(new interactive_markers::InteractiveMarkerServer(
       "topology_interactive_markers", node_));
 
-  // 创建模式属性
-  mode_property_ = new rviz_common::properties::EnumProperty(
-      "Mode", "Add Node", "选择工具模式", getPropertyContainer(),
-      SLOT(updateProperties()), this);
-
-  mode_property_->addOption("Add Node", MODE_ADD_NODE);
-  mode_property_->addOption("Connect Nodes", MODE_CONNECT_NODES);
-  mode_property_->addOption("Edit Node", MODE_EDIT_NODE);
-  mode_property_->addOption("Delete", MODE_DELETE);
-  mode_property_->addOption("Auto Connect", MODE_AUTO_CONNECT);
-
-  if (default_mode == "Add Node") {
-    current_mode_ = MODE_ADD_NODE;
-    mode_property_->setString("Add Node");
-  } else if (default_mode == "Connect Nodes") {
-    current_mode_ = MODE_CONNECT_NODES;
-    mode_property_->setString("Connect Nodes");
-  } else if (default_mode == "Edit Node") {
-    current_mode_ = MODE_EDIT_NODE;
-    mode_property_->setString("Edit Node");
-  } else if (default_mode == "Delete") {
-    current_mode_ = MODE_DELETE;
-    mode_property_->setString("Delete");
-  } else if (default_mode == "Auto Connect") {
-    current_mode_ = MODE_AUTO_CONNECT;
-    mode_property_->setString("Auto Connect");
-  } else {
-    current_mode_ = MODE_ADD_NODE;
-    mode_property_->setString("Add Node");
-
-    RCLCPP_WARN(node_->get_logger(),
-                "未知 default_mode: %s，使用默认模式 Add Node",
-                default_mode.c_str());
-  }
+  rviz_common::properties::Property* add_group =
+      new rviz_common::properties::Property(
+          "Add Node", QVariant(), "点击可行区域 PCD 新增节点",
+          getPropertyContainer());
 
   node_label_property_ = new rviz_common::properties::StringProperty(
       "Node Label", default_node_label.c_str(), "新节点的标签",
-      getPropertyContainer(), SLOT(updateProperties()), this);
-
-  connection_distance_property_ = new rviz_common::properties::FloatProperty(
-      "Max Connection Distance", max_connection_distance, "最大连接距离",
-      getPropertyContainer(), SLOT(updateProperties()), this);
-
-  connection_distance_property_->setMin(0.1);
-  connection_distance_property_->setMax(10.0);
+      add_group, SLOT(updateProperties()), this);
 
   selection_threshold_property_ = new rviz_common::properties::FloatProperty(
       "Selection Threshold", selection_threshold, "点选择精确度阈值（米）",
-      getPropertyContainer(), SLOT(updateProperties()), this);
+      add_group, SLOT(updateProperties()), this);
 
   selection_threshold_property_->setMin(0.05);
   selection_threshold_property_->setMax(1.0);
 
+  rviz_common::properties::Property* connect_group =
+      new rviz_common::properties::Property(
+          "Connect Nodes", QVariant(), "输入两个节点ID并创建边",
+          getPropertyContainer());
+
   bidirectional_property_ = new rviz_common::properties::BoolProperty(
-      "Bidirectional", bidirectional, "连接是否双向", getPropertyContainer(),
+      "Bidirectional", bidirectional, "新建连接是否双向", connect_group,
       SLOT(updateProperties()), this);
 
-  save_file_property_ = new rviz_common::properties::StringProperty(
-      "Save File", save_file.c_str(), "保存文件路径", getPropertyContainer(),
-      SLOT(updateProperties()), this);
+  connect_from_id_property_ = new rviz_common::properties::IntProperty(
+      "From ID", 0, "起始节点ID", connect_group, SLOT(updateProperties()),
+      this);
+  connect_to_id_property_ = new rviz_common::properties::IntProperty(
+      "To ID", 0, "目标节点ID", connect_group, SLOT(updateProperties()), this);
+  connect_from_id_property_->setMin(0);
+  connect_to_id_property_->setMin(0);
+
+  connect_button_property_ = new rviz_common::properties::BoolProperty(
+      "Connect", false, "按 From ID 和 To ID 创建边", connect_group,
+      SLOT(connectNodesFromProperties()), this);
+
+  rviz_common::properties::Property* edit_group =
+      new rviz_common::properties::Property(
+          "Edit Node", QVariant(), "按节点ID加载并修改节点", getPropertyContainer());
+
+  edit_node_id_property_ = new rviz_common::properties::IntProperty(
+      "Node ID", 0, "要编辑的节点ID", edit_group, SLOT(updateProperties()),
+      this);
+  edit_node_id_property_->setMin(0);
+
+  load_edit_button_property_ = new rviz_common::properties::BoolProperty(
+      "Load Node", false, "把节点当前 label/x/y/z 加载到下方字段",
+      edit_group, SLOT(loadEditNodeToProperties()), this);
+
+  edit_label_property_ = new rviz_common::properties::StringProperty(
+      "Label", "", "节点标签", edit_group, SLOT(updateProperties()), this);
+
+  edit_x_property_ = new rviz_common::properties::FloatProperty(
+      "X", 0.0, "节点 X 坐标", edit_group, SLOT(updateProperties()), this);
+  edit_y_property_ = new rviz_common::properties::FloatProperty(
+      "Y", 0.0, "节点 Y 坐标", edit_group, SLOT(updateProperties()), this);
+  edit_z_property_ = new rviz_common::properties::FloatProperty(
+      "Z", 0.0, "节点 Z 坐标", edit_group, SLOT(updateProperties()), this);
+  edit_x_property_->setMin(-1000000.0);
+  edit_y_property_->setMin(-1000000.0);
+  edit_z_property_->setMin(-1000000.0);
+  edit_x_property_->setMax(1000000.0);
+  edit_y_property_->setMax(1000000.0);
+  edit_z_property_->setMax(1000000.0);
+
+  apply_edit_button_property_ = new rviz_common::properties::BoolProperty(
+      "Apply Node", false, "应用当前 label/x/y/z 到节点", edit_group,
+      SLOT(applyEditNodeFromProperties()), this);
+
+  rviz_common::properties::Property* delete_group =
+      new rviz_common::properties::Property(
+          "Delete Node", QVariant(), "按节点ID删除节点及关联边",
+          getPropertyContainer());
+
+  delete_node_id_property_ = new rviz_common::properties::IntProperty(
+      "Node ID", 0, "要删除的节点ID", delete_group, SLOT(updateProperties()),
+      this);
+  delete_node_id_property_->setMin(0);
+
+  delete_button_property_ = new rviz_common::properties::BoolProperty(
+      "Delete", false, "删除节点，并自动删除与它相连的边", delete_group,
+      SLOT(deleteNodeFromProperties()), this);
 
   // 控制按钮
   rviz_common::properties::Property* control_group =
       new rviz_common::properties::Property("Controls", QVariant(), "控制操作",
                                             getPropertyContainer());
+
+  save_file_property_ = new rviz_common::properties::StringProperty(
+      "Save File", save_file.c_str(), "保存文件路径", control_group,
+      SLOT(updateProperties()), this);
 
   rviz_common::properties::BoolProperty* clear_button =
       new rviz_common::properties::BoolProperty(
@@ -227,23 +245,25 @@ void TopologyTool::onInitialize() {
   RCLCPP_INFO(node_->get_logger(), "拓扑地图工具初始化完成");
   RCLCPP_INFO(node_->get_logger(), "marker_topic: %s", marker_topic.c_str());
   RCLCPP_INFO(node_->get_logger(), "point_topic: %s", point_topic.c_str());
-  RCLCPP_INFO(node_->get_logger(), "pointcloud_topic: %s",
-              pointcloud_topic.c_str());
-  RCLCPP_INFO(node_->get_logger(), "default_mode: %s", default_mode.c_str());
+  RCLCPP_INFO(node_->get_logger(), "pcd_file: %s", pcd_file.c_str());
   RCLCPP_INFO(node_->get_logger(), "node_label: %s",
               default_node_label.c_str());
-  RCLCPP_INFO(node_->get_logger(), "max_connection_distance: %.3f",
-              max_connection_distance);
   RCLCPP_INFO(node_->get_logger(), "selection_threshold: %.3f",
               selection_threshold);
   RCLCPP_INFO(node_->get_logger(), "bidirectional: %s",
               bidirectional ? "true" : "false");
   RCLCPP_INFO(node_->get_logger(), "save_file: %s", save_file.c_str());
+  RCLCPP_INFO(node_->get_logger(), "auto_load_topology: %s",
+              auto_load_topology ? "true" : "false");
+
+  if (auto_load_topology) {
+    loadTopology();
+  }
 }
 
 void TopologyTool::activate() {
-  RCLCPP_INFO(node_->get_logger(), "拓扑地图工具已激活 - 模式: %d",
-              current_mode_);
+  RCLCPP_INFO(node_->get_logger(),
+              "拓扑地图工具已激活 - 左键点击可行区域 PCD 新增节点");
 }
 
 void TopologyTool::deactivate() {
@@ -267,105 +287,19 @@ int TopologyTool::processMousePress(rviz_common::ViewportMouseEvent& event) {
     Ogre::Vector3 point;
     bool point_found = getPoint(event, point);
 
-    switch (current_mode_) {
-      case MODE_ADD_NODE: {
-        if (point_found) {
-          addNode(point.x, point.y, point.z);
-        } else {
-          RCLCPP_WARN(node_->get_logger(), "无法在当前位置添加节点。请确保：");
-          RCLCPP_WARN(node_->get_logger(), "1. 点云数据已正确加载");
-          RCLCPP_WARN(node_->get_logger(), "2. 点击位置接近可行区域点云");
-          RCLCPP_WARN(node_->get_logger(), "3. 点击的是点云可视化区域内的点");
-        }
-        break;
-      }
-
-      case MODE_CONNECT_NODES: {
-        if (point_found) {
-          int nearest_id =
-              findNearestNode(point.x, point.y, point.z,
-                              connection_distance_property_->getFloat());
-
-          if (nearest_id >= 0) {
-            if (connecting_from_id_ == -1) {
-              connecting_from_id_ = nearest_id;
-
-              RCLCPP_INFO(node_->get_logger(), "选择起始节点: %d (%s)",
-                          nearest_id, nodes_[nearest_id].label.c_str());
-
-              updateVisualization();
-            } else if (nearest_id != connecting_from_id_) {
-              addEdge(connecting_from_id_, nearest_id);
-              connecting_from_id_ = -1;
-
-              RCLCPP_INFO(node_->get_logger(), "连接完成");
-
-              updateVisualization();
-            } else {
-              RCLCPP_INFO(node_->get_logger(), "不能连接节点到自身");
-            }
-          } else {
-            RCLCPP_WARN(node_->get_logger(),
-                        "在指定范围内未找到节点，请点击更接近现有节点的位置");
-          }
-        }
-        break;
-      }
-
-      case MODE_EDIT_NODE: {
-        if (point_found) {
-          int nearest_id =
-              findNearestNode(point.x, point.y, point.z,
-                              connection_distance_property_->getFloat());
-
-          if (nearest_id >= 0) {
-            selected_node_id_ = nearest_id;
-            createContextMenu(nearest_id);
-          } else {
-            RCLCPP_WARN(node_->get_logger(), "在指定范围内未找到可编辑的节点");
-          }
-        }
-        break;
-      }
-
-      case MODE_DELETE: {
-        if (point_found) {
-          int nearest_id =
-              findNearestNode(point.x, point.y, point.z,
-                              connection_distance_property_->getFloat());
-
-          if (nearest_id >= 0) {
-            removeNode(nearest_id);
-          } else {
-            RCLCPP_WARN(node_->get_logger(), "在指定范围内未找到可删除的节点");
-          }
-        }
-        break;
-      }
-
-      case MODE_AUTO_CONNECT: {
-        if (point_found) {
-          addNodeAutoConnect(point.x, point.y, point.z);
-        } else {
-          RCLCPP_WARN(node_->get_logger(), "无法在当前位置添加节点。请确保：");
-          RCLCPP_WARN(node_->get_logger(), "1. 点云数据已正确加载");
-          RCLCPP_WARN(node_->get_logger(), "2. 点击位置接近可行区域点云");
-          RCLCPP_WARN(node_->get_logger(), "3. 点击的是点云可视化区域内的点");
-        }
-        break;
-      }
+    if (point_found) {
+      addNode(point.x, point.y, point.z);
+    } else {
+      RCLCPP_WARN(node_->get_logger(), "无法在当前位置添加节点。请确保：");
+      RCLCPP_WARN(node_->get_logger(), "1. 点云数据已正确加载");
+      RCLCPP_WARN(node_->get_logger(), "2. 点击位置接近可行区域点云");
+      RCLCPP_WARN(node_->get_logger(), "3. 点击的是点云可视化区域内的点");
     }
   } else if (event.rightDown()) {
     if (connecting_from_id_ != -1) {
       RCLCPP_INFO(node_->get_logger(), "取消连接操作");
       connecting_from_id_ = -1;
       updateVisualization();
-    }
-
-    if (current_mode_ == MODE_AUTO_CONNECT) {
-      RCLCPP_INFO(node_->get_logger(),
-                  "重置自动连接链，下一个节点将开始新的连接序列");
-      last_added_node_id_ = -1;
     }
 
     selected_node_id_ = -1;
@@ -385,7 +319,7 @@ int TopologyTool::processMouseMove(rviz_common::ViewportMouseEvent& event) {
 }
 
 void TopologyTool::addNode(double x, double y, double z) {
-  int new_id = nodes_.size();
+  int new_id = nextNodeId();
 
   std::string label = node_label_property_->getStdString();
   if (label.empty()) {
@@ -398,61 +332,6 @@ void TopologyTool::addNode(double x, double y, double z) {
 
   TopologyNode new_node(new_id, x, y, adjusted_z, label);
   nodes_.push_back(new_node);
-
-  createInteractiveMarker(new_node);
-
-  geometry_msgs::msg::PointStamped point_msg;
-  point_msg.header.frame_id = "map";
-  point_msg.header.stamp = node_->now();
-  point_msg.point.x = x;
-  point_msg.point.y = y;
-  point_msg.point.z = adjusted_z;
-
-  point_pub_->publish(point_msg);
-
-  updateVisualization();
-
-  RCLCPP_INFO(
-      node_->get_logger(),
-      "添加节点 #%d: %s at (%.2f, %.2f, %.2f) [原始z: %.2f, 抬高0.3m后: %.2f]",
-      new_id, label.c_str(), x, y, adjusted_z, z, adjusted_z);
-}
-
-void TopologyTool::addNodeAutoConnect(double x, double y, double z) {
-  int new_id = nodes_.size();
-
-  std::string label = node_label_property_->getStdString();
-  if (label.empty()) {
-    std::stringstream ss;
-    ss << "节点_" << new_id;
-    label = ss.str();
-  }
-
-  double adjusted_z = z + 0.3;
-
-  TopologyNode new_node(new_id, x, y, adjusted_z, label);
-  nodes_.push_back(new_node);
-
-  if (last_added_node_id_ >= 0 &&
-      last_added_node_id_ < static_cast<int>(nodes_.size()) - 1) {
-    bool bidirectional = bidirectional_property_->getBool();
-    int new_edge_id = edges_.size();
-    double weight = calculateDistance(nodes_[last_added_node_id_], new_node);
-
-    TopologyEdge new_edge(new_edge_id, last_added_node_id_, new_id, weight,
-                          "auto", bidirectional);
-
-    edges_.push_back(new_edge);
-
-    RCLCPP_INFO(node_->get_logger(),
-                "自动连接: 节点 %d -> 节点 %d (距离: %.2f m, 双向: %s)",
-                last_added_node_id_, new_id, weight,
-                bidirectional ? "是" : "否");
-  } else {
-    RCLCPP_INFO(node_->get_logger(), "第一个节点，无需连接");
-  }
-
-  last_added_node_id_ = new_id;
 
   createInteractiveMarker(new_node);
 
@@ -474,9 +353,16 @@ void TopologyTool::addNodeAutoConnect(double x, double y, double z) {
 }
 
 void TopologyTool::addEdge(int from_id, int to_id) {
-  if (from_id < 0 || from_id >= static_cast<int>(nodes_.size()) || to_id < 0 ||
-      to_id >= static_cast<int>(nodes_.size())) {
+  int from_index = findNodeIndexById(from_id);
+  int to_index = findNodeIndexById(to_id);
+
+  if (from_index < 0 || to_index < 0) {
     RCLCPP_WARN(node_->get_logger(), "无效的节点ID: %d -> %d", from_id, to_id);
+    return;
+  }
+
+  if (from_id == to_id) {
+    RCLCPP_WARN(node_->get_logger(), "不能连接节点到自身: %d", from_id);
     return;
   }
 
@@ -490,8 +376,8 @@ void TopologyTool::addEdge(int from_id, int to_id) {
     }
   }
 
-  int new_edge_id = edges_.size();
-  double weight = calculateDistance(nodes_[from_id], nodes_[to_id]);
+  int new_edge_id = nextEdgeId();
+  double weight = calculateDistance(nodes_[from_index], nodes_[to_index]);
   bool bidirectional = bidirectional_property_->getBool();
 
   TopologyEdge new_edge(new_edge_id, from_id, to_id, weight, "manual",
@@ -506,7 +392,9 @@ void TopologyTool::addEdge(int from_id, int to_id) {
 }
 
 void TopologyTool::removeNode(int node_id) {
-  if (node_id < 0 || node_id >= static_cast<int>(nodes_.size())) {
+  int node_index = findNodeIndexById(node_id);
+  if (node_index < 0) {
+    RCLCPP_WARN(node_->get_logger(), "要删除的节点不存在: %d", node_id);
     return;
   }
 
@@ -517,32 +405,14 @@ void TopologyTool::removeNode(int node_id) {
                               }),
                edges_.end());
 
-  nodes_.erase(nodes_.begin() + node_id);
-
-  for (auto& edge : edges_) {
-    if (edge.from_id > node_id) {
-      edge.from_id--;
-    }
-
-    if (edge.to_id > node_id) {
-      edge.to_id--;
-    }
-  }
-
-  for (size_t i = 0; i < nodes_.size(); ++i) {
-    nodes_[i].id = i;
-  }
-
-  for (size_t i = 0; i < edges_.size(); ++i) {
-    edges_[i].id = i;
-  }
+  nodes_.erase(nodes_.begin() + node_index);
 
   if (last_added_node_id_ == node_id) {
-    last_added_node_id_ =
-        nodes_.empty() ? -1 : static_cast<int>(nodes_.size()) - 1;
-  } else if (last_added_node_id_ > node_id) {
-    last_added_node_id_--;
+    last_added_node_id_ = -1;
   }
+
+  selected_node_id_ = -1;
+  connecting_from_id_ = -1;
 
   updateVisualization();
 
@@ -550,17 +420,91 @@ void TopologyTool::removeNode(int node_id) {
 }
 
 void TopologyTool::removeEdge(int edge_id) {
-  if (edge_id >= 0 && edge_id < static_cast<int>(edges_.size())) {
-    edges_.erase(edges_.begin() + edge_id);
-
-    for (size_t i = 0; i < edges_.size(); ++i) {
-      edges_[i].id = i;
-    }
+  int edge_index = findEdgeIndexById(edge_id);
+  if (edge_index >= 0) {
+    edges_.erase(edges_.begin() + edge_index);
 
     updateVisualization();
 
     RCLCPP_INFO(node_->get_logger(), "删除边 #%d", edge_id);
   }
+}
+
+void TopologyTool::connectNodesFromProperties() {
+  if (!connect_button_property_->getBool()) {
+    return;
+  }
+
+  int from_id = connect_from_id_property_->getInt();
+  int to_id = connect_to_id_property_->getInt();
+  addEdge(from_id, to_id);
+  connect_button_property_->setBool(false);
+}
+
+void TopologyTool::loadEditNodeToProperties() {
+  if (!load_edit_button_property_->getBool()) {
+    return;
+  }
+
+  int node_id = edit_node_id_property_->getInt();
+  int node_index = findNodeIndexById(node_id);
+  if (node_index < 0) {
+    RCLCPP_WARN(node_->get_logger(), "要加载的节点不存在: %d", node_id);
+    load_edit_button_property_->setBool(false);
+    return;
+  }
+
+  const auto& node = nodes_[node_index];
+  edit_label_property_->setStdString(node.label);
+  edit_x_property_->setFloat(node.x);
+  edit_y_property_->setFloat(node.y);
+  edit_z_property_->setFloat(node.z);
+  selected_node_id_ = node_id;
+  updateVisualization();
+
+  RCLCPP_INFO(node_->get_logger(),
+              "加载节点 #%d 到编辑面板: (%.3f, %.3f, %.3f), label=%s",
+              node_id, node.x, node.y, node.z, node.label.c_str());
+  load_edit_button_property_->setBool(false);
+}
+
+void TopologyTool::applyEditNodeFromProperties() {
+  if (!apply_edit_button_property_->getBool()) {
+    return;
+  }
+
+  int node_id = edit_node_id_property_->getInt();
+  int node_index = findNodeIndexById(node_id);
+  if (node_index < 0) {
+    RCLCPP_WARN(node_->get_logger(), "要编辑的节点不存在: %d", node_id);
+    apply_edit_button_property_->setBool(false);
+    return;
+  }
+
+  auto& node = nodes_[node_index];
+  node.label = edit_label_property_->getStdString();
+  node.x = edit_x_property_->getFloat();
+  node.y = edit_y_property_->getFloat();
+  node.z = edit_z_property_->getFloat();
+  selected_node_id_ = node_id;
+
+  updateEdgeWeightsForNode(node_id);
+  updateVisualization();
+
+  RCLCPP_INFO(node_->get_logger(),
+              "节点 #%d 更新为: (%.3f, %.3f, %.3f), label=%s", node_id,
+              node.x, node.y, node.z, node.label.c_str());
+  apply_edit_button_property_->setBool(false);
+}
+
+void TopologyTool::deleteNodeFromProperties() {
+  if (!delete_button_property_->getBool()) {
+    return;
+  }
+
+  int node_id = delete_node_id_property_->getInt();
+  removeNode(node_id);
+  delete_button_property_->setBool(false);
 }
 
 void TopologyTool::createInteractiveMarker(const TopologyNode& node) {
@@ -623,29 +567,51 @@ void TopologyTool::processMarkerFeedback(
 }
 
 void TopologyTool::createContextMenu(int node_id) {
-  RCLCPP_INFO(node_->get_logger(), "节点 #%d 的上下文菜单", node_id);
+  RCLCPP_INFO(node_->get_logger(), "节点 #%d 被选中，加载到编辑面板", node_id);
 
-  bool ok;
-
-  QString current_label = QString::fromUtf8(nodes_[node_id].label.c_str());
-
-  QString new_label = QInputDialog::getText(
-      nullptr, QString::fromUtf8("编辑节点"), QString::fromUtf8("节点标签:"),
-      QLineEdit::Normal, current_label, &ok);
-
-  if (ok && !new_label.isEmpty()) {
-    nodes_[node_id].label = new_label.toUtf8().toStdString();
-
-    updateVisualization();
-
-    RCLCPP_INFO(node_->get_logger(), "节点 #%d 标签更新为: %s", node_id,
-                nodes_[node_id].label.c_str());
+  int node_index = findNodeIndexById(node_id);
+  if (node_index < 0) {
+    RCLCPP_WARN(node_->get_logger(), "节点不存在: %d", node_id);
+    return;
   }
+
+  const auto& node = nodes_[node_index];
+  edit_node_id_property_->setInt(node.id);
+  edit_label_property_->setStdString(node.label);
+  edit_x_property_->setFloat(node.x);
+  edit_y_property_->setFloat(node.y);
+  edit_z_property_->setFloat(node.z);
+  selected_node_id_ = node.id;
+  updateVisualization();
 }
 
 void TopologyTool::updateVisualization() {
+  clearVisualization();
+  rebuildInteractiveMarkers();
   publishNodes();
   publishEdges();
+}
+
+void TopologyTool::clearVisualization() {
+  visualization_msgs::msg::MarkerArray markers;
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.header.stamp = node_->now();
+  marker.action = visualization_msgs::msg::Marker::DELETEALL;
+  markers.markers.push_back(marker);
+  marker_pub_->publish(markers);
+}
+
+void TopologyTool::rebuildInteractiveMarkers() {
+  if (!server_) {
+    return;
+  }
+
+  server_->clear();
+  for (const auto& node : nodes_) {
+    createInteractiveMarker(node);
+  }
+  server_->applyChanges();
 }
 
 void TopologyTool::publishNodes() {
@@ -656,7 +622,7 @@ void TopologyTool::publishNodes() {
     marker.header.frame_id = "map";
     marker.header.stamp = node_->now();
     marker.ns = "topology_nodes";
-    marker.id = i;
+    marker.id = nodes_[i].id;
     marker.type = visualization_msgs::msg::Marker::SPHERE;
     marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -669,7 +635,7 @@ void TopologyTool::publishNodes() {
     marker.scale.y = 0.4;
     marker.scale.z = 0.4;
 
-    if (static_cast<int>(i) == connecting_from_id_) {
+    if (nodes_[i].id == connecting_from_id_) {
       marker.color.r = 1.0;
       marker.color.g = 1.0;
       marker.color.b = 0.0;
@@ -678,7 +644,7 @@ void TopologyTool::publishNodes() {
       marker.scale.x = 0.5;
       marker.scale.y = 0.5;
       marker.scale.z = 0.5;
-    } else if (static_cast<int>(i) == selected_node_id_) {
+    } else if (nodes_[i].id == selected_node_id_) {
       marker.color.r = 1.0;
       marker.color.g = 0.5;
       marker.color.b = 0.0;
@@ -696,7 +662,7 @@ void TopologyTool::publishNodes() {
     text_marker.header.frame_id = "map";
     text_marker.header.stamp = node_->now();
     text_marker.ns = "topology_labels";
-    text_marker.id = i;
+    text_marker.id = nodes_[i].id;
     text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
     text_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -724,27 +690,28 @@ void TopologyTool::publishEdges() {
 
   for (size_t i = 0; i < edges_.size(); ++i) {
     const auto& edge = edges_[i];
+    int from_index = findNodeIndexById(edge.from_id);
+    int to_index = findNodeIndexById(edge.to_id);
 
-    if (edge.from_id >= 0 && edge.from_id < static_cast<int>(nodes_.size()) &&
-        edge.to_id >= 0 && edge.to_id < static_cast<int>(nodes_.size())) {
+    if (from_index >= 0 && to_index >= 0) {
       visualization_msgs::msg::Marker edge_marker;
       edge_marker.header.frame_id = "map";
       edge_marker.header.stamp = node_->now();
       edge_marker.ns = "topology_edges";
-      edge_marker.id = i * 2;
+      edge_marker.id = edge.id;
       edge_marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
       edge_marker.action = visualization_msgs::msg::Marker::ADD;
 
       geometry_msgs::msg::Point p1;
       geometry_msgs::msg::Point p2;
 
-      p1.x = nodes_[edge.from_id].x;
-      p1.y = nodes_[edge.from_id].y;
-      p1.z = nodes_[edge.from_id].z + 0.1;
+      p1.x = nodes_[from_index].x;
+      p1.y = nodes_[from_index].y;
+      p1.z = nodes_[from_index].z + 0.1;
 
-      p2.x = nodes_[edge.to_id].x;
-      p2.y = nodes_[edge.to_id].y;
-      p2.z = nodes_[edge.to_id].z + 0.1;
+      p2.x = nodes_[to_index].x;
+      p2.y = nodes_[to_index].y;
+      p2.z = nodes_[to_index].z + 0.1;
 
       edge_marker.points.push_back(p1);
       edge_marker.points.push_back(p2);
@@ -763,7 +730,7 @@ void TopologyTool::publishEdges() {
         arrow_marker.header.frame_id = "map";
         arrow_marker.header.stamp = node_->now();
         arrow_marker.ns = "topology_arrows";
-        arrow_marker.id = i * 2 + 1;
+        arrow_marker.id = edge.id;
         arrow_marker.type = visualization_msgs::msg::Marker::ARROW;
         arrow_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -811,7 +778,7 @@ void TopologyTool::publishEdges() {
       weight_marker.header.frame_id = "map";
       weight_marker.header.stamp = node_->now();
       weight_marker.ns = "edge_weights";
-      weight_marker.id = i;
+      weight_marker.id = edge.id;
       weight_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
       weight_marker.action = visualization_msgs::msg::Marker::ADD;
 
@@ -846,29 +813,62 @@ double TopologyTool::calculateDistance(const TopologyNode& n1,
   return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-int TopologyTool::findNearestNode(double x, double y, double z,
-                                  double max_distance) {
-  int nearest_id = -1;
-  double min_distance = max_distance;
+int TopologyTool::nextNodeId() const {
+  int next_id = 0;
+  for (const auto& node : nodes_) {
+    next_id = std::max(next_id, node.id + 1);
+  }
+  return next_id;
+}
 
+int TopologyTool::nextEdgeId() const {
+  int next_id = 0;
+  for (const auto& edge : edges_) {
+    next_id = std::max(next_id, edge.id + 1);
+  }
+  return next_id;
+}
+
+int TopologyTool::findNodeIndexById(int node_id) const {
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    double distance = calculateDistance(TopologyNode(-1, x, y, z), nodes_[i]);
-
-    if (distance < min_distance) {
-      min_distance = distance;
-      nearest_id = i;
+    if (nodes_[i].id == node_id) {
+      return static_cast<int>(i);
     }
   }
+  return -1;
+}
 
-  return nearest_id;
+int TopologyTool::findEdgeIndexById(int edge_id) const {
+  for (size_t i = 0; i < edges_.size(); ++i) {
+    if (edges_[i].id == edge_id) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+void TopologyTool::updateEdgeWeightsForNode(int node_id) {
+  for (auto& edge : edges_) {
+    if (edge.from_id != node_id && edge.to_id != node_id) {
+      continue;
+    }
+
+    int from_index = findNodeIndexById(edge.from_id);
+    int to_index = findNodeIndexById(edge.to_id);
+    if (from_index < 0 || to_index < 0) {
+      continue;
+    }
+
+    edge.weight = calculateDistance(nodes_[from_index], nodes_[to_index]);
+  }
 }
 
 bool TopologyTool::getPoint(rviz_common::ViewportMouseEvent& event,
                             Ogre::Vector3& point_out) {
   if (!cloud_received_ || current_cloud_->empty()) {
     RCLCPP_WARN(node_->get_logger(),
-                "未接收到可行区域点云数据，无法添加/选择节点。请检查 YAML 中 "
-                "topology_tool.pointcloud_topic 对应的话题是否正在发布。");
+                "未加载可行区域 PCD 点云，无法添加/选择节点。请检查 YAML 中 "
+                "topology_tool.pcd_file 是否指向 result_free_space.pcd。");
     return false;
   }
 
@@ -974,23 +974,37 @@ bool TopologyTool::findNearestCloudPoint(const Ogre::Vector3& ray_point,
   return false;
 }
 
-void TopologyTool::pointcloudCallback(
-    const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg) {
-  pcl::fromROSMsg(*cloud_msg, *current_cloud_);
-
-  if (!current_cloud_->empty()) {
-    kdtree_->setInputCloud(current_cloud_);
-    cloud_received_ = true;
-
-    RCLCPP_INFO_ONCE(node_->get_logger(), "接收到点云数据，共 %lu 个点",
-                     current_cloud_->size());
+bool TopologyTool::loadPointCloudFromPcd(const std::string& pcd_file) {
+  if (pcd_file.empty()) {
+    RCLCPP_WARN(node_->get_logger(), "topology_tool.pcd_file 为空");
+    cloud_received_ = false;
+    return false;
   }
+
+  current_cloud_->clear();
+  if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file, *current_cloud_) != 0) {
+    RCLCPP_ERROR(node_->get_logger(), "加载可行域 PCD 失败: %s",
+                 pcd_file.c_str());
+    cloud_received_ = false;
+    return false;
+  }
+
+  if (current_cloud_->empty()) {
+    RCLCPP_WARN(node_->get_logger(), "可行域 PCD 为空: %s", pcd_file.c_str());
+    cloud_received_ = false;
+    return false;
+  }
+
+  kdtree_->setInputCloud(current_cloud_);
+  cloud_received_ = true;
+
+  RCLCPP_INFO(node_->get_logger(), "已加载可行域 PCD: %s, points=%lu",
+              pcd_file.c_str(), current_cloud_->size());
+  return true;
 }
 
 void TopologyTool::updateProperties() {
-  current_mode_ = static_cast<ToolMode>(mode_property_->getOptionInt());
-
-  RCLCPP_INFO(node_->get_logger(), "工具模式更改为: %d", current_mode_);
+  // 参数由对应按钮或鼠标操作读取，这里保留为空槽用于属性刷新。
 }
 
 void TopologyTool::clearAll() {

@@ -21,6 +21,7 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(patchworkpp REQUIRED)
 
 include_directories(
   include
@@ -45,10 +46,12 @@ ament_target_dependencies(${PROJECT_NAME}
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
+  patchworkpp
 )
 
 target_link_libraries(${PROJECT_NAME}
   ${PCL_LIBRARIES}
+  patchworkpp::patchworkpp_core
 )
 
 add_executable(${PROJECT_NAME}_node
@@ -66,11 +69,13 @@ ament_target_dependencies(${PROJECT_NAME}_node
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
+  patchworkpp
 )
 
 target_link_libraries(${PROJECT_NAME}_node
   ${PROJECT_NAME}
   ${PCL_LIBRARIES}
+  patchworkpp::patchworkpp_core
 )
 
 install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_node
@@ -101,6 +106,7 @@ ament_export_dependencies(
   tf2_geometry_msgs
   pcl_ros
   pcl_conversions
+  patchworkpp
 )
 
 ament_package()

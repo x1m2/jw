@@ -37,7 +37,8 @@ GlobalPathPlanner::GlobalPathPlanner()
   this->declare_parameter<int>("edge_sample_count", 100);
   this->declare_parameter<double>("safety_sphere_radius", 0.3);
   this->declare_parameter<double>("valid_point_threshold", 0.9);
-  this->declare_parameter<std::string>("free_space_topic", "/free_space_cloud");
+  this->declare_parameter<std::string>(
+      "free_space_pcd_file", "/root/slam_data/map/result_free_space.pcd");
   this->declare_parameter<bool>("enable_temp_connection_feasibility_check",
                                 false);
 
@@ -61,7 +62,7 @@ GlobalPathPlanner::GlobalPathPlanner()
   this->get_parameter("edge_sample_count", edge_sample_count_);
   this->get_parameter("safety_sphere_radius", safety_sphere_radius_);
   this->get_parameter("valid_point_threshold", valid_point_threshold_);
-  this->get_parameter("free_space_topic", free_space_topic_);
+  this->get_parameter("free_space_pcd_file", free_space_pcd_file_);
   this->get_parameter("enable_temp_connection_feasibility_check",
                       enable_temp_connection_feasibility_check_);
 
@@ -80,6 +81,8 @@ GlobalPathPlanner::GlobalPathPlanner()
   RCLCPP_INFO(this->get_logger(), "安全球半径: %.2f m", safety_sphere_radius_);
   RCLCPP_INFO(this->get_logger(), "有效点阈值: %.1f%%",
               valid_point_threshold_ * 100);
+  RCLCPP_INFO(this->get_logger(), "可行域 PCD 文件: %s",
+              free_space_pcd_file_.c_str());
   RCLCPP_INFO(this->get_logger(), "临时连接可行域检查: %s",
               enable_temp_connection_feasibility_check_ ? "启用" : "禁用");
 }
@@ -122,12 +125,10 @@ bool GlobalPathPlanner::initialize() {
         this->targetPointsCallback(msg);
       });
 
-  free_space_cloud_sub_ =
-      this->create_subscription<sensor_msgs::msg::PointCloud2>(
-          free_space_topic_, rclcpp::QoS(10),
-          [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
-            this->freeSpaceCloudCallback(msg);
-          });
+  if (!loadFreeSpaceCloudFromPcd()) {
+    RCLCPP_WARN(this->get_logger(),
+                "可行域 PCD 未加载，涉及可行域点云的边检查将不可用。");
+  }
 
   // 加载拓扑地图
   if (!loadTopologyMap()) {
@@ -1214,27 +1215,35 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
   return path;
 }
 
-void GlobalPathPlanner::freeSpaceCloudCallback(
-    sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
-  try {
-    // 转换ROS消息到PCL点云
-    pcl::fromROSMsg(*msg, *free_space_cloud_);
-
-    // 设置KdTree的输入点云
-    if (!free_space_cloud_->empty()) {
-      kdtree_->setInputCloud(free_space_cloud_);
-      has_free_space_cloud_ = true;
-
-      RCLCPP_DEBUG(this->get_logger(), "更新可行域点云，包含 %lu 个点",
-                   free_space_cloud_->size());
-    } else {
-      RCLCPP_WARN(this->get_logger(), "接收到空的可行域点云");
-      has_free_space_cloud_ = false;
-    }
-  } catch (const std::exception &e) {
-    RCLCPP_ERROR(this->get_logger(), "处理可行域点云时发生异常: %s", e.what());
+bool GlobalPathPlanner::loadFreeSpaceCloudFromPcd() {
+  if (free_space_pcd_file_.empty()) {
+    RCLCPP_WARN(this->get_logger(), "free_space_pcd_file 为空");
     has_free_space_cloud_ = false;
+    return false;
   }
+
+  free_space_cloud_->clear();
+  if (pcl::io::loadPCDFile<pcl::PointXYZ>(free_space_pcd_file_,
+                                          *free_space_cloud_) != 0) {
+    RCLCPP_ERROR(this->get_logger(), "加载可行域 PCD 失败: %s",
+                 free_space_pcd_file_.c_str());
+    has_free_space_cloud_ = false;
+    return false;
+  }
+
+  if (free_space_cloud_->empty()) {
+    RCLCPP_WARN(this->get_logger(), "可行域 PCD 为空: %s",
+                free_space_pcd_file_.c_str());
+    has_free_space_cloud_ = false;
+    return false;
+  }
+
+  kdtree_->setInputCloud(free_space_cloud_);
+  has_free_space_cloud_ = true;
+
+  RCLCPP_INFO(this->get_logger(), "已加载可行域 PCD: %s, points=%lu",
+              free_space_pcd_file_.c_str(), free_space_cloud_->size());
+  return true;
 }
 
 bool GlobalPathPlanner::isEdgeLegal(const TopologyNode &node1,

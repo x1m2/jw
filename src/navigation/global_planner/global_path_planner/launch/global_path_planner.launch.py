@@ -38,7 +38,12 @@ def generate_launch_description():
                     robot_data_dir,
                     'topology_map',
                     'connected_topology_map.txt',
-                )
+                ),
+                'free_space_pcd_file': os.path.join(
+                    robot_data_dir,
+                    'map',
+                    'result_free_space.pcd',
+                ),
             },
         ]
     )

@@ -1,10 +1,10 @@
 #ifndef GLOBAL_PATH_PLANNER_H
 #define GLOBAL_PATH_PLANNER_H
 
+#include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/search/kdtree.h>
-#include <pcl_conversions/pcl_conversions.h>
 #include <tf2/exceptions.h>
 #include <tf2/time.h>
 #include <tf2_ros/buffer.h>
@@ -21,7 +21,6 @@
 #include <memory>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <vector>
@@ -90,8 +89,6 @@ class GlobalPathPlanner : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
       target_points_sub_;  // 目标点订阅器
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
-      free_space_cloud_sub_;  // 可行域点云订阅器
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
@@ -117,7 +114,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   int edge_sample_count_;         // 边采样点数量
   double safety_sphere_radius_;   // 安全球半径
   double valid_point_threshold_;  // 有效点阈值百分比
-  std::string free_space_topic_;  // 可行域点云话题
+  std::string free_space_pcd_file_;  // 可行域点云 PCD 文件
   bool
       enable_temp_connection_feasibility_check_;  // 是否对临时连接启用可行域检查
 
@@ -173,6 +170,7 @@ class GlobalPathPlanner : public rclcpp::Node {
       const geometry_msgs::msg::Point& from,
       const geometry_msgs::msg::Point& to);
   void publishVisualization(const nav_msgs::msg::Path& path);
+  bool loadFreeSpaceCloudFromPcd();
 
   // Dijkstra算法
   std::vector<int> dijkstraSearch(int start_id, int goal_id);
@@ -204,8 +202,6 @@ class GlobalPathPlanner : public rclcpp::Node {
 
   // 新的边合法性检查方法
   bool isEdgeLegal(const TopologyNode& node1, const TopologyNode& node2);
-  void freeSpaceCloudCallback(
-      sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
   bool isPointInFreeSpaceWithRadius(const geometry_msgs::msg::Point& point,
                                     double radius);
   std::vector<geometry_msgs::msg::Point> sampleEdgePoints(

@@ -14,12 +14,6 @@ def generate_launch_description():
     robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     topology_share = get_package_share_directory('topology_rviz_plugin')
 
-    cloud_publisher_launch = os.path.join(
-        get_package_share_directory('pcd_publisher'),
-        'launch',
-        'pcd_publisher.launch.py'
-    )
-
     target_points_visualizer_launch = os.path.join(
         topology_share,
         'launch',
@@ -39,11 +33,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(cloud_publisher_launch)
-        ),
-
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(target_points_visualizer_launch)
         ),
@@ -61,7 +50,12 @@ def generate_launch_description():
                         robot_data_dir,
                         'topology_map',
                         'connected_topology_map.txt',
-                    )
+                    ),
+                    'topology_tool.pcd_file': os.path.join(
+                        robot_data_dir,
+                        'map',
+                        'result_free_space.pcd',
+                    ),
                 },
             ]
         ),

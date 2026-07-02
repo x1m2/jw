@@ -64,8 +64,9 @@ DualRadarTraversableExtractor::DualRadarTraversableExtractor(
   }
 
   if (use_patchworkpp_) {
-    patchworkpp_ = std::make_shared<PatchWorkpp<PointType>>(node_);
-    RCLCPP_INFO(node_->get_logger(), "PatchWorkpp 地面分割器初始化完成");
+    patchworkpp_ = std::make_shared<patchwork::PclGroundSegmenter>(node_);
+    RCLCPP_INFO(node_->get_logger(),
+                "公共 PatchWork++ 地面分割器初始化完成");
   }
 
   RCLCPP_INFO(node_->get_logger(), "DualRadarTraversableExtractor 初始化完成");
@@ -481,8 +482,8 @@ bool DualRadarTraversableExtractor::segmentGround(
   if (use_patchworkpp_ && patchworkpp_) {
     try {
       double time_taken = 0.0;
-      patchworkpp_->estimate_ground(*input_cloud, *ground_cloud,
-                                    *obstacle_cloud, time_taken);
+      patchworkpp_->segment(*input_cloud, *ground_cloud, *obstacle_cloud,
+                            &time_taken);
 
       ground_cloud->width =
           static_cast<std::uint32_t>(ground_cloud->points.size());

@@ -134,6 +134,7 @@ generate_task_file
 # 后台进程清理
 # ==================================================
 TOPOLOGY_CONNECT_PID=""
+PCD2PGM_PID=""
 CLEANING=0
 
 cleanup() {
@@ -150,7 +151,12 @@ cleanup() {
         kill_process_group_safe "${TOPOLOGY_CONNECT_PID}" "topology_connect"
     fi
 
+    if [ -n "${PCD2PGM_PID}" ]; then
+        kill_process_group_safe "${PCD2PGM_PID}" "pcd2pgm"
+    fi
+
     TOPOLOGY_CONNECT_PID=""
+    PCD2PGM_PID=""
     wait 2>/dev/null || true
 
     info "地图编辑流程已结束"
@@ -160,28 +166,62 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ==================================================
-# 1. 后台启动拓扑顺序连边 + RViz 可视化发布
+# 1. 后台启动 PCD -> PGM 地图发布
+# ==================================================
+info "启动 pcd2pgm..."
+
+setsid ros2 launch pcd2pgm pcd2pgm_launch.py pgm_use_rviz:=false \
+    > /dev/null 2>&1 &
+
+PCD2PGM_PID=$!
+
+sleep 2
+
+if ! kill -0 "${PCD2PGM_PID}" 2>/dev/null; then
+    err "pcd2pgm 启动失败"
+    exit 1
+fi
+
+info "pcd2pgm 启动成功"
+
+# ==================================================
+# 2. 一次性生成拓扑顺序连边
 # ==================================================
 info "启动 topology_connect..."
 
-setsid ros2 launch topology_rviz_plugin topology_connect.launch.py run_once:=false \
+setsid ros2 launch topology_rviz_plugin topology_connect.launch.py \
     > "${TOPOLOGY_CONNECT_LOG_FILE}" 2>&1 &
 
 TOPOLOGY_CONNECT_PID=$!
 
-sleep 3
+TOPOLOGY_CONNECT_DONE=0
+for _ in {1..100}; do
+    if grep -q "成功写入连接后的拓扑地图" "${TOPOLOGY_CONNECT_LOG_FILE}" 2>/dev/null; then
+        TOPOLOGY_CONNECT_DONE=1
+        break
+    fi
 
-if ! kill -0 "${TOPOLOGY_CONNECT_PID}" 2>/dev/null; then
-    err "topology_connect 启动失败"
+    if ! kill -0 "${TOPOLOGY_CONNECT_PID}" 2>/dev/null; then
+        break
+    fi
+
+    sleep 0.1
+done
+
+if [ "${TOPOLOGY_CONNECT_DONE}" -ne 1 ]; then
+    err "topology_connect 连边失败或超时"
     err "日志: ${TOPOLOGY_CONNECT_LOG_FILE}"
     tail -n 80 "${TOPOLOGY_CONNECT_LOG_FILE}" || true
     exit 1
 fi
 
-info "topology_connect 启动成功"
+kill_process_group_safe "${TOPOLOGY_CONNECT_PID}" "topology_connect"
+TOPOLOGY_CONNECT_PID=""
+
+info "topology_connect 连边完成"
 
 # ==================================================
-# 2. 启动 RViz 拓扑编辑工具
+# 3. 启动 RViz 拓扑编辑工具
 # ==================================================
 info "启动 topology_tool，关闭 RViz 后自动结束地图编辑..."
 

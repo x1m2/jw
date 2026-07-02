@@ -6,8 +6,10 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
 
-set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS "-pthread -fexceptions -g -ggdb")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+set(CMAKE_CXX_FLAGS "-pthread -fexceptions ")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -Wextra ${CMAKE_CXX_FLAGS}")
 
 ## 2. 查找依赖项
@@ -47,6 +49,7 @@ find_package(GTSAM REQUIRED)
 find_package(nano_gicp REQUIRED)
 find_package(quatro REQUIRED)
 find_package(scancontext REQUIRED)
+find_package(patchworkpp REQUIRED)
 ## 3. 头文件目录
 include_directories(
   include
@@ -87,6 +90,7 @@ set(ROS_DEPENDENCIES
   nano_gicp
   quatro
   scancontext
+  patchworkpp
   rosbag2_cpp
   rosbag2_storage
 )
@@ -99,6 +103,7 @@ add_library(${PROJECT_NAME}_modules SHARED
 # 在 ROS 2 中推荐使用 ament_target_dependencies 处理依赖，它会自动处理 include 和 link
 ament_target_dependencies(${PROJECT_NAME}_modules ${ROS_DEPENDENCIES})
 target_link_libraries(${PROJECT_NAME}_modules ${COMMON_LIBS})
+target_link_libraries(${PROJECT_NAME}_modules patchworkpp::patchworkpp_core)
 
 # B. 构建可执行文件 (Node)
 add_executable(${PROJECT_NAME}_node src/main.cpp)
@@ -106,6 +111,7 @@ ament_target_dependencies(${PROJECT_NAME}_node ${ROS_DEPENDENCIES})
 target_link_libraries(${PROJECT_NAME}_node 
   ${PROJECT_NAME}_modules
   ${COMMON_LIBS}
+  patchworkpp::patchworkpp_core
 )
 
 ## 5. 安装逻辑 (ROS 2 必须)

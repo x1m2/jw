@@ -7,7 +7,8 @@
 - `/pose_stamped_localization` (`geometry_msgs/msg/PoseStamped`)：机器人实时定位位姿，参数 `pose_topic` 可配置。
 - `clicked_point` (`geometry_msgs/msg/PointStamped`)：RViz 点击目标点。
 - `/target_points` (`geometry_msgs/msg/Pose`)：任务状态机发布的目标点位姿。
-- `/free_space_cloud` (`sensor_msgs/msg/PointCloud2`)：可行域点云，参数 `free_space_topic` 可配置。
+
+可行域点云不再通过话题订阅，节点启动时直接读取参数 `free_space_pcd_file` 指向的 PCD 文件。
 
 ## 主要发布
 

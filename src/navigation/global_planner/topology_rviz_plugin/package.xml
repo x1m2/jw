@@ -18,8 +18,6 @@
   <depend>interactive_markers</depend>
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>pcl_conversions</depend>
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>
 

@@ -25,11 +25,11 @@ global_path_planner_node:
     edge_sample_count: 100
     safety_sphere_radius: 0.3
     valid_point_threshold: 0.9
-    free_space_topic: "/free_space_cloud"
+    free_space_pcd_file: "${ROBOT_DATA_DIR}/map/result_free_space.pcd"
 
-    # 是否对临时连接做可行域点云合法性检查
-    # true：会使用 /free_space_cloud 检查边是否可走；
-    #      但如果没有稳定发布 free_space_cloud，可能导致所有临时连接失败。
+    # 是否对临时连接做可行域点云合法性检查。
+    # true：会使用 free_space_pcd_file 加载的可行域 PCD 检查边是否可走；
+    #      如果 PCD 文件不存在或为空，可能导致所有临时连接失败。
     # false：不做点云合法性检查，只按拓扑和距离规则连接。
-    # 当前没有稳定 free_space_cloud 时建议 false。
+    # 当前没有可靠 result_free_space.pcd 时建议 false。
     enable_temp_connection_feasibility_check: false

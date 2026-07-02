@@ -15,6 +15,39 @@
     save_voxel_resolution: 0.3                    # voxel resolution to save map in .pcd format
     scancontext_max_correspondence_distance: 35.0 # this is used for candidate trimming after ScanContext
 
+    ground_segmentation:
+      enable: true                                # Save PatchWork++ segmented free-space map as result_free_space.pcd
+      height_threshold: 0.1                       # Remove segmented ground points higher than this local z threshold
+      free_space_voxel_resolution: 0.1            # voxel resolution for result_free_space.pcd
+
+    patchworkpp:
+      verbose: false                              # 是否打印 PatchWork++ 详细调试信息；官方默认 false
+      sensor_height: 0.7                         # 传感器离地高度，影响反射噪声去除和自适应种子选择；官方默认 1.723
+      num_iter: 3                                 # 每个 patch 内地面平面拟合迭代次数；官方默认 3
+      num_lpr: 20                                 # Lowest Point Representative 种子点数量；官方默认 20
+      num_min_pts: 6                              # 每个 patch 至少多少点才进行地面估计；官方默认 10
+      th_seeds: 0.32                              # 地面初始种子高度阈值，越大越容易选入候选地面；官方默认 0.125
+      th_dist: 0.05                               # 点到地面平面的距离阈值，越小地面分类越严格；官方默认 0.125
+      th_seeds_v: 0.25                            # 垂直结构种子高度阈值，用于 R-VPF；官方默认 0.25
+      th_dist_v: 0.1                              # 垂直结构平面距离阈值，用于 R-VPF；官方默认 0.1
+      max_r: 5.0                                  # 地面估计最大半径，PGO 近距离分割可设小；官方默认 80.0
+      min_r: 0.01                                 # 地面估计最小半径，设小可保留机器人近处点；官方默认 2.7
+      uprightness_thr: 0.707                      # 地面法向量 z 分量阈值，越大要求地面越水平；官方默认 0.707
+      adaptive_seed_selection_margin: -1.15        # 自适应种子选择边界，和 sensor_height 联动；官方默认 -1.2
+      RNR_ver_angle_thr: -15.0                    # RNR 反射噪声去除的垂直角度阈值；官方默认 -15.0
+      RNR_intensity_thr: 0.2                      # RNR 反射噪声去除的强度阈值；官方默认 0.2
+      max_flatness_storage: 1000                  # 自适应 flatness 阈值历史缓存长度；官方默认 1000
+      max_elevation_storage: 1000                 # 自适应 elevation 阈值历史缓存长度；官方默认 1000
+      enable_RNR: true                            # Reflected Noise Removal，反射噪声去除；官方默认 true
+      enable_RVPF: true                           # Region-wise Vertical Plane Fitting，垂直结构过滤；官方默认 true
+      enable_TGR: true                            # Temporal Ground Revert，时序地面恢复；官方默认 true
+      czm:                                        # Concentric Zone Model，同心区域划分参数
+        num_zones: 4                              # 同心区域数量；官方默认 4
+        num_sectors_each_zone: [4, 8, 12, 8]      # 每个 zone 的扇区数，越大角向划分越细；官方默认 [16, 32, 54, 32]
+        num_rings_each_zone: [4, 4, 4, 4]         # 每个 zone 的环数；官方默认 [2, 4, 4, 4]
+        elevation_thresholds: [0.1, 0.1, 0.1, 0.1] # 每个近场 ring 的高度阈值初值；官方默认 [0, 0, 0, 0]
+        flatness_thresholds: [0.0, 0.0, 0.0, 0.0] # 每个近场 ring 的平坦度阈值初值；官方默认 [0, 0, 0, 0]
+
     nano_gicp:                                    # all values are from Nano-GICP official github (Direct LiDAR Odometry)
       thread_number: 0                            # if 0, max number of core
       icp_score_threshold: 0.5                    # lower is more accurate, for loop detection

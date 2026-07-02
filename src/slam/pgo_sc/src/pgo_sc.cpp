@@ -62,6 +62,10 @@ PgoSc::PgoSc()
   this->declare_parameter<bool>("result.save_map_pcd", false);
   this->declare_parameter<bool>("result.save_in_kitti_format", false);
   this->declare_parameter<std::string>("result.seq_name", "");
+  this->declare_parameter<bool>("ground_segmentation.enable", true);
+  this->declare_parameter<double>("ground_segmentation.height_threshold", 0.1);
+  this->declare_parameter<double>("ground_segmentation.free_space_voxel_resolution",
+                                  -1.0);
 
   /* get parameters */
   this->get_parameter("basic.map_frame", map_frame_);
@@ -115,9 +119,21 @@ PgoSc::PgoSc()
   this->get_parameter("result.save_map_pcd", save_map_pcd_);
   this->get_parameter("result.save_in_kitti_format", save_in_kitti_format_);
   this->get_parameter("result.seq_name", seq_name_);
+  this->get_parameter("ground_segmentation.enable",
+                      enable_ground_segmentation_);
+  this->get_parameter("ground_segmentation.height_threshold",
+                      ground_height_filter_threshold_);
+  this->get_parameter("ground_segmentation.free_space_voxel_resolution",
+                      free_space_voxel_res_);
+  if (free_space_voxel_res_ <= 0.0) {
+    free_space_voxel_res_ = voxel_res_;
+  }
 
   /* loop closure */
   loop_closure_ = std::make_shared<LoopClosure>(lc_config);
+  if (enable_ground_segmentation_) {
+    ground_segmenter_ = std::make_unique<patchwork::PclGroundSegmenter>(*this);
+  }
 
   /* Initialization of GTSAM */
   gtsam::ISAM2Params isam_params;
@@ -206,6 +222,52 @@ PgoSc::PgoSc()
 
 PgoSc::~PgoSc() {}
 
+void PgoSc::segmentGroundForKeyframe(PosePcd &pose_pcd) {
+  pose_pcd.pcd_ground_.clear();
+
+  if (!enable_ground_segmentation_ || !ground_segmenter_) {
+    return;
+  }
+
+  pcl::PointCloud<PointType> ground_cloud;
+  pcl::PointCloud<PointType> nonground_cloud;
+  double time_taken = 0.0;
+
+  try {
+    if (!ground_segmenter_->segment(pose_pcd.pcd_, ground_cloud,
+                                    nonground_cloud, &time_taken)) {
+      RCLCPP_WARN(this->get_logger(),
+                  "PatchWork++ ground segmentation returned empty result for "
+                  "keyframe %d",
+                  pose_pcd.idx_);
+      return;
+    }
+  } catch (const std::exception &e) {
+    RCLCPP_WARN(this->get_logger(),
+                "PatchWork++ ground segmentation failed for keyframe %d: %s",
+                pose_pcd.idx_, e.what());
+    return;
+  }
+
+  pose_pcd.pcd_ground_.reserve(ground_cloud.size());
+  for (const auto &pt : ground_cloud.points) {
+    if (pt.z <= ground_height_filter_threshold_) {
+      pose_pcd.pcd_ground_.push_back(pt);
+    }
+  }
+  pose_pcd.pcd_ground_.width =
+      static_cast<std::uint32_t>(pose_pcd.pcd_ground_.size());
+  pose_pcd.pcd_ground_.height = 1;
+  pose_pcd.pcd_ground_.is_dense = true;
+
+  RCLCPP_DEBUG(this->get_logger(),
+               "PatchWork++ keyframe %d: input=%zu ground=%zu filtered=%zu "
+               "nonground=%zu time=%.3f ms",
+               pose_pcd.idx_, pose_pcd.pcd_.size(), ground_cloud.size(),
+               pose_pcd.pcd_ground_.size(), nonground_cloud.size(),
+               time_taken * 1000.0);
+}
+
 // ====================== odom + pcd callback ======================
 // 功能：前端位姿估计 + 关键帧管理 + 后端图优化
 void PgoSc::odomPcdCallback(
@@ -290,6 +352,7 @@ void PgoSc::odomPcdCallback(
 
   // ==== 初始化关键帧（只执行一次） ====
   if (!is_initialized_) {
+    segmentGroundForKeyframe(current_frame_);
     keyframes_.push_back(current_frame_);
     updateOdomsAndPaths(current_frame_);
 
@@ -313,6 +376,7 @@ void PgoSc::odomPcdCallback(
   // ==== 2. 判断是否是新关键帧 ====
   // auto t2 = std::chrono::high_resolution_clock::now();
   if (checkIfKeyframe(current_frame_, keyframes_.back())) {
+    segmentGroundForKeyframe(current_frame_);
     {
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
       keyframes_.push_back(current_frame_);
@@ -805,6 +869,8 @@ void PgoSc::saveFlagCallback() {
   if (save_map_pcd_) {
     pcl::PointCloud<PointType>::Ptr corrected_map(
         new pcl::PointCloud<PointType>());
+    pcl::PointCloud<PointType>::Ptr corrected_free_space(
+        new pcl::PointCloud<PointType>());
 
     {
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
@@ -814,13 +880,20 @@ void PgoSc::saveFlagCallback() {
         return;
       }
       size_t reserve_size = 0;
+      size_t free_space_reserve_size = 0;
       for (const auto &kf : keyframes_) {
         reserve_size += kf.pcd_.size();
+        free_space_reserve_size += kf.pcd_ground_.size();
       }
       corrected_map->reserve(reserve_size);
+      corrected_free_space->reserve(free_space_reserve_size);
       for (size_t i = 0; i < keyframes_.size(); ++i) {
         *corrected_map +=
             transformPcd(keyframes_[i].pcd_, keyframes_[i].pose_corrected_eig_);
+        if (!keyframes_[i].pcd_ground_.empty()) {
+          *corrected_free_space += transformPcd(
+              keyframes_[i].pcd_ground_, keyframes_[i].pose_corrected_eig_);
+        }
       }
     }
 
@@ -837,6 +910,32 @@ void PgoSc::saveFlagCallback() {
     RCLCPP_INFO(this->get_logger(),
                 "\033[32;1mResult saved in .pcd format: %s, points: %zu\033[0m",
                 result_path.c_str(), voxelized_map->size());
+
+    if (enable_ground_segmentation_) {
+      if (corrected_free_space->empty()) {
+        RCLCPP_WARN(this->get_logger(),
+                    "No segmented free-space points, skip saving "
+                    "result_free_space.pcd.");
+      } else {
+        auto voxelized_free_space =
+            voxelizePcd(corrected_free_space, free_space_voxel_res_);
+        const std::string free_space_path =
+            package_path_ + "/result_free_space.pcd";
+
+        if (pcl::io::savePCDFileBinary<PointType>(
+                free_space_path, *voxelized_free_space) != 0) {
+          RCLCPP_ERROR(this->get_logger(),
+                       "Failed to save free-space map: %s",
+                       free_space_path.c_str());
+          return;
+        }
+
+        RCLCPP_INFO(this->get_logger(),
+                    "\033[32;1mFree-space map saved in .pcd format: %s, "
+                    "points: %zu\033[0m",
+                    free_space_path.c_str(), voxelized_free_space->size());
+      }
+    }
   }
 
   //发布保存完成

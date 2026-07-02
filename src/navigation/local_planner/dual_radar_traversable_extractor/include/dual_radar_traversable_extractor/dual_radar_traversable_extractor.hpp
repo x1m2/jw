@@ -24,7 +24,7 @@
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include "ground_seg/patchworkpp/patchworkpp.hpp"
+#include "patchwork/pcl_ground_segmenter.hpp"
 
 using PointType = pcl::PointXYZI;
 
@@ -49,7 +49,7 @@ class DualRadarTraversableExtractor {
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  std::shared_ptr<PatchWorkpp<PointType>> patchworkpp_;
+  std::shared_ptr<patchwork::PclGroundSegmenter> patchworkpp_;
 
   std::deque<sensor_msgs::msg::PointCloud2::ConstSharedPtr> lidar_queue_;
   std::deque<sensor_msgs::msg::PointCloud2::ConstSharedPtr> radar_queue_;

@@ -6,8 +6,10 @@ project(localization_sc LANGUAGES CXX)
 # -----------------------------
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fexceptions -g -ggdb -O3 -Wall -Wextra")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fexceptions -O3 -Wall -Wextra")
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 
 # OpenMP

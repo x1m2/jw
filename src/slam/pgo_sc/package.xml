@@ -25,6 +25,7 @@
   <depend>nano_gicp</depend>
   <depend>quatro</depend>
   <depend>scancontext</depend>
+  <depend>patchworkpp</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
