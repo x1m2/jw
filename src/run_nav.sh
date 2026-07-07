@@ -46,9 +46,6 @@ log_time() {
     date +%Y%m%d_%H%M%S
 }
 
-PROJECT_DIR="${WORKSPACE_DIR}/src"
-GUI_SCRIPT="${PROJECT_DIR}/tools/user_interface/scripts/navigation_control_gui.py"
-
 info "开始自主导航流程"
 info "数据目录: ${ROBOT_DATA_DIR}"
 
@@ -270,40 +267,22 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 
 # ==================================================
 # 导航保持运行：
-# 手工启动时默认打开 GUI；
-# systemd / 开机自启动时 NAV_HEADLESS=1，不打开 GUI。
+# run_nav.sh 只负责启动和清理导航后台节点。
+# 任务选择、急停、回家、停止/继续任务统一在 navigation_workflow_gui.py 内操作。
 # ==================================================
 info "导航后台节点已启动"
+info "请在主 GUI 的导航任务控制区选择任务、急停、回家、停止或继续任务"
+info "等待导航状态机运行；收到 SIGINT / SIGTERM 时再退出导航流程"
 
-if [ "${NAV_HEADLESS:-0}" = "1" ]; then
-    info "检测到 NAV_HEADLESS=1：无界面自动导航模式，不启动导航控制 GUI"
-    info "等待导航状态机运行；收到 SIGINT / SIGTERM 时再退出导航流程"
+# 保持 run_nav.sh 前台运行，避免脚本退出后 trap cleanup 清理所有节点。
+while true; do
+    sleep 2
 
-    # 保持 run_nav.sh 前台运行，避免脚本退出后 trap cleanup 清理所有节点。
-    while true; do
-        sleep 2
-
-        # 状态机都不在了，说明导航核心已异常退出。
-        if ! ros2 node list 2>/dev/null | grep -qx "/navigation_task_state_machine_node"; then
-            warn "navigation_task_state_machine_node 已退出，结束导航流程"
-            break
-        fi
-    done
-else
-    if [ ! -f "${GUI_SCRIPT}" ]; then
-        err "找不到导航 GUI 脚本: ${GUI_SCRIPT}"
-        exit 1
+    # 状态机都不在了，说明导航核心已异常退出。
+    if ! ros2 node list 2>/dev/null | grep -qx "/navigation_task_state_machine_node"; then
+        warn "navigation_task_state_machine_node 已退出，结束导航流程"
+        break
     fi
-
-    chmod +x "${GUI_SCRIPT}"
-
-    NAV_GUI_LOG_FILE="${NAV_LOG_DIR}/navigation_control_gui_$(log_time).log"
-
-    info "启动导航控制 GUI，关闭 GUI 后自动结束导航流程"
-
-    python3 "${GUI_SCRIPT}" > "${NAV_GUI_LOG_FILE}" 2>&1
-
-    info "导航控制 GUI 已退出"
-fi
+done
 
 cleanup

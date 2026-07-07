@@ -21,6 +21,12 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
+import rclpy
+from geometry_msgs.msg import Pose
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.node import Node
+from std_msgs.msg import Bool, String
+
 
 def load_robot_env(env_file: str) -> None:
     if not os.path.isfile(env_file):
@@ -83,11 +89,29 @@ class NavigationWorkflowGUI:
         self.terminal_rows = 36
         self.terminal_font = "Noto Sans Mono CJK SC"
         self.terminal_font_size = 14
+        self.nav_control_collapsed = True
+        self.gui_log_collapsed = True
+        self.nav_control_ros_ready = False
+        self.nav_control_node = None
+        self.nav_control_executor = None
+        self.nav_control_thread = None
+        self.nav_task_signal_pub = None
+        self.emergency_stop_pub = None
+        self.current_target = {"x": 0.0, "y": 0.0, "z": 0.0}
+        self.robot_nav_state = False
+        self.emergency_stop_state = False
+        self.last_target_update = "未接收到目标点"
+        self.task_folder_path = os.path.join(self.runtime_robot_data_dir, "task")
+        self.map_dir = os.path.join(self.runtime_robot_data_dir, "map")
+        self.map_bag_dir = os.path.join(self.map_dir, "result_bag")
+        self.map_pcd_file = os.path.join(self.map_dir, "result.pcd")
+        self.available_tasks = []
 
         self.workflow_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.root = tk.Tk()
         self.root.withdraw()
+        self.selected_task = tk.StringVar()
 
         self.kill_old_nodes_before_gui_start()
         self.clean_tmp_launch_params_and_runtime_logs_before_gui_start()
@@ -110,26 +134,25 @@ class NavigationWorkflowGUI:
         self.font_family = self.select_chinese_font()
         self.mono_font_family = self.font_family
         self.configure_tk_fonts()
+        self.load_available_tasks()
 
         self.root.deiconify()
         self.root.title("建图 / 地图编辑 / 键盘控制 / 重定位 / 自主导航控制界面")
-        self.root.geometry("1050x1200")
+        self.root.geometry("820x820")
         self.root.resizable(True, True)
         self.create_widgets()
+        self.initialize_nav_control_ros()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.after(100, self.process_log_queue)
-
+        self.root.after(200, self.update_nav_control_display)
+        self.update_map_status_display()
+ 
         self.add_log("建图 / 编辑地图 / 重定位 / 自主导航 GUI 已启动")
         self.add_log(f"工作空间目录: {self.workspace_dir}")
         self.add_log(f"脚本目录: {self.script_dir}")
         self.add_log(f"运行数据/日志根目录: {self.runtime_robot_data_dir}")
         self.add_log(f"本次任务日志目录: {self.workflow_log_dir}")
         self.add_startup_kill_log_to_gui()
-        self.add_log(f"run_slam.sh: {self.run_slam_script}")
-        self.add_log(f"run_edit_map.sh: {self.run_edit_map_script}")
-        self.add_log(f"keyboard_control.py: {self.keyboard_control_script}")
-        self.add_log(f"run_relocalization.sh: {self.run_relocalization_script}")
-        self.add_log(f"run_nav.sh: {self.run_nav_script}")
 
     # ------------------------- startup / cleanup -------------------------
     def _kill_env(self):
@@ -272,51 +295,68 @@ class NavigationWorkflowGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(5, weight=1)
+        main.rowconfigure(5, weight=0)
 
         tk.Label(
             main, text="建图 / 地图编辑 / 键盘控制 / 重定位 / 自主导航控制界面",
             font=(self.font_family, 18, "bold"), fg="navy",
         ).grid(row=0, column=0, pady=(0, 15))
 
-        status = ttk.LabelFrame(main, text="当前状态", padding="10")
+        status = ttk.LabelFrame(main, text="机器人状态", padding="10")
         status.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
         status.columnconfigure(1, weight=1)
-        self.slam_status_label = self._status_row(status, 0, "建图状态:")
-        self.edit_map_status_label = self._status_row(status, 1, "地图编辑状态:")
-        self.keyboard_status_label = self._status_row(status, 2, "键盘控制状态:")
-        self.relocalization_status_label = self._status_row(status, 3, "重定位状态:")
-        self.nav_status_label = self._status_row(status, 4, "自主导航状态:")
+        status.columnconfigure(3, weight=1)
+        status.columnconfigure(4, weight=0)
+        self.map_status_label = self._compact_status_row(status, 0, 0, "地图状态:", "检查中", "gray")
+        self.relocalization_status_label = self._compact_status_row(status, 0, 2, "重定位状态:", "未启动", "gray")
+        self.nav_status_label = self._compact_status_row(status, 1, 0, "自主导航状态:", "未启动", "gray")
+        self.robot_nav_state_label = self._compact_status_row(status, 1, 2, "导航状态:", "未知", "gray")
+        self.robot_target_label = self._compact_status_row(status, 2, 0, "当前目标点:", "等待目标点", "blue")
+        self.emergency_status_label = self._compact_status_row(status, 2, 2, "紧急停止:", "关闭", "green")
+        self.target_update_label = self._compact_status_row(status, 3, 0, "最后更新:", self.last_target_update, "gray")
 
         tk.Label(status, text="当前动作:", font=(self.font_family, 11, "bold")).grid(
-            row=5, column=0, sticky=tk.W, padx=5, pady=4
+            row=4, column=0, sticky=tk.W, padx=5, pady=4
         )
         self.current_action_label = tk.Label(
             status, text="等待操作", font=(self.font_family, 11), fg="blue"
         )
-        self.current_action_label.grid(row=5, column=1, sticky=tk.W, padx=5, pady=4)
+        self.current_action_label.grid(row=4, column=1, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
         tk.Label(status, text="本次运行日志目录:", font=(self.font_family, 11, "bold")).grid(
-            row=6, column=0, sticky=tk.W, padx=5, pady=4
+            row=5, column=0, sticky=tk.W, padx=5, pady=4
         )
         self.log_dir_label = tk.Label(
             status, text=self.workflow_log_dir, font=(self.font_family, 10),
             fg="gray", wraplength=800, justify=tk.LEFT,
         )
-        self.log_dir_label.grid(row=6, column=1, sticky=tk.W, padx=5, pady=4)
+        self.log_dir_label.grid(row=5, column=1, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
-        paths = ttk.LabelFrame(main, text="脚本路径", padding="10")
-        paths.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        paths.columnconfigure(1, weight=1)
-        self.add_path_row(paths, 0, "run_kill_node.sh:", self.run_kill_node_script)
-        self.add_path_row(paths, 1, "run_slam.sh:", self.run_slam_script)
-        self.add_path_row(paths, 2, "run_edit_map.sh:", self.run_edit_map_script)
-        self.add_path_row(paths, 3, "keyboard_control.py:", self.keyboard_control_script)
-        self.add_path_row(paths, 4, "run_relocalization.sh:", self.run_relocalization_script)
-        self.add_path_row(paths, 5, "run_nav.sh:", self.run_nav_script)
+        helper_buttons = ttk.Frame(status)
+        helper_buttons.grid(row=0, column=4, rowspan=6, sticky=(tk.N, tk.E), padx=(12, 0))
+        helper_buttons.columnconfigure(0, weight=1)
+
+        self.start_keyboard_button = tk.Button(
+            helper_buttons, text="键盘控制", command=self.start_keyboard_control,
+            bg="darkgreen", fg="white", font=(self.font_family, 9, "bold"), height=1,
+            width=10,
+        )
+        self.start_keyboard_button.grid(row=2, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        self.kill_nodes_button = tk.Button(
+            helper_buttons, text="清理节点", command=self.manual_kill_nodes,
+            bg="firebrick", fg="white", font=(self.font_family, 9, "bold"), height=1,
+            width=10,
+        )
+        self.kill_nodes_button.grid(row=1, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
+        self.exit_button = tk.Button(
+            helper_buttons, text="退出GUI", command=self.on_closing,
+            bg="red", fg="white", font=(self.font_family, 9, "bold"), height=1,
+            width=10,
+        )
+        self.exit_button.grid(row=0, column=0, padx=2, pady=2, sticky=(tk.W, tk.E))
 
         controls = ttk.LabelFrame(main, text="流程控制", padding="10")
-        controls.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        controls.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
         for i in range(3):
             controls.columnconfigure(i, weight=1)
 
@@ -335,43 +375,37 @@ class NavigationWorkflowGUI:
             bg="purple", fg="white", font=(self.font_family, 13, "bold"), height=2,
         )
         self.start_nav_button.grid(row=0, column=2, padx=5, pady=5, sticky=(tk.W, tk.E))
-        self.start_keyboard_button = tk.Button(
-            controls, text="单独启动键盘控制", command=self.start_keyboard_control,
-            bg="darkgreen", fg="white", font=(self.font_family, 10, "bold"), height=1,
-        )
-        self.start_keyboard_button.grid(row=1, column=0, padx=5, pady=5, sticky=(tk.W, tk.E))
-        self.kill_nodes_button = tk.Button(
-            controls, text="一键清理节点", command=self.manual_kill_nodes,
-            bg="firebrick", fg="white", font=(self.font_family, 10, "bold"), height=1,
-        )
-        self.kill_nodes_button.grid(row=1, column=1, padx=5, pady=5, sticky=(tk.W, tk.E))
-        self.exit_button = tk.Button(
-            controls, text="退出GUI", command=self.on_closing,
-            bg="red", fg="white", font=(self.font_family, 10, "bold"), height=1,
-        )
-        self.exit_button.grid(row=1, column=2, padx=5, pady=5, sticky=(tk.W, tk.E))
+
+        self.create_nav_control_panel(main, row=3)
 
         tips = ttk.LabelFrame(main, text="说明", padding="10")
         tips.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
         tk.Label(
             tips,
             text=(
-                "1. 启动 GUI 会自动清理旧 ROS2 节点，并询问是否删除旧日志。\n"
-                "2. 建图、地图编辑、键盘控制、自主导航都会在新终端中运行。\n"
-                "3. 自主导航会先重定位，确认位置正确后再启动导航。\n"
-                "4. 重定位结果只依据 relocalization 结果文件判断，不依据终端启动器返回码。\n"
-                "5. 一键清理节点用于停止残留 ROS2 节点、RViz、bag。"
+                "1. 没有地图时：先点击“开始建图并打点”，完成地图和目标点采集。\n"
+                "2. 建图完成后点击“启动地图编辑”，检查并编辑拓扑点、路径和任务。\n"
+                "3. 有可用地图和任务后，点击“自主导航”，系统会先启动重定位。"
             ),
             font=(self.font_family, 10), fg="gray", justify=tk.LEFT, anchor=tk.W,
         ).grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-        log_frame = ttk.LabelFrame(main, text="GUI 日志", padding="10")
-        log_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-        self.log_text = tk.Text(log_frame, height=18, wrap=tk.WORD,
+        self.gui_log_frame = ttk.LabelFrame(main, text="GUI 日志", padding="10")
+        self.gui_log_frame.grid(row=5, column=0, sticky=(tk.W, tk.E), pady=(0, 0))
+        self.gui_log_frame.columnconfigure(0, weight=1)
+
+        self.gui_log_toggle_button = tk.Button(
+            self.gui_log_frame, text="展开 GUI 日志", command=self.toggle_gui_log_panel,
+            bg="gray", fg="white", font=(self.font_family, 10, "bold"),
+        )
+        self.gui_log_toggle_button.grid(row=0, column=0, sticky=tk.W)
+
+        self.gui_log_body = ttk.Frame(self.gui_log_frame)
+        self.gui_log_body.columnconfigure(0, weight=1)
+        self.gui_log_body.rowconfigure(0, weight=1)
+        self.log_text = tk.Text(self.gui_log_body, height=14, wrap=tk.WORD,
                                 font=(self.mono_font_family, 10))
-        scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        scroll = ttk.Scrollbar(self.gui_log_body, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
@@ -398,6 +432,309 @@ class NavigationWorkflowGUI:
             wraplength=850, justify=tk.LEFT,
         ).grid(row=row, column=1, sticky=tk.W, padx=5, pady=3)
 
+    def toggle_gui_log_panel(self):
+        self.gui_log_collapsed = not self.gui_log_collapsed
+        if self.gui_log_collapsed:
+            self.gui_log_body.grid_remove()
+            self.gui_log_frame.grid_configure(sticky=(tk.W, tk.E))
+            self.gui_log_toggle_button.config(text="展开 GUI 日志")
+            return
+        self.gui_log_body.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(8, 0))
+        self.gui_log_frame.grid_configure(sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.gui_log_toggle_button.config(text="收起 GUI 日志")
+
+    def create_nav_control_panel(self, parent, row):
+        self.nav_control_frame = ttk.LabelFrame(parent, text="导航任务控制", padding="10")
+        self.nav_control_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        self.nav_control_frame.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(self.nav_control_frame)
+        header.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        header.columnconfigure(1, weight=1)
+
+        self.nav_control_toggle_button = tk.Button(
+            header, text="展开导航任务控制", command=self.toggle_nav_control_panel,
+            bg="gray", fg="white", font=(self.font_family, 10, "bold"),
+        )
+        self.nav_control_toggle_button.grid(row=0, column=0, padx=(0, 8), sticky=tk.W)
+
+        self.nav_control_hint_label = tk.Label(
+            header,
+            text="未进入自主导航：请先点击“自主导航”，完成重定位确认后再操作导航任务。",
+            font=(self.font_family, 10), fg="gray", anchor=tk.W,
+        )
+        self.nav_control_hint_label.grid(row=0, column=1, sticky=(tk.W, tk.E))
+
+        self.nav_control_body = ttk.Frame(self.nav_control_frame)
+        self.nav_control_body.columnconfigure(0, weight=1)
+
+        task_frame = ttk.LabelFrame(self.nav_control_body, text="任务选择", padding="8")
+        task_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(8, 8))
+        task_frame.columnconfigure(1, weight=1)
+        tk.Label(task_frame, text="选择任务:", font=(self.font_family, 10, "bold")).grid(
+            row=0, column=0, sticky=tk.W, padx=5
+        )
+        self.task_combobox = ttk.Combobox(
+            task_frame, textvariable=self.selected_task,
+            values=self.available_tasks if self.available_tasks else ["无可用任务"],
+            state="readonly", font=(self.font_family, 10),
+        )
+        self.task_combobox.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5, pady=4)
+        self.refresh_task_button = tk.Button(
+            task_frame, text="刷新任务", command=self.refresh_available_tasks,
+            bg="gray", fg="white", font=(self.font_family, 10, "bold"),
+        )
+        self.refresh_task_button.grid(row=0, column=2, sticky=(tk.W, tk.E), padx=5, pady=4)
+        tk.Label(task_frame, text="任务目录:", font=(self.font_family, 10, "bold")).grid(
+            row=1, column=0, sticky=tk.W, padx=5
+        )
+        tk.Label(
+            task_frame, text=self.task_folder_path, font=(self.font_family, 9),
+            fg="gray", wraplength=820, justify=tk.LEFT,
+        ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5)
+
+        buttons = ttk.LabelFrame(self.nav_control_body, text="任务操作", padding="8")
+        buttons.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        for i in range(4):
+            buttons.columnconfigure(i, weight=1)
+
+        self.nav_start_button = tk.Button(
+            buttons, text="开始导航任务", command=self.start_navigation_task,
+            bg="green", fg="white", font=(self.font_family, 11, "bold"), height=2,
+        )
+        self.nav_start_button.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.nav_loop_button = tk.Button(
+            buttons, text="循环任务", command=self.loop_navigation_task,
+            bg="yellow", fg="black", font=(self.font_family, 11, "bold"), height=2,
+        )
+        self.nav_loop_button.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.nav_home_button = tk.Button(
+            buttons, text="回家", command=self.go_home,
+            bg="blue", fg="white", font=(self.font_family, 11, "bold"), height=2,
+        )
+        self.nav_home_button.grid(row=0, column=2, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.emergency_button = tk.Button(
+            buttons, text="紧急停止", command=self.toggle_emergency_stop,
+            bg="red", fg="white", font=(self.font_family, 11, "bold"), height=2,
+        )
+        self.emergency_button.grid(row=0, column=3, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.stop_task_button = tk.Button(
+            buttons, text="停止任务", command=self.stop_navigation_task,
+            bg="orange", fg="white", font=(self.font_family, 10, "bold"),
+        )
+        self.stop_task_button.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.continue_task_button = tk.Button(
+            buttons, text="继续任务", command=self.continue_navigation_task,
+            bg="purple", fg="white", font=(self.font_family, 10, "bold"),
+        )
+        self.continue_task_button.grid(row=1, column=2, columnspan=2, padx=5, pady=5, sticky=(tk.W, tk.E))
+
+        self.set_nav_control_enabled(False)
+
+    def _compact_status_row(self, parent, row, col, name, text, color):
+        tk.Label(parent, text=name, font=(self.font_family, 10, "bold")).grid(
+            row=row, column=col, sticky=tk.W, padx=5, pady=3
+        )
+        label = tk.Label(parent, text=text, font=(self.font_family, 10), fg=color)
+        label.grid(row=row, column=col + 1, sticky=tk.W, padx=5, pady=3)
+        return label
+
+    def toggle_nav_control_panel(self):
+        self.nav_control_collapsed = not self.nav_control_collapsed
+        if self.nav_control_collapsed:
+            self.nav_control_body.grid_remove()
+            self.nav_control_toggle_button.config(text="展开导航任务控制")
+            return
+        self.nav_control_body.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.nav_control_toggle_button.config(text="收起导航任务控制")
+
+    def expand_nav_control_panel(self):
+        if self.nav_control_collapsed:
+            self.toggle_nav_control_panel()
+
+    def set_nav_control_enabled(self, enabled):
+        state = tk.NORMAL if enabled else tk.DISABLED
+        readonly_state = "readonly" if enabled else tk.DISABLED
+        for button in [
+            self.nav_start_button, self.nav_loop_button, self.nav_home_button,
+            self.emergency_button, self.stop_task_button, self.continue_task_button,
+        ]:
+            button.config(state=state)
+        self.task_combobox.config(state=readonly_state)
+        self.refresh_task_button.config(state=tk.NORMAL)
+        if enabled:
+            self.nav_control_hint_label.config(
+                text="自主导航运行中：可在此选择任务、急停、回家、停止或继续任务。",
+                fg="purple",
+            )
+        else:
+            self.nav_control_hint_label.config(
+                text="未进入自主导航：请先点击“自主导航”，完成重定位确认后再操作导航任务。",
+                fg="gray",
+            )
+
+    def load_available_tasks(self):
+        try:
+            if not os.path.isdir(self.task_folder_path):
+                self.available_tasks = []
+                self.selected_task.set("无可用任务")
+                return
+
+            self.available_tasks = sorted(
+                filename[:-4]
+                for filename in os.listdir(self.task_folder_path)
+                if filename.endswith(".txt") and
+                os.path.isfile(os.path.join(self.task_folder_path, filename))
+            )
+            self.selected_task.set(
+                self.available_tasks[0] if self.available_tasks else "无可用任务"
+            )
+        except Exception as e:
+            self.available_tasks = []
+            self.selected_task.set("无可用任务")
+            self.add_log_from_thread(f"[WARN] 加载任务列表失败: {e}")
+
+    def refresh_available_tasks(self):
+        self.load_available_tasks()
+        self.task_combobox.config(
+            values=self.available_tasks if self.available_tasks else ["无可用任务"]
+        )
+        self.add_log(f"任务列表已刷新，数量: {len(self.available_tasks)}")
+
+    def initialize_nav_control_ros(self):
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.nav_control_node = Node("navigation_workflow_control_gui")
+            self.nav_task_signal_pub = self.nav_control_node.create_publisher(
+                String, "/nav_task_signal", 10
+            )
+            self.emergency_stop_pub = self.nav_control_node.create_publisher(
+                Bool, "/emergency_stop", 10
+            )
+            self.nav_control_node.create_subscription(
+                Pose, "/target_points", self.target_points_callback, 10
+            )
+            self.nav_control_node.create_subscription(
+                Bool, "/nav_state", self.nav_state_callback, 10
+            )
+            self.nav_control_executor = SingleThreadedExecutor()
+            self.nav_control_executor.add_node(self.nav_control_node)
+            self.nav_control_thread = threading.Thread(
+                target=self.spin_nav_control_ros, daemon=True
+            )
+            self.nav_control_thread.start()
+            self.nav_control_ros_ready = True
+            self.add_log("内嵌导航控制 ROS2 topic 已初始化")
+        except Exception as e:
+            self.nav_control_ros_ready = False
+            self.add_log(f"[WARN] 内嵌导航控制 ROS2 初始化失败: {e}")
+
+    def spin_nav_control_ros(self):
+        try:
+            if self.nav_control_executor is not None:
+                self.nav_control_executor.spin()
+        except Exception as e:
+            self.add_log_from_thread(f"[WARN] 内嵌导航控制 ROS2 spin 退出: {e}")
+
+    def target_points_callback(self, msg):
+        self.current_target["x"] = msg.position.x
+        self.current_target["y"] = msg.position.y
+        self.current_target["z"] = msg.position.z
+        self.last_target_update = datetime.datetime.now().strftime("%H:%M:%S")
+
+    def nav_state_callback(self, msg):
+        self.robot_nav_state = bool(msg.data)
+
+    def publish_task_signal(self, signal):
+        if not self.nav_running:
+            messagebox.showwarning("导航未启动", "请先点击“自主导航”，完成重定位并启动导航。")
+            return False
+        if not self.nav_control_ros_ready or self.nav_task_signal_pub is None:
+            messagebox.showwarning("ROS 未就绪", "导航控制 ROS2 publisher 尚未初始化。")
+            return False
+        msg = String()
+        msg.data = signal
+        self.nav_task_signal_pub.publish(msg)
+        return True
+
+    def start_navigation_task(self):
+        task = self.selected_task.get()
+        if not task or task == "无可用任务":
+            messagebox.showwarning("未选择任务", "请先选择一个任务")
+            return
+        if self.publish_task_signal(task):
+            self.add_log(f"发送开始导航任务: {task}")
+            self.set_current_action(f"已发送任务信号: {task}", "green")
+
+    def loop_navigation_task(self):
+        task = self.selected_task.get()
+        if not task or task == "无可用任务":
+            messagebox.showwarning("未选择任务", "请先选择一个任务")
+            return
+        if self.publish_task_signal(f"LOOP:{task}"):
+            self.add_log(f"发送循环导航任务: {task}")
+            self.set_current_action(f"已发送循环任务信号: {task}", "green")
+
+    def go_home(self):
+        if self.publish_task_signal("GO_HOME"):
+            self.add_log("发送回家信号")
+            self.set_current_action("已发送回家信号", "blue")
+
+    def stop_navigation_task(self):
+        if self.publish_task_signal("STOP"):
+            self.add_log("发送停止任务信号")
+            self.set_current_action("已发送停止任务信号", "orange")
+
+    def continue_navigation_task(self):
+        if self.publish_task_signal("CONTINUE"):
+            self.add_log("发送继续任务信号")
+            self.set_current_action("已发送继续任务信号", "purple")
+
+    def toggle_emergency_stop(self):
+        if not self.nav_running:
+            messagebox.showwarning("导航未启动", "请先启动自主导航后再使用急停。")
+            return
+        if not self.nav_control_ros_ready or self.emergency_stop_pub is None:
+            messagebox.showwarning("ROS 未就绪", "急停 ROS2 publisher 尚未初始化。")
+            return
+
+        self.emergency_stop_state = not self.emergency_stop_state
+        msg = Bool()
+        msg.data = self.emergency_stop_state
+        self.emergency_stop_pub.publish(msg)
+
+        if self.emergency_stop_state:
+            self.emergency_button.config(text="解除停止", bg="darkred")
+            self.set_current_action("紧急停止已激活", "red")
+            self.add_log("紧急停止: 激活")
+        else:
+            self.emergency_button.config(text="紧急停止", bg="red")
+            self.set_current_action("紧急停止已解除", "green")
+            self.add_log("紧急停止: 关闭")
+
+    def update_nav_control_display(self):
+        try:
+            self.robot_target_label.config(
+                text=(
+                    f"X: {self.current_target['x']:.3f}, "
+                    f"Y: {self.current_target['y']:.3f}, "
+                    f"Z: {self.current_target['z']:.3f}"
+                )
+            )
+            if self.robot_nav_state:
+                self.robot_nav_state_label.config(text="已到达目标点", fg="green")
+            else:
+                self.robot_nav_state_label.config(text="导航中", fg="blue")
+            if self.emergency_stop_state:
+                self.emergency_status_label.config(text="激活", fg="red")
+            else:
+                self.emergency_status_label.config(text="关闭", fg="green")
+            self.target_update_label.config(text=self.last_target_update)
+        except Exception:
+            pass
+        self.root.after(200, self.update_nav_control_display)
+
     def add_log(self, message):
         now = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{now}] {message}\n")
@@ -419,11 +756,11 @@ class NavigationWorkflowGUI:
     def _set(self, label, text, color="gray"):
         label.config(text=text, fg=color)
     def set_slam_status(self, text, color="gray"):
-        self._set(self.slam_status_label, text, color)
+        self.update_map_status_display()
     def set_edit_map_status(self, text, color="gray"):
-        self._set(self.edit_map_status_label, text, color)
+        return
     def set_keyboard_status(self, text, color="gray"):
-        self._set(self.keyboard_status_label, text, color)
+        return
     def set_relocalization_status(self, text, color="gray"):
         self._set(self.relocalization_status_label, text, color)
     def set_nav_status(self, text, color="gray"):
@@ -439,6 +776,22 @@ class NavigationWorkflowGUI:
         self.start_keyboard_button.config(state=tk.DISABLED if running else tk.NORMAL)
     def set_nav_button_running(self, running):
         self.start_nav_button.config(state=tk.DISABLED if running else tk.NORMAL)
+
+    def has_saved_map(self):
+        if os.path.isfile(self.map_pcd_file):
+            return True
+        if os.path.isdir(self.map_bag_dir):
+            return bool(glob.glob(os.path.join(self.map_bag_dir, "*.db3")))
+        return False
+
+    def update_map_status_display(self):
+        try:
+            if self.has_saved_map():
+                self._set(self.map_status_label, "有图", "green")
+            else:
+                self._set(self.map_status_label, "无图", "red")
+        except Exception:
+            self._set(self.map_status_label, "检查失败", "orange")
 
     # ------------------------- terminal launcher -------------------------
     def find_terminal(self):
@@ -483,7 +836,7 @@ class NavigationWorkflowGUI:
         })
         return env
 
-    def start_script_in_terminal(self, script_path, title, keep_open=True):
+    def start_script_in_terminal(self, script_path, title, keep_open=True, extra_env=None):
         if not os.path.isfile(script_path):
             messagebox.showerror("脚本不存在", f"找不到脚本:\n{script_path}")
             self.add_log(f"[ERROR] 找不到脚本: {script_path}")
@@ -496,8 +849,11 @@ class NavigationWorkflowGUI:
             "echo '[INFO] WORKFLOW_LOG_DIR='${WORKFLOW_LOG_DIR} && "
             "echo '[INFO] ROBOT_DATA_DIR='${ROBOT_DATA_DIR} && "
             f"echo '[INFO] 执行脚本: {script_path}' && "
-            f"bash {self.shell_quote(script_path)}; ret=$?"
         )
+        if extra_env:
+            for key, value in extra_env.items():
+                command += f"export {key}={self.shell_quote(str(value))} && "
+        command += f"bash {self.shell_quote(script_path)}; ret=$?"
         if keep_open:
             command += (
                 "; echo ''; echo '[INFO] 脚本已退出，返回码:' $ret; "
@@ -621,8 +977,9 @@ class NavigationWorkflowGUI:
         if self.edit_map_running:
             messagebox.showwarning("提示", "地图编辑已经在运行")
             return
+        self.update_map_status_display()
         self.edit_map_terminal_process = self.start_script_in_terminal(
-            self.run_edit_map_script, "地图编辑 - run_edit_map", keep_open=True
+            self.run_edit_map_script, "地图编辑 - run_edit_map", keep_open=False
         )
         if self.edit_map_terminal_process is None:
             return
@@ -642,6 +999,7 @@ class NavigationWorkflowGUI:
     def _edit_map_finished(self):
         self.edit_map_running = False
         self.set_edit_map_status("地图编辑已退出", "green")
+        self.update_map_status_display()
         self.set_current_action("地图编辑流程结束", "green")
         self.set_edit_map_button_running(False)
 
@@ -650,6 +1008,7 @@ class NavigationWorkflowGUI:
         if self.nav_running or self.relocalization_running:
             messagebox.showwarning("提示", "自主导航或重定位流程已经在运行")
             return
+        self.update_map_status_display()
         if not messagebox.askyesno(
             "启动自主导航",
             "清理旧节点并重定位。\n成功后需要确认位置，再启动导航。\n\n是否继续？",
@@ -780,7 +1139,9 @@ class NavigationWorkflowGUI:
         if self.nav_running:
             return
         self.nav_terminal_process = self.start_script_in_terminal(
-            self.run_nav_script, "自主导航 - run_nav", keep_open=True
+            self.run_nav_script,
+            "自主导航 - run_nav",
+            keep_open=True,
         )
         if self.nav_terminal_process is None:
             self.set_nav_status("自主导航启动失败", "red")
@@ -789,9 +1150,12 @@ class NavigationWorkflowGUI:
             return
         self.nav_running = True
         self.set_nav_status("自主导航运行中", "purple")
-        self.set_current_action("自主导航已启动，请在弹出终端/导航 GUI 中操作", "purple")
+        self.set_current_action("自主导航已启动，请在主界面导航任务控制区操作", "purple")
         self.set_nav_button_running(True)
-        self.add_log("已启动 run_nav.sh")
+        self.refresh_available_tasks()
+        self.expand_nav_control_panel()
+        self.set_nav_control_enabled(True)
+        self.add_log("已启动 run_nav.sh，导航任务控制区已启用")
         threading.Thread(target=self.watch_nav_process, daemon=True).start()
 
     def watch_nav_process(self):
@@ -806,6 +1170,9 @@ class NavigationWorkflowGUI:
         self.set_nav_status("自主导航已退出", "green")
         self.set_current_action("自主导航流程结束", "green")
         self.set_nav_button_running(False)
+        self.emergency_stop_state = False
+        self.emergency_button.config(text="紧急停止", bg="red")
+        self.set_nav_control_enabled(False)
 
     # ------------------------- manual cleanup / exit -------------------------
     def manual_kill_nodes(self):
@@ -852,6 +1219,9 @@ class NavigationWorkflowGUI:
         self.set_edit_map_button_running(False)
         self.set_keyboard_button_running(False)
         self.set_nav_button_running(False)
+        self.emergency_stop_state = False
+        self.emergency_button.config(text="紧急停止", bg="red")
+        self.set_nav_control_enabled(False)
         self.kill_nodes_button.config(state=tk.NORMAL)
         self.set_current_action("节点清理完成", "green")
         messagebox.showinfo("清理完成", "run_kill_node.sh 已执行完成。")
@@ -883,7 +1253,25 @@ class NavigationWorkflowGUI:
             "当前仍有任务运行。\n退出 GUI 不会关闭已打开的终端。\n\n确定退出？",
         ):
             return
+        self.shutdown_nav_control_ros()
         self.root.destroy()
+
+    def shutdown_nav_control_ros(self):
+        try:
+            if self.nav_control_executor is not None:
+                self.nav_control_executor.shutdown()
+        except Exception:
+            pass
+        try:
+            if self.nav_control_node is not None:
+                self.nav_control_node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
     def run(self):
         self.root.mainloop()
