@@ -2,6 +2,7 @@
 #include "pure_pursuit_local_planner/param_utils.hpp"
 #include <visualization_msgs/msg/marker.hpp>
 #include <limits>
+#include <tf2/utils.hpp>
 
 namespace pure_pursuit_local_planner
 {
@@ -10,7 +11,20 @@ LocalPathPlanner::LocalPathPlanner()
     : running_(false), global_path_received_(false), costmap_received_(false), 
       local_path_valid_(false), planning_frequency_(1.0), lookahead_distance_(3.0),
       min_lookahead_distance_(1.0), max_lookahead_distance_(5.0), last_goal_index_(-1),
-      path_stability_counter_(0), path_similarity_threshold_(0.8)
+      path_stability_counter_(0), path_similarity_threshold_(0.8),
+      avoidance_active_(false), avoidance_completed_(false),
+      avoidance_skip_current_goal_(false),
+      avoidance_stage_(AvoidanceStage::IDLE),
+      avoidance_side_(AvoidanceSide::NONE),
+      avoidance_lateral_clearance_(0.8),
+      avoidance_obstacle_forward_offset_(0.4),
+      avoidance_return_min_distance_(1.5),
+      avoidance_return_max_distance_(4.0),
+      avoidance_search_step_distance_(0.3),
+      avoidance_goal_tolerance_(0.35),
+      avoidance_return_goal_clearance_(0.8),
+      avoidance_return_obstacle_clearance_(2.0),
+      avoidance_obstacle_threshold_(50.0)
 {
 }
 
@@ -34,6 +48,27 @@ bool LocalPathPlanner::initialize(rclcpp::Node::SharedPtr node,
     global_frame_ = declareOrGetParameter<std::string>(node_, "global_frame", "map");
     robot_frame_ = declareOrGetParameter<std::string>(node_, "robot_frame", "base_link");
     transform_tolerance_ = declareOrGetParameter(node_, "transform_tolerance", 0.1);
+    avoidance_lateral_clearance_ = declareOrGetParameter(node_, "avoidance_lateral_clearance", 0.8);
+    avoidance_obstacle_forward_offset_ = declareOrGetParameter(node_, "avoidance_obstacle_forward_offset", 0.4);
+    avoidance_return_min_distance_ = declareOrGetParameter(node_, "avoidance_return_min_distance", 1.5);
+    avoidance_return_max_distance_ = declareOrGetParameter(node_, "avoidance_return_max_distance", 4.0);
+    avoidance_search_step_distance_ = declareOrGetParameter(node_, "avoidance_search_step_distance", 0.3);
+    avoidance_goal_tolerance_ = declareOrGetParameter(node_, "avoidance_goal_tolerance", 0.35);
+    const double robot_width =
+        declareOrGetParameter(node_, "front_obstacle_detector.robot_width", 0.55);
+    const double robot_length =
+        declareOrGetParameter(node_, "front_obstacle_detector.robot_length", 0.75);
+    const double robot_safety_margin =
+        declareOrGetParameter(node_, "front_obstacle_detector.safety_margin", 0.10);
+    const double default_return_goal_clearance =
+        std::hypot(robot_width * 0.5, robot_length * 0.5) + robot_safety_margin;
+    avoidance_return_goal_clearance_ = declareOrGetParameter(
+        node_, "avoidance_return_goal_clearance",
+        default_return_goal_clearance);
+    avoidance_return_obstacle_clearance_ = declareOrGetParameter(
+        node_, "avoidance_return_obstacle_clearance", 2.0);
+    avoidance_obstacle_threshold_ = static_cast<double>(
+        declareOrGetParameter(node_, "front_obstacle_detector.obstacle_threshold", 50));
     
     // 初始化A*规划器
     astar_planner_ = std::make_unique<AStarPlanner>();
@@ -52,6 +87,13 @@ bool LocalPathPlanner::initialize(rclcpp::Node::SharedPtr node,
     planning_thread_ = std::thread(&LocalPathPlanner::planningLoop, this);
     
     RCLCPP_INFO(node_->get_logger(), "Local Path Planner initialized with frequency: %.1f Hz", planning_frequency_);
+    RCLCPP_INFO(node_->get_logger(),
+                "Obstacle-based avoidance: clearance=%.2f, forward_offset=%.2f, return=[%.2f, %.2f], step=%.2f, tolerance=%.2f, return_goal_clearance=%.2f, return_obstacle_clearance=%.2f",
+                avoidance_lateral_clearance_, avoidance_obstacle_forward_offset_,
+                avoidance_return_min_distance_, avoidance_return_max_distance_,
+                avoidance_search_step_distance_, avoidance_goal_tolerance_,
+                avoidance_return_goal_clearance_,
+                avoidance_return_obstacle_clearance_);
     return true;
 }
 
@@ -100,6 +142,100 @@ bool LocalPathPlanner::hasValidLocalPath() const
     return local_path_valid_;
 }
 
+bool LocalPathPlanner::startAvoidance(
+    const geometry_msgs::msg::PoseStamped& robot_pose,
+    const geometry_msgs::msg::Point& obstacle_center,
+    AvoidanceSide side)
+{
+    if (side == AvoidanceSide::NONE)
+    {
+        return false;
+    }
+
+    geometry_msgs::msg::Point side_goal;
+    if (!buildAvoidanceSideGoal(robot_pose, obstacle_center, side, side_goal))
+    {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+        avoidance_active_ = false;
+        avoidance_completed_ = false;
+        avoidance_skip_current_goal_ = false;
+        avoidance_stage_ = AvoidanceStage::FAILED;
+        avoidance_side_ = side;
+        avoidance_obstacle_center_ = obstacle_center;
+        local_path_valid_ = false;
+        RCLCPP_WARN(node_->get_logger(),
+                    "[AVOID_PLAN] Failed to build obstacle-based side goal");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+        avoidance_active_ = true;
+        avoidance_completed_ = false;
+        avoidance_skip_current_goal_ = false;
+        avoidance_stage_ = AvoidanceStage::SIDE_GOAL;
+        avoidance_side_ = side;
+        avoidance_obstacle_center_ = obstacle_center;
+        avoidance_side_goal_ = side_goal;
+        avoidance_return_goal_ = geometry_msgs::msg::Point();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(path_mutex_);
+        local_path_valid_ = false;
+        local_path_.poses.clear();
+        previous_local_path_.poses.clear();
+    }
+    path_stability_counter_ = 0;
+
+    RCLCPP_WARN(node_->get_logger(),
+                "[AVOID_PLAN] Started %s avoidance: obstacle=(%.3f, %.3f), side_goal=(%.3f, %.3f)",
+                avoidanceSideToString(side), obstacle_center.x,
+                obstacle_center.y, side_goal.x, side_goal.y);
+    return true;
+}
+
+void LocalPathPlanner::resetAvoidance()
+{
+    std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
+    avoidance_active_ = false;
+    avoidance_completed_ = false;
+    avoidance_skip_current_goal_ = false;
+    avoidance_stage_ = AvoidanceStage::IDLE;
+    avoidance_side_ = AvoidanceSide::NONE;
+    avoidance_obstacle_center_ = geometry_msgs::msg::Point();
+
+    std::lock_guard<std::mutex> path_lock(path_mutex_);
+    local_path_valid_ = false;
+    local_path_.poses.clear();
+    previous_local_path_.poses.clear();
+    path_stability_counter_ = 0;
+}
+
+bool LocalPathPlanner::isAvoidanceActive() const
+{
+    std::lock_guard<std::mutex> lock(avoidance_mutex_);
+    return avoidance_active_;
+}
+
+bool LocalPathPlanner::isAvoidanceCompleted() const
+{
+    std::lock_guard<std::mutex> lock(avoidance_mutex_);
+    return avoidance_completed_;
+}
+
+bool LocalPathPlanner::isAvoidanceFailed() const
+{
+    std::lock_guard<std::mutex> lock(avoidance_mutex_);
+    return avoidance_stage_ == AvoidanceStage::FAILED;
+}
+
+bool LocalPathPlanner::shouldSkipCurrentGoal() const
+{
+    std::lock_guard<std::mutex> lock(avoidance_mutex_);
+    return avoidance_skip_current_goal_;
+}
+
 void LocalPathPlanner::stop()
 {
     running_ = false;
@@ -136,6 +272,33 @@ bool LocalPathPlanner::computeLocalPath()
         local_path_valid_ = false;
         return false;
     }
+
+    {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+        if (!avoidance_active_)
+        {
+            bool should_publish_empty = false;
+            {
+                std::lock_guard<std::mutex> path_lock(path_mutex_);
+                should_publish_empty = local_path_valid_ ||
+                                       !local_path_.poses.empty() ||
+                                       !previous_local_path_.poses.empty();
+                local_path_valid_ = false;
+                local_path_.poses.clear();
+                previous_local_path_.poses.clear();
+            }
+
+            if (should_publish_empty && local_path_pub_)
+            {
+                nav_msgs::msg::Path empty_path;
+                empty_path.header.frame_id = global_frame_;
+                empty_path.header.stamp = node_->now();
+                local_path_pub_->publish(empty_path);
+            }
+
+            return false;
+        }
+    }
     
     // 获取机器人当前位姿
     geometry_msgs::msg::PoseStamped robot_pose;
@@ -158,11 +321,157 @@ bool LocalPathPlanner::computeLocalPath()
         return false;
     }
     
-    // 查找目标点A
-    geometry_msgs::msg::Point goal_point = findGoalPoint(robot_pose);
+    geometry_msgs::msg::Point goal_point;
+    bool using_avoidance_goal = false;
+    {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+
+        if (avoidance_active_ && avoidance_stage_ == AvoidanceStage::SIDE_GOAL)
+        {
+            const double side_goal_distance =
+                calculateDistance(robot_pose.pose.position, avoidance_side_goal_);
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 500,
+                "[AVOID_PROGRESS] stage=SIDE_GOAL, robot=(%.3f, %.3f), "
+                "side_goal=(%.3f, %.3f), dist=%.3f, tolerance=%.3f",
+                robot_pose.pose.position.x, robot_pose.pose.position.y,
+                avoidance_side_goal_.x, avoidance_side_goal_.y,
+                side_goal_distance, avoidance_goal_tolerance_);
+
+            if (side_goal_distance <= avoidance_goal_tolerance_)
+            {
+                geometry_msgs::msg::Point return_goal;
+                const int closest_index = findClosestPointOnGlobalPath(robot_pose);
+                if (closest_index < 0 ||
+                    !buildReturnGoalFromPoint(robot_pose.pose.position,
+                                              closest_index, return_goal))
+                {
+                    avoidance_active_ = false;
+                    avoidance_completed_ = true;
+                    avoidance_skip_current_goal_ = true;
+                    avoidance_stage_ = AvoidanceStage::COMPLETED;
+                    {
+                        std::lock_guard<std::mutex> path_lock(path_mutex_);
+                        local_path_valid_ = false;
+                        local_path_.poses.clear();
+                        previous_local_path_.poses.clear();
+                    }
+                    RCLCPP_WARN(node_->get_logger(),
+                                "[AVOID_PLAN] Side goal reached, no reachable forward path point; avoidance completed");
+                    return false;
+                }
+
+                avoidance_return_goal_ = return_goal;
+                avoidance_skip_current_goal_ = false;
+                avoidance_stage_ = AvoidanceStage::RETURN_GOAL;
+                {
+                    std::lock_guard<std::mutex> path_lock(path_mutex_);
+                    local_path_valid_ = false;
+                    local_path_.poses.clear();
+                    previous_local_path_.poses.clear();
+                }
+                path_stability_counter_ = 0;
+                RCLCPP_WARN(node_->get_logger(),
+                            "[AVOID_PLAN] Side goal reached, switching to return goal=(%.3f, %.3f)",
+                            avoidance_return_goal_.x, avoidance_return_goal_.y);
+            }
+        }
+
+        if (avoidance_active_ && avoidance_stage_ == AvoidanceStage::RETURN_GOAL)
+        {
+            const double return_goal_distance =
+                calculateDistance(robot_pose.pose.position, avoidance_return_goal_);
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 500,
+                "[AVOID_PROGRESS] stage=RETURN_GOAL, robot=(%.3f, %.3f), "
+                "return_goal=(%.3f, %.3f), dist=%.3f, tolerance=%.3f",
+                robot_pose.pose.position.x, robot_pose.pose.position.y,
+                avoidance_return_goal_.x, avoidance_return_goal_.y,
+                return_goal_distance, avoidance_goal_tolerance_);
+
+            if (return_goal_distance <= avoidance_goal_tolerance_)
+            {
+                avoidance_active_ = false;
+                avoidance_completed_ = true;
+                avoidance_skip_current_goal_ = false;
+                avoidance_stage_ = AvoidanceStage::COMPLETED;
+                {
+                    std::lock_guard<std::mutex> path_lock(path_mutex_);
+                    local_path_valid_ = false;
+                    local_path_.poses.clear();
+                    previous_local_path_.poses.clear();
+                }
+                RCLCPP_WARN(node_->get_logger(),
+                            "[AVOID_PLAN] Return goal reached, avoidance completed");
+                return false;
+            }
+        }
+
+        if (avoidance_active_ && avoidance_stage_ == AvoidanceStage::SIDE_GOAL)
+        {
+            goal_point = avoidance_side_goal_;
+            using_avoidance_goal = true;
+        }
+        else if (avoidance_active_ && avoidance_stage_ == AvoidanceStage::RETURN_GOAL)
+        {
+            goal_point = avoidance_return_goal_;
+            using_avoidance_goal = true;
+        }
+    }
+
+    if (!using_avoidance_goal)
+    {
+        std::lock_guard<std::mutex> path_lock(path_mutex_);
+        local_path_valid_ = false;
+        local_path_.poses.clear();
+        previous_local_path_.poses.clear();
+        return false;
+    }
+
+    auto get_costmap_cost = [this](const geometry_msgs::msg::Point& point) -> int {
+        if (!costmap_received_ || costmap_.info.resolution <= 0.0)
+        {
+            return -999;
+        }
+
+        const int grid_x = static_cast<int>(
+            (point.x - costmap_.info.origin.position.x) / costmap_.info.resolution);
+        const int grid_y = static_cast<int>(
+            (point.y - costmap_.info.origin.position.y) / costmap_.info.resolution);
+
+        if (grid_x < 0 || grid_y < 0 ||
+            grid_x >= static_cast<int>(costmap_.info.width) ||
+            grid_y >= static_cast<int>(costmap_.info.height))
+        {
+            return -998;
+        }
+
+        const int index =
+            grid_y * static_cast<int>(costmap_.info.width) + grid_x;
+        if (index < 0 || index >= static_cast<int>(costmap_.data.size()))
+        {
+            return -997;
+        }
+
+        return static_cast<int>(costmap_.data[index]);
+    };
+
+    const bool start_in_obstacle = isPointInObstacle(robot_pose.pose.position);
+    const bool goal_in_obstacle = isPointInObstacle(goal_point);
+    const int start_cost = get_costmap_cost(robot_pose.pose.position);
+    const int goal_cost = get_costmap_cost(goal_point);
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "[LOCAL_PLAN_DEBUG] mode=%s, robot=(%.3f, %.3f), goal=(%.3f, %.3f), "
+        "start_obstacle=%d, goal_obstacle=%d, start_cost=%d, goal_cost=%d",
+        using_avoidance_goal ? "AVOIDANCE" : "GLOBAL_LOOKAHEAD",
+        robot_pose.pose.position.x, robot_pose.pose.position.y,
+        goal_point.x, goal_point.y,
+        start_in_obstacle ? 1 : 0, goal_in_obstacle ? 1 : 0,
+        start_cost, goal_cost);
     
     // 检查目标点是否在障碍物中
-    if (isPointInObstacle(goal_point))
+    if (goal_in_obstacle)
     {
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000, "Goal point is in obstacle, local path planning failed");
         local_path_valid_ = false;
@@ -188,14 +497,15 @@ bool LocalPathPlanner::computeLocalPath()
             return local_path_valid_;
         }
         
-        // 如果路径差异较大，采用新路径并进行平滑处理
-        nav_msgs::msg::Path smoothed_path = smoothPath(new_local_path);
+        // 绕障路径很短且贴近障碍物，简单移动平均会把折角拉偏，甚至把点拉回障碍附近。
+        // 这里直接使用 A* 原始路径，保证可视化和跟踪都忠实于栅格规划结果。
+        nav_msgs::msg::Path planned_path = new_local_path;
         
         // 更新局部路径
         {
             std::lock_guard<std::mutex> lock(path_mutex_);
             previous_local_path_ = local_path_;  // 保存之前的路径
-            local_path_ = smoothed_path;
+            local_path_ = planned_path;
             local_path_valid_ = true;
         }
         
@@ -203,11 +513,11 @@ bool LocalPathPlanner::computeLocalPath()
         path_stability_counter_ = 0;
         
         // 发布局部路径和可视化
-        local_path_pub_->publish(smoothed_path);
+        local_path_pub_->publish(planned_path);
         publishGoalMarker(goal_point);
-        astar_planner_->publishVisualization(robot_pose.pose.position, goal_point, smoothed_path);
+        astar_planner_->publishVisualization(robot_pose.pose.position, goal_point, planned_path);
         
-        RCLCPP_DEBUG(node_->get_logger(), "Local path computed successfully with %zu poses", smoothed_path.poses.size());
+        RCLCPP_DEBUG(node_->get_logger(), "Local path computed successfully with %zu poses", planned_path.poses.size());
         return true;
     }
     else
@@ -357,6 +667,273 @@ geometry_msgs::msg::Point LocalPathPlanner::findGoalPoint(const geometry_msgs::m
     return goal_point;
 }
 
+bool LocalPathPlanner::buildAvoidanceSideGoal(
+    const geometry_msgs::msg::PoseStamped& robot_pose,
+    const geometry_msgs::msg::Point& obstacle_center,
+    AvoidanceSide side,
+    geometry_msgs::msg::Point& side_goal)
+{
+    if (!astar_planner_ || !global_path_received_ || !costmap_received_)
+    {
+        return false;
+    }
+
+    nav_msgs::msg::Path global_path_copy;
+    {
+        std::lock_guard<std::mutex> lock(global_path_mutex_);
+        global_path_copy = global_path_;
+    }
+
+    if (global_path_copy.poses.size() < 2)
+    {
+        return false;
+    }
+
+    int closest_index = findClosestPointOnGlobalPath(robot_pose);
+    if (closest_index < 0)
+    {
+        closest_index = 0;
+    }
+
+    double path_yaw = 0.0;
+    if (!getPathYawAtIndex(global_path_copy, closest_index, path_yaw))
+    {
+        path_yaw = tf2::getYaw(robot_pose.pose.orientation);
+    }
+
+    const double side_sign = (side == AvoidanceSide::LEFT) ? 1.0 : -1.0;
+    const double path_x = std::cos(path_yaw);
+    const double path_y = std::sin(path_yaw);
+    const double normal_x = -std::sin(path_yaw) * side_sign;
+    const double normal_y = std::cos(path_yaw) * side_sign;
+
+    const double base_clearance = std::max(0.2, avoidance_lateral_clearance_);
+    const double base_forward =
+        std::max(0.0, avoidance_obstacle_forward_offset_);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        const double clearance = base_clearance + 0.2 * i;
+        geometry_msgs::msg::Point candidate_side;
+        candidate_side.x = obstacle_center.x + path_x * base_forward +
+                           normal_x * clearance;
+        candidate_side.y = obstacle_center.y + path_y * base_forward +
+                           normal_y * clearance;
+        candidate_side.z = obstacle_center.z;
+
+        if (isPointInObstacle(candidate_side))
+        {
+            continue;
+        }
+
+        nav_msgs::msg::Path side_path;
+        if (!astar_planner_->planPath(robot_pose.pose.position,
+                                      candidate_side, side_path) ||
+            side_path.poses.empty())
+        {
+            continue;
+        }
+
+        side_goal = candidate_side;
+        const double side_dx = side_goal.x - robot_pose.pose.position.x;
+        const double side_dy = side_goal.y - robot_pose.pose.position.y;
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "[AVOID_PLAN] selected side=%s obstacle=(%.3f, %.3f), path_yaw=%.1f deg, side_yaw=%.1f deg, side_goal=(%.3f, %.3f)",
+            avoidanceSideToString(side), obstacle_center.x, obstacle_center.y,
+            path_yaw * 180.0 / M_PI,
+            std::atan2(side_dy, side_dx) * 180.0 / M_PI,
+            side_goal.x, side_goal.y);
+        return true;
+    }
+
+    return false;
+}
+
+bool LocalPathPlanner::buildReturnGoalFromPoint(
+    const geometry_msgs::msg::Point& start_point,
+    int closest_index,
+    geometry_msgs::msg::Point& return_goal)
+{
+    nav_msgs::msg::Path global_path_copy;
+    {
+        std::lock_guard<std::mutex> lock(global_path_mutex_);
+        global_path_copy = global_path_;
+    }
+
+    if (closest_index < 0 ||
+        closest_index >= static_cast<int>(global_path_copy.poses.size()))
+    {
+        return false;
+    }
+
+    auto try_return_candidate =
+        [this, &start_point, &return_goal](
+            const geometry_msgs::msg::Point& candidate_return) -> bool {
+            const double obstacle_distance =
+                calculateDistance(candidate_return, avoidance_obstacle_center_);
+            if (obstacle_distance < avoidance_return_obstacle_clearance_)
+            {
+                RCLCPP_WARN(
+                    node_->get_logger(),
+                    "[AVOID_PLAN] reject return goal=(%.3f, %.3f): too close to obstacle center=(%.3f, %.3f), dist=%.2fm < %.2fm",
+                    candidate_return.x, candidate_return.y,
+                    avoidance_obstacle_center_.x, avoidance_obstacle_center_.y,
+                    obstacle_distance, avoidance_return_obstacle_clearance_);
+                return false;
+            }
+
+            if (isPointInObstacle(candidate_return))
+            {
+                return false;
+            }
+
+            if (!isPointSafeForRobot(candidate_return,
+                                     avoidance_return_goal_clearance_))
+            {
+                RCLCPP_WARN(
+                    node_->get_logger(),
+                    "[AVOID_PLAN] reject return goal=(%.3f, %.3f): obstacle within robot clearance %.2fm",
+                    candidate_return.x, candidate_return.y,
+                    avoidance_return_goal_clearance_);
+                return false;
+            }
+
+            nav_msgs::msg::Path return_path;
+            if (!astar_planner_->planPath(start_point, candidate_return,
+                                          return_path) ||
+                return_path.poses.empty())
+            {
+                return false;
+            }
+
+            return_goal = candidate_return;
+            return true;
+        };
+
+    for (int candidate_index = closest_index + 1;
+         candidate_index < static_cast<int>(global_path_copy.poses.size());
+         ++candidate_index)
+    {
+        geometry_msgs::msg::Point candidate_return =
+            global_path_copy.poses[candidate_index].pose.position;
+        if (!try_return_candidate(candidate_return))
+        {
+            continue;
+        }
+
+        RCLCPP_WARN(node_->get_logger(),
+                    "[AVOID_PLAN] return goal idx=%d forward path point: (%.3f, %.3f)",
+                    candidate_index,
+                    return_goal.x, return_goal.y);
+        return true;
+    }
+
+    const int target_index = static_cast<int>(global_path_copy.poses.size()) - 1;
+    const geometry_msgs::msg::Point target_goal =
+        global_path_copy.poses[target_index].pose.position;
+    if (try_return_candidate(target_goal))
+    {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[AVOID_PLAN] return goal idx=%d target point fallback: (%.3f, %.3f)",
+                    target_index, return_goal.x, return_goal.y);
+        return true;
+    }
+
+    return false;
+}
+
+bool LocalPathPlanner::findGlobalPathPointAhead(
+    const nav_msgs::msg::Path& path,
+    int closest_index,
+    double target_distance,
+    int& goal_index)
+{
+    if (path.poses.empty() || closest_index < 0 ||
+        closest_index >= static_cast<int>(path.poses.size()))
+    {
+        return false;
+    }
+
+    double accumulated_distance = 0.0;
+    goal_index = closest_index;
+    for (size_t i = static_cast<size_t>(closest_index);
+         i + 1 < path.poses.size(); ++i)
+    {
+        accumulated_distance += calculateDistance(
+            path.poses[i].pose.position, path.poses[i + 1].pose.position);
+        goal_index = static_cast<int>(i + 1);
+        if (accumulated_distance >= target_distance)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool LocalPathPlanner::getPathYawAtIndex(
+    const nav_msgs::msg::Path& path,
+    int index,
+    double& yaw) const
+{
+    if (path.poses.size() < 2 || index < 0 ||
+        index >= static_cast<int>(path.poses.size()))
+    {
+        return false;
+    }
+
+    int prev_index = std::max(0, index - 1);
+    int next_index = std::min(static_cast<int>(path.poses.size()) - 1,
+                              index + 1);
+    if (prev_index == next_index)
+    {
+        return false;
+    }
+
+    const auto& p0 = path.poses[prev_index].pose.position;
+    const auto& p1 = path.poses[next_index].pose.position;
+    const double dx = p1.x - p0.x;
+    const double dy = p1.y - p0.y;
+    if (std::hypot(dx, dy) < 1e-6)
+    {
+        return false;
+    }
+
+    yaw = std::atan2(dy, dx);
+    return true;
+}
+
+const char* LocalPathPlanner::avoidanceSideToString(AvoidanceSide side) const
+{
+    switch (side)
+    {
+        case AvoidanceSide::LEFT:
+            return "LEFT";
+        case AvoidanceSide::RIGHT:
+            return "RIGHT";
+        default:
+            return "NONE";
+    }
+}
+
+const char* LocalPathPlanner::avoidanceStageToString(AvoidanceStage stage) const
+{
+    switch (stage)
+    {
+        case AvoidanceStage::SIDE_GOAL:
+            return "SIDE_GOAL";
+        case AvoidanceStage::RETURN_GOAL:
+            return "RETURN_GOAL";
+        case AvoidanceStage::COMPLETED:
+            return "COMPLETED";
+        case AvoidanceStage::FAILED:
+            return "FAILED";
+        default:
+            return "IDLE";
+    }
+}
+
 int LocalPathPlanner::findClosestPointOnGlobalPath(const geometry_msgs::msg::PoseStamped& robot_pose)
 {
     // 复制全局路径（线程安全）
@@ -388,6 +965,70 @@ bool LocalPathPlanner::isPointInObstacle(const geometry_msgs::msg::Point& point)
         return true;
     
     return astar_planner_->isObstacle(point);
+}
+
+bool LocalPathPlanner::isPointSafeForRobot(
+    const geometry_msgs::msg::Point& point,
+    double clearance_radius) const
+{
+    std::lock_guard<std::mutex> lock(costmap_mutex_);
+    if (!costmap_received_ || costmap_.info.resolution <= 0.0 ||
+        costmap_.data.empty())
+    {
+        return false;
+    }
+
+    const double resolution = costmap_.info.resolution;
+    const int center_x = static_cast<int>(
+        (point.x - costmap_.info.origin.position.x) / resolution);
+    const int center_y = static_cast<int>(
+        (point.y - costmap_.info.origin.position.y) / resolution);
+    const int width = static_cast<int>(costmap_.info.width);
+    const int height = static_cast<int>(costmap_.info.height);
+    if (center_x < 0 || center_y < 0 || center_x >= width ||
+        center_y >= height)
+    {
+        return false;
+    }
+
+    const int radius_cells =
+        std::max(1, static_cast<int>(std::ceil(clearance_radius / resolution)));
+    for (int dy = -radius_cells; dy <= radius_cells; ++dy)
+    {
+        for (int dx = -radius_cells; dx <= radius_cells; ++dx)
+        {
+            const double cell_distance =
+                std::hypot(static_cast<double>(dx),
+                           static_cast<double>(dy)) *
+                resolution;
+            if (cell_distance > clearance_radius)
+            {
+                continue;
+            }
+
+            const int grid_x = center_x + dx;
+            const int grid_y = center_y + dy;
+            if (grid_x < 0 || grid_y < 0 || grid_x >= width ||
+                grid_y >= height)
+            {
+                return false;
+            }
+
+            const int index = grid_y * width + grid_x;
+            if (index < 0 || index >= static_cast<int>(costmap_.data.size()))
+            {
+                return false;
+            }
+
+            const int cost = costmap_.data[index];
+            if (cost < 0 || cost >= avoidance_obstacle_threshold_)
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 double LocalPathPlanner::calculateDistance(const geometry_msgs::msg::Point& p1, 

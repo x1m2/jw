@@ -23,6 +23,20 @@ namespace pure_pursuit_local_planner
 class LocalPathPlanner
 {
 public:
+    enum class AvoidanceSide {
+        NONE,
+        LEFT,
+        RIGHT
+    };
+
+    enum class AvoidanceStage {
+        IDLE,
+        SIDE_GOAL,
+        RETURN_GOAL,
+        COMPLETED,
+        FAILED
+    };
+
     LocalPathPlanner();
     ~LocalPathPlanner();
     
@@ -41,6 +55,15 @@ public:
     
     // 检查是否有有效的局部路径
     bool hasValidLocalPath() const;
+
+    bool startAvoidance(const geometry_msgs::msg::PoseStamped& robot_pose,
+                        const geometry_msgs::msg::Point& obstacle_center,
+                        AvoidanceSide side);
+    void resetAvoidance();
+    bool isAvoidanceActive() const;
+    bool isAvoidanceCompleted() const;
+    bool isAvoidanceFailed() const;
+    bool shouldSkipCurrentGoal() const;
     
     // 停止规划器
     void stop();
@@ -63,6 +86,7 @@ private:
     mutable std::mutex path_mutex_;
     mutable std::mutex costmap_mutex_;
     mutable std::mutex global_path_mutex_;
+    mutable std::mutex avoidance_mutex_;
     
     // 数据
     nav_msgs::msg::Path global_path_;
@@ -86,6 +110,25 @@ private:
     std::string global_frame_;       // 全局坐标系
     std::string robot_frame_;        // 机器人坐标系
     double transform_tolerance_;     // TF变换容忍度
+
+    // 基于障碍物中心的两阶段绕障状态
+    bool avoidance_active_;
+    bool avoidance_completed_;
+    bool avoidance_skip_current_goal_;
+    AvoidanceStage avoidance_stage_;
+    AvoidanceSide avoidance_side_;
+    geometry_msgs::msg::Point avoidance_obstacle_center_;
+    geometry_msgs::msg::Point avoidance_side_goal_;
+    geometry_msgs::msg::Point avoidance_return_goal_;
+    double avoidance_lateral_clearance_;
+    double avoidance_obstacle_forward_offset_;
+    double avoidance_return_min_distance_;
+    double avoidance_return_max_distance_;
+    double avoidance_search_step_distance_;
+    double avoidance_goal_tolerance_;
+    double avoidance_return_goal_clearance_;
+    double avoidance_return_obstacle_clearance_;
+    double avoidance_obstacle_threshold_;
     
     // 主要函数
     void planningLoop();
@@ -94,8 +137,26 @@ private:
     // 辅助函数
     bool getRobotPose(geometry_msgs::msg::PoseStamped& robot_pose);
     geometry_msgs::msg::Point findGoalPoint(const geometry_msgs::msg::PoseStamped& robot_pose);
+    bool buildAvoidanceSideGoal(const geometry_msgs::msg::PoseStamped& robot_pose,
+                                const geometry_msgs::msg::Point& obstacle_center,
+                                AvoidanceSide side,
+                                geometry_msgs::msg::Point& side_goal);
+    bool buildReturnGoalFromPoint(const geometry_msgs::msg::Point& start_point,
+                                  int closest_index,
+                                  geometry_msgs::msg::Point& return_goal);
+    bool findGlobalPathPointAhead(const nav_msgs::msg::Path& path,
+                                  int closest_index,
+                                  double target_distance,
+                                  int& goal_index);
+    bool getPathYawAtIndex(const nav_msgs::msg::Path& path,
+                           int index,
+                           double& yaw) const;
+    const char* avoidanceSideToString(AvoidanceSide side) const;
+    const char* avoidanceStageToString(AvoidanceStage stage) const;
     int findClosestPointOnGlobalPath(const geometry_msgs::msg::PoseStamped& robot_pose);
     bool isPointInObstacle(const geometry_msgs::msg::Point& point);
+    bool isPointSafeForRobot(const geometry_msgs::msg::Point& point,
+                             double clearance_radius) const;
     double calculateDistance(const geometry_msgs::msg::Point& p1, const geometry_msgs::msg::Point& p2);
     
     // 新增的路径分析函数

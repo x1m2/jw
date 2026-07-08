@@ -68,25 +68,63 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point& start,
     int start_x, start_y, goal_x, goal_y;
     worldToGrid(start, start_x, start_y);
     worldToGrid(goal, goal_x, goal_y);
+
+    auto get_cell_cost = [this](int grid_x, int grid_y) -> int {
+        if (!isValidCell(grid_x, grid_y))
+        {
+            return -998;
+        }
+
+        const int index =
+            grid_y * static_cast<int>(costmap_.info.width) + grid_x;
+        if (index < 0 || index >= static_cast<int>(costmap_.data.size()))
+        {
+            return -997;
+        }
+
+        return static_cast<int>(costmap_.data[index]);
+    };
+
+    const int start_cost = get_cell_cost(start_x, start_y);
+    const int goal_cost = get_cell_cost(goal_x, goal_y);
+    const bool start_valid = isValidCell(start_x, start_y);
+    const bool goal_valid = isValidCell(goal_x, goal_y);
+
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "[ASTAR_DEBUG] start=(%.3f, %.3f)->(%d, %d), goal=(%.3f, %.3f)->(%d, %d), "
+        "start_valid=%d, goal_valid=%d, start_cost=%d, goal_cost=%d, "
+        "threshold=%.1f, costmap=%ux%u res=%.3f origin=(%.3f, %.3f)",
+        start.x, start.y, start_x, start_y, goal.x, goal.y, goal_x, goal_y,
+        start_valid ? 1 : 0, goal_valid ? 1 : 0, start_cost, goal_cost,
+        obstacle_threshold_, costmap_.info.width, costmap_.info.height,
+        costmap_.info.resolution, costmap_.info.origin.position.x,
+        costmap_.info.origin.position.y);
     
     // 检查起点和终点是否有效
-    if (!isValidCell(start_x, start_y) || !isValidCell(goal_x, goal_y))
+    if (!start_valid || !goal_valid)
     {
-        RCLCPP_WARN(node_->get_logger(), "Start or goal position is invalid");
+        RCLCPP_WARN(node_->get_logger(),
+                    "Start or goal position is invalid: start_valid=%d, goal_valid=%d",
+                    start_valid ? 1 : 0, goal_valid ? 1 : 0);
         return false;
     }
     
     // 对于起点，使用宽松的检查（只检查真正的高代价障碍物）
     if (!isStartPositionValid(start_x, start_y))
     {
-        RCLCPP_WARN(node_->get_logger(), "Start position is in solid obstacle");
+        RCLCPP_WARN(node_->get_logger(),
+                    "Start position is in solid obstacle: grid=(%d, %d), cost=%d",
+                    start_x, start_y, start_cost);
         return false;
     }
     
     // 终点必须完全安全
     if (isObstacle(goal_x, goal_y))
     {
-        RCLCPP_WARN(node_->get_logger(), "Goal position is in obstacle");
+        RCLCPP_WARN(node_->get_logger(),
+                    "Goal position is in obstacle: grid=(%d, %d), cost=%d, threshold=%.1f",
+                    goal_x, goal_y, goal_cost, obstacle_threshold_);
         return false;
     }
 
@@ -110,12 +148,14 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point& start,
     all_nodes[NodeKey(start_x, start_y)] = start_node;
     
     DijkstraNode* goal_node = nullptr;
+    size_t searched_nodes = 0;
     
     while (!open_list.empty())
     {
         // 获取代价最小的节点
         DijkstraNode* current = open_list.top();
         open_list.pop();
+        ++searched_nodes;
         
         // 检查是否到达目标
         if (current->x == goal_x && current->y == goal_y)
@@ -197,7 +237,9 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point& start,
     }
     else
     {
-        RCLCPP_WARN(node_->get_logger(), "Dijkstra path planning failed");
+        RCLCPP_WARN(node_->get_logger(),
+                    "Dijkstra path planning failed: searched_nodes=%zu, visited_nodes=%zu",
+                    searched_nodes, visited.size());
     }
     
     // 清理内存

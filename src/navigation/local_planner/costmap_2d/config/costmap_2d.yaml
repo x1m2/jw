@@ -11,9 +11,9 @@ costmap_2d_node:
     height: 400
 
     # 障碍物检测参数
-    max_obstacle_range: 10.0
-    min_obstacle_range: 0.05
-    inflation_radius: 0.38
+    max_obstacle_range: 8.0
+    min_obstacle_range: 0.35
+    inflation_radius: 0.25
 
     # 俯仰角检测参数
     enable_pitch_detection: true

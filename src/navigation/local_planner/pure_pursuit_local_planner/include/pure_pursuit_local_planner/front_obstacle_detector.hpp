@@ -3,7 +3,9 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <memory>
+#include <mutex>
 #include <nav_msgs/msg/occupancy_grid.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -12,6 +14,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/utils.hpp>
 #include <tf2/time.h>
+#include <vector>
 
 namespace pure_pursuit_local_planner
 {
@@ -19,6 +22,22 @@ namespace pure_pursuit_local_planner
 class FrontObstacleDetector
 {
 public:
+    enum class ObstacleDecision {
+        CLEAR,
+        AVOIDABLE,
+        BLOCKED,
+        HARD_STOP
+    };
+
+    struct AvoidanceInfo {
+        ObstacleDecision decision = ObstacleDecision::CLEAR;
+        geometry_msgs::msg::Point obstacle_center;
+        geometry_msgs::msg::Point closest_obstacle;
+        double obstacle_distance = 0.0;
+        bool left_clear = false;
+        bool right_clear = false;
+    };
+
     FrontObstacleDetector();
     ~FrontObstacleDetector();
 
@@ -37,6 +56,11 @@ public:
     void updateCostmap(const nav_msgs::msg::OccupancyGrid& costmap);
 
     /**
+     * @brief 更新当前全局路径，用于过滤路径外的绕障候选障碍。
+     */
+    void setGlobalPath(const nav_msgs::msg::Path& global_path);
+
+    /**
      * @brief 检测前方障碍物并调整速度
      * @param cmd_vel 输入速度指令
      * @param robot_pose 机器人当前位姿
@@ -44,6 +68,11 @@ public:
      */
     geometry_msgs::msg::Twist adjustVelocityForObstacles(const geometry_msgs::msg::Twist& cmd_vel,
                                                     const geometry_msgs::msg::PoseStamped& robot_pose);
+
+    /**
+     * @brief 绕障决策：检测障碍物中心、左右通道和硬停障状态
+     */
+    AvoidanceInfo analyzeAvoidance(const geometry_msgs::msg::PoseStamped& robot_pose);
 
     /**
      * @brief 发布检测区域可视化
@@ -93,6 +122,25 @@ private:
      */
     bool detectObstacleInSectorArea(const geometry_msgs::msg::PoseStamped& robot_pose);
 
+    bool detectObstacleInRectLocal(const geometry_msgs::msg::PoseStamped& robot_pose,
+                                   double x_min, double x_max,
+                                   double y_min, double y_max);
+    bool findObstacleInSectorLocal(const geometry_msgs::msg::PoseStamped& robot_pose,
+                                   double min_radius, double max_radius,
+                                   double angle_deg,
+                                   AvoidanceInfo& info);
+    bool isPassageClear(const geometry_msgs::msg::PoseStamped& robot_pose,
+                        bool check_left);
+    bool isPointInPathCorridor(const geometry_msgs::msg::PoseStamped& robot_pose,
+                               double world_x, double world_y) const;
+    double pointToSegmentDistance(double px, double py,
+                                  const geometry_msgs::msg::Point& a,
+                                  const geometry_msgs::msg::Point& b) const;
+    bool isPointInSectorLocal(double local_x, double local_y,
+                              double min_radius, double max_radius,
+                              double angle_deg) const;
+    const char* decisionToString(ObstacleDecision decision) const;
+
     /**
      * @brief 生成扇形检测区域的边界点
      * @param robot_pose 机器人位姿
@@ -120,6 +168,9 @@ private:
     // 代价地图
     nav_msgs::msg::OccupancyGrid costmap_;
     bool has_costmap_;
+    nav_msgs::msg::Path global_path_;
+    bool has_global_path_;
+    mutable std::mutex global_path_mutex_;
 
     // 参数
     double detection_width_;     // 检测区域宽度 (m)
@@ -130,6 +181,19 @@ private:
     double linear_velocity_factor_;  // 线速度衰减因子
     double angular_velocity_factor_; // 角速度增强因子
     std::string detection_shape_;    // 检测形状 ("rectangle" 或 "sector")
+
+    double obstacle_ratio_threshold_; // 障碍物占比触发阈值
+    double robot_width_;              // 车体宽度
+    double robot_length_;             // 车体长度
+    double safety_margin_;            // 车体外扩安全边距
+    double hard_stop_distance_;       // 车头前缘向前的强制停车检测距离
+    double avoid_min_distance_;       // 绕障检测起始距离
+    double avoid_max_distance_;       // 绕障检测最大距离
+    double avoid_sector_angle_;       // 绕障检测扇形角度
+    double side_passage_width_;       // 左右通道检测宽度
+    bool enable_path_corridor_filter_; // 是否只处理全局路径走廊内的绕障障碍
+    double path_obstacle_margin_;      // 路径走廊额外安全边距
+    double path_check_distance_;       // 机器人前方参与绕障判断的路径长度
     
     // 调试和可视化
     bool debug_mode_;

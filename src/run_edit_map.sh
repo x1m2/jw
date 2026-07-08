@@ -135,6 +135,7 @@ generate_task_file
 # ==================================================
 TOPOLOGY_CONNECT_PID=""
 PCD2PGM_PID=""
+TOPOLOGY_TOOL_PID=""
 CLEANING=0
 
 cleanup() {
@@ -155,8 +156,13 @@ cleanup() {
         kill_process_group_safe "${PCD2PGM_PID}" "pcd2pgm"
     fi
 
+    if [ -n "${TOPOLOGY_TOOL_PID}" ]; then
+        kill_process_group_safe "${TOPOLOGY_TOOL_PID}" "topology_tool"
+    fi
+
     TOPOLOGY_CONNECT_PID=""
     PCD2PGM_PID=""
+    TOPOLOGY_TOOL_PID=""
     wait 2>/dev/null || true
 
     info "地图编辑流程已结束"
@@ -225,8 +231,13 @@ info "topology_connect 连边完成"
 # ==================================================
 info "启动 topology_tool，关闭 RViz 后自动结束地图编辑..."
 
-ros2 launch topology_rviz_plugin topology_tool.launch.py \
-    > "${TOPOLOGY_TOOL_LOG_FILE}" 2>&1
+setsid ros2 launch topology_rviz_plugin topology_tool.launch.py \
+    > "${TOPOLOGY_TOOL_LOG_FILE}" 2>&1 &
+
+TOPOLOGY_TOOL_PID=$!
+
+wait "${TOPOLOGY_TOOL_PID}" || true
+TOPOLOGY_TOOL_PID=""
 
 info "topology_tool 已退出"
 

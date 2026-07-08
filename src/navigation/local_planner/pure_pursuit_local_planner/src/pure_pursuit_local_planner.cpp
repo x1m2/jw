@@ -7,17 +7,21 @@
 namespace pure_pursuit_local_planner {
 
 PurePursuitLocalPlanner::PurePursuitLocalPlanner()
-    : path_received_(false),
+    : smoothed_local_path_received_(false),
+      path_received_(false),
       goal_reached_(false),
       goal_position_reached_(false),
-      current_path_index_(0),
-      has_valid_lookahead_(false),
-      path_progress_index_(0),
-      smoothed_local_path_received_(false),
       yaw_adjusting_(false),
+      target_pose_received_(false),
+      current_path_index_(0),
+      path_progress_index_(0),
+      has_valid_lookahead_(false),
       pp_aligning_(false),
       pp_correcting_(false),
-      target_pose_received_(
+      local_replanning_active_(false),
+      local_avoidance_aligning_(false),
+      has_last_avoidance_complete_time_(false),
+      latest_costmap_received_(
           false)  // 新增：路径进度索引，防止回头，平滑局部路径标志，朝向调整标志，目标位姿标志
 {}
 
@@ -134,6 +138,51 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   return true;
 }
 
+bool PurePursuitLocalPlanner::isLocalReplanningEnabled() const {
+  return config_.enable_local_replanning && local_path_planner_ != nullptr;
+}
+
+void PurePursuitLocalPlanner::setLocalReplanningActive(bool active) {
+  if (!isLocalReplanningEnabled()) {
+    local_replanning_active_ = false;
+    smoothed_local_path_received_ = false;
+    return;
+  }
+
+  if (local_replanning_active_ == active) {
+    return;
+  }
+
+  local_replanning_active_ = active;
+  if (!active) {
+    smoothed_local_path_received_ = false;
+    local_avoidance_aligning_ = false;
+    pp_aligning_ = false;
+    pp_correcting_ = false;
+    if (local_path_planner_) {
+      local_path_planner_->resetAvoidance();
+    }
+    RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                         "[OBSTACLE_REPLAN] inactive, tracking global path");
+    return;
+  }
+
+  if (path_received_) {
+    local_path_planner_->setGlobalPath(global_path_);
+  }
+  if (latest_costmap_received_) {
+    local_path_planner_->updateCostmap(latest_costmap_);
+  }
+  local_avoidance_aligning_ = true;
+  pp_aligning_ = false;
+  pp_correcting_ = false;
+  goal_position_reached_ = false;
+  yaw_adjusting_ = false;
+  last_cmd_vel_ = geometry_msgs::msg::Twist();
+  RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                       "[OBSTACLE_REPLAN] active, tracking local A* path");
+}
+
 void PurePursuitLocalPlanner::emergencyStopCallback(
     std_msgs::msg::Bool::ConstSharedPtr msg) {
   emergency_stop_active_ = msg->data;
@@ -180,10 +229,19 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.final_yaw_min_angular_velocity =
       declareOrGetParameter(node_, "final_yaw_min_angular_velocity", 0.28);
   // Local planning parameters
+  config_.enable_obstacle_replanning =
+      declareOrGetParameter(node_, "enable_obstacle_replanning", false);
   config_.enable_local_replanning =
       declareOrGetParameter(node_, "enable_local_replanning", false);
   config_.use_smoothed_path =
       declareOrGetParameter(node_, "use_smoothed_path", false);
+  config_.avoidance_reentry_cooldown =
+      declareOrGetParameter(node_, "avoidance_reentry_cooldown", 2.0);
+
+  if (config_.enable_obstacle_replanning && !config_.enable_local_replanning) {
+    RCLCPP_WARN(node_->get_logger(),
+                "enable_obstacle_replanning=true but enable_local_replanning=false; obstacle avoidance will fall back to stop.");
+  }
 
   // Frame IDs
   config_.global_frame =
@@ -209,6 +267,7 @@ bool PurePursuitLocalPlanner::setGlobalPath(
   current_path_index_ = 0;
   path_progress_index_ = 0;      // 新增：重置路径进度，防止回头
   has_valid_lookahead_ = false;  // 重置前瞻点状态
+  setLocalReplanningActive(false);
 
   // 发布导航开始状态
   std_msgs::msg::Bool nav_state_msg;
@@ -218,6 +277,16 @@ bool PurePursuitLocalPlanner::setGlobalPath(
   // 将路径传递给路径跟踪器
   if (path_tracker_) {
     path_tracker_->setPath(global_path_);
+  }
+
+  if (front_obstacle_detector_) {
+    front_obstacle_detector_->setGlobalPath(global_path_);
+    RCLCPP_WARN(node_->get_logger(),
+                "[AVOID_PATH_FILTER] passed global path to front detector: poses=%zu",
+                global_path_.poses.size());
+  } else {
+    RCLCPP_WARN(node_->get_logger(),
+                "[AVOID_PATH_FILTER] front detector is null, cannot pass global path");
   }
 
   // 只有在启用局部重规划时才将路径传递给局部路径规划器
@@ -263,8 +332,14 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return false;
   }
 
+  if (local_replanning_active_ && goal_position_reached_) {
+    goal_position_reached_ = false;
+    yaw_adjusting_ = false;
+    last_cmd_vel_ = geometry_msgs::msg::Twist();
+  }
+
   // 位置到达锁存：第一次进入 goal_tolerance 后，就锁住“位置已到达”
-  if (!goal_position_reached_ && isGoalReached()) {
+  if (!local_replanning_active_ && !goal_position_reached_ && isGoalReached()) {
     goal_position_reached_ = true;
     yaw_adjusting_ = true;
 
@@ -276,7 +351,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   }
 
   // 如果位置已经到达过，则只做最终角度调整，不再回 Pure Pursuit
-  if (goal_position_reached_) {
+  if (!local_replanning_active_ && goal_position_reached_) {
     if (target_pose_received_ && !isTargetOrientationReached(robot_pose)) {
       if (computeOrientationAdjustmentCommand(robot_pose, cmd_vel)) {
         return true;
@@ -308,12 +383,155 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return true;
   }
 
+  if (config_.enable_obstacle_replanning && front_obstacle_detector_) {
+    const auto avoidance_info =
+        front_obstacle_detector_->analyzeAvoidance(robot_pose);
+
+    if (avoidance_info.decision ==
+        FrontObstacleDetector::ObstacleDecision::HARD_STOP) {
+      cmd_vel = geometry_msgs::msg::Twist();
+      last_cmd_vel_ = cmd_vel;
+      if (local_replanning_active_) {
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 500,
+            "[OBSTACLE_REPLAN] hard stop during avoidance, waiting and keeping local plan");
+        return true;
+      }
+
+      setLocalReplanningActive(false);
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                           "[OBSTACLE_REPLAN] hard stop, cmd_vel forced to zero");
+      return true;
+    }
+
+    if (!local_replanning_active_ && pp_aligning_) {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[OBSTACLE_REPLAN] ignored obstacle replanning during global PP_ALIGN");
+    } else {
+      if (isLocalReplanningEnabled() && local_replanning_active_ &&
+          local_path_planner_) {
+        if (avoidance_info.decision ==
+            FrontObstacleDetector::ObstacleDecision::CLEAR) {
+          RCLCPP_WARN_THROTTLE(
+              node_->get_logger(), *node_->get_clock(), 1000,
+              "[OBSTACLE_REPLAN] obstacle cleared during avoidance, keeping local plan until return goal");
+        } else if (avoidance_info.decision ==
+                   FrontObstacleDetector::ObstacleDecision::BLOCKED) {
+          cmd_vel = geometry_msgs::msg::Twist();
+          last_cmd_vel_ = cmd_vel;
+          RCLCPP_WARN_THROTTLE(
+              node_->get_logger(), *node_->get_clock(), 500,
+              "[OBSTACLE_REPLAN] blocked during avoidance, waiting and keeping local plan");
+          return true;
+        }
+
+        if (local_replanning_active_ &&
+            local_path_planner_->isAvoidanceCompleted()) {
+          const bool skip_current_goal =
+              local_path_planner_->shouldSkipCurrentGoal();
+          last_avoidance_complete_time_ = node_->now();
+          has_last_avoidance_complete_time_ = true;
+          setLocalReplanningActive(false);
+
+          if (skip_current_goal) {
+            cmd_vel = geometry_msgs::msg::Twist();
+            last_cmd_vel_ = cmd_vel;
+            goal_reached_ = true;
+            goal_position_reached_ = false;
+            yaw_adjusting_ = false;
+
+            std_msgs::msg::Bool nav_state_msg;
+            nav_state_msg.data = true;
+            nav_state_pub_->publish(nav_state_msg);
+
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 1000,
+                "[OBSTACLE_REPLAN] no reachable forward path point, current goal skipped");
+            return true;
+          }
+
+          RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                               "[OBSTACLE_REPLAN] avoidance completed, back to global path");
+        } else if (local_path_planner_->isAvoidanceFailed()) {
+          setLocalReplanningActive(false);
+          cmd_vel = geometry_msgs::msg::Twist();
+          last_cmd_vel_ = cmd_vel;
+          RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                               "[OBSTACLE_REPLAN] avoidance failed, cmd_vel forced to zero");
+          return true;
+        }
+      }
+
+      if (!local_replanning_active_) {
+        if (has_last_avoidance_complete_time_ &&
+            (node_->now() - last_avoidance_complete_time_).seconds() <
+                config_.avoidance_reentry_cooldown) {
+          // 冷却期内继续正常跟踪全局路径，避免刚回归就反复触发绕障。
+        } else {
+          if (avoidance_info.decision ==
+              FrontObstacleDetector::ObstacleDecision::BLOCKED) {
+            setLocalReplanningActive(false);
+            cmd_vel = geometry_msgs::msg::Twist();
+            last_cmd_vel_ = cmd_vel;
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                                 "[OBSTACLE_REPLAN] blocked/hard stop, cmd_vel forced to zero");
+            return true;
+          }
+
+          if (avoidance_info.decision ==
+              FrontObstacleDetector::ObstacleDecision::AVOIDABLE) {
+            if (!isLocalReplanningEnabled()) {
+              cmd_vel = geometry_msgs::msg::Twist();
+              last_cmd_vel_ = cmd_vel;
+              RCLCPP_WARN_THROTTLE(
+                  node_->get_logger(), *node_->get_clock(), 500,
+                  "[OBSTACLE_REPLAN] avoidable but local replanning disabled");
+              return true;
+            }
+
+            auto side = LocalPathPlanner::AvoidanceSide::NONE;
+            if (avoidance_info.left_clear) {
+              side = LocalPathPlanner::AvoidanceSide::LEFT;
+            } else if (avoidance_info.right_clear) {
+              side = LocalPathPlanner::AvoidanceSide::RIGHT;
+            }
+
+            if (path_received_) {
+              local_path_planner_->setGlobalPath(global_path_);
+            }
+            if (latest_costmap_received_) {
+              local_path_planner_->updateCostmap(latest_costmap_);
+            }
+
+            if (!local_path_planner_->startAvoidance(
+                    robot_pose, avoidance_info.obstacle_center, side)) {
+              setLocalReplanningActive(false);
+              cmd_vel = geometry_msgs::msg::Twist();
+              last_cmd_vel_ = cmd_vel;
+              RCLCPP_WARN_THROTTLE(
+                  node_->get_logger(), *node_->get_clock(), 500,
+                  "[OBSTACLE_REPLAN] could not build obstacle-based avoidance goals");
+              return true;
+            }
+
+            setLocalReplanningActive(true);
+          }
+        }
+      }
+    }
+  }
+
   // 计算前瞻点
   geometry_msgs::msg::PointStamped lookahead_point;
   if (!computeLookaheadPoint(robot_pose, lookahead_point)) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "Failed to compute lookahead point");
     cmd_vel = geometry_msgs::msg::Twist();
+    if (local_replanning_active_) {
+      last_cmd_vel_ = cmd_vel;
+      return true;
+    }
     return false;
   }
 
@@ -332,10 +550,15 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   //     robot_pose, lookahead_point);
   // }
 
-  // 前方障碍物检测和速度调整
-  if (front_obstacle_detector_) {
+  // 前方障碍物检测和速度调整：主动绕障关闭时保留旧停障/减速逻辑。
+  if (!config_.enable_obstacle_replanning && front_obstacle_detector_) {
     cmd_vel = front_obstacle_detector_->adjustVelocityForObstacles(cmd_vel,
                                                                    robot_pose);
+  }
+  if (std::abs(cmd_vel.linear.x) < 1e-6 &&
+      std::abs(cmd_vel.linear.y) < 1e-6 &&
+      std::abs(cmd_vel.angular.z) < 1e-6) {
+    last_cmd_vel_ = geometry_msgs::msg::Twist();
   }
   // 新增：原地旋转时清掉上一帧线速度
   if (std::abs(cmd_vel.linear.x) < 1e-6 && std::abs(cmd_vel.angular.z) > 1e-6) {
@@ -408,6 +631,9 @@ void PurePursuitLocalPlanner::globalPathCallback(
 
 void PurePursuitLocalPlanner::costmapCallback(
     nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
+  latest_costmap_ = *msg;
+  latest_costmap_received_ = true;
+
   if (obstacle_avoidance_) {
     obstacle_avoidance_->updateCostmap(*msg);
   }
@@ -432,7 +658,7 @@ void PurePursuitLocalPlanner::scanCallback(
 void PurePursuitLocalPlanner::smoothedLocalPathCallback(
     nav_msgs::msg::Path::ConstSharedPtr msg) {
   // 只有在启用平滑路径时才处理
-  if (config_.use_smoothed_path) {
+  if (config_.use_smoothed_path && local_replanning_active_) {
     smoothed_local_path_ = *msg;
     smoothed_local_path_received_ = !msg->poses.empty();
 
@@ -469,7 +695,7 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
   bool use_local_path = false;
   std::string path_type;
 
-  if (config_.enable_local_replanning) {
+  if (config_.enable_local_replanning && local_replanning_active_) {
     // 启用局部重规划时的优先级：平滑后局部路径 > 原始局部路径 > 全局路径
     if (config_.use_smoothed_path && smoothed_local_path_received_ &&
         !smoothed_local_path_.poses.empty()) {
@@ -485,14 +711,10 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
       path_type = "original local path";
       RCLCPP_DEBUG(node_->get_logger(),
                    "Using original local path for lookahead point computation");
-    } else if (!global_path_.poses.empty()) {
-      path_to_use = global_path_;
-      use_local_path = false;
-      path_type = "global path";
-      RCLCPP_DEBUG(
-          node_->get_logger(),
-          "Using global path for lookahead point computation (fallback)");
     } else {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[OBSTACLE_REPLAN] waiting for valid local avoidance path");
       return false;
     }
   } else {
@@ -713,6 +935,37 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
   cmd_vel.angular.y = 0.0;
   cmd_vel.angular.z = 0.0;
 
+  if (local_replanning_active_ && local_avoidance_aligning_) {
+    const double avoid_align_exit_threshold = 8.0 * M_PI / 180.0;
+    if (yaw_error_abs < avoid_align_exit_threshold) {
+      local_avoidance_aligning_ = false;
+      pp_aligning_ = false;
+      pp_correcting_ = false;
+      RCLCPP_WARN(node_->get_logger(),
+                  "[AVOID_ALIGN] aligned to local path, yaw_error=%.2f deg",
+                  yaw_error * 180.0 / M_PI);
+    } else {
+      cmd_vel.linear.x = 0.0;
+      cmd_vel.angular.z = angular_gain * yaw_error;
+
+      const double min_avoid_align_wz = 0.22;
+      if (std::abs(cmd_vel.angular.z) < min_avoid_align_wz) {
+        cmd_vel.angular.z = std::copysign(min_avoid_align_wz, yaw_error);
+      }
+
+      cmd_vel.angular.z =
+          std::max(cmd_vel.angular.z, -config_.max_angular_velocity);
+      cmd_vel.angular.z =
+          std::min(cmd_vel.angular.z, config_.max_angular_velocity);
+
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 300,
+          "[AVOID_ALIGN] rotate in place before local path, yaw_error=%.2f deg, wz=%.2f",
+          yaw_error * 180.0 / M_PI, cmd_vel.angular.z);
+      return true;
+    }
+  }
+
   // 原地旋转滞回逻辑：
   if (!pp_aligning_ && yaw_error_abs > rotate_enter_threshold) {
     pp_aligning_ = true;
@@ -727,8 +980,8 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
     cmd_vel.linear.x = 0.0;
     cmd_vel.angular.z = angular_gain * yaw_error;
 
-    // 原地旋转最小角速度，避免机械狗小角速度转不动
-    double min_rotate_wz = 0.22;
+    // 原地旋转最小角速度，避免小角速度转不动导致卡在对齐阶段。
+    double min_rotate_wz = 0.35;
     if (std::abs(cmd_vel.angular.z) < min_rotate_wz) {
       cmd_vel.angular.z = std::copysign(min_rotate_wz, yaw_error);
     }
@@ -790,7 +1043,7 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
       "[PP_CMD] robot=(%.3f, %.3f, yaw=%.2f deg), "
       "lookahead=(%.3f, %.3f), dx=%.3f, dy=%.3f, "
       "target_yaw=%.2f deg, yaw_error=%.2f deg, vx=%.2f, wz=%.2f, "
-      "progress=%zu, path_idx=%zu",
+      "progress=%zu, path_idx=%d",
       robot_pose.pose.position.x, robot_pose.pose.position.y,
       robot_yaw * 180.0 / M_PI, lookahead_point.point.x,
       lookahead_point.point.y, dx, dy, target_yaw * 180.0 / M_PI,

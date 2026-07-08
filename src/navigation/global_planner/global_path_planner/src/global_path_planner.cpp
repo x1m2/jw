@@ -125,9 +125,14 @@ bool GlobalPathPlanner::initialize() {
         this->targetPointsCallback(msg);
       });
 
-  if (!loadFreeSpaceCloudFromPcd()) {
-    RCLCPP_WARN(this->get_logger(),
-                "可行域 PCD 未加载，涉及可行域点云的边检查将不可用。");
+  if (enable_temp_connection_feasibility_check_) {
+    if (!loadFreeSpaceCloudFromPcd()) {
+      RCLCPP_WARN(this->get_logger(),
+                  "可行域 PCD 未加载，临时连接可行域检查将不可用。");
+    }
+  } else {
+    RCLCPP_INFO(this->get_logger(),
+                "临时连接可行域检查未启用，跳过可行域 PCD 加载。");
   }
 
   // 加载拓扑地图
@@ -1223,10 +1228,17 @@ bool GlobalPathPlanner::loadFreeSpaceCloudFromPcd() {
   }
 
   free_space_cloud_->clear();
-  if (pcl::io::loadPCDFile<pcl::PointXYZ>(free_space_pcd_file_,
-                                          *free_space_cloud_) != 0) {
-    RCLCPP_ERROR(this->get_logger(), "加载可行域 PCD 失败: %s",
-                 free_space_pcd_file_.c_str());
+  try {
+    if (pcl::io::loadPCDFile<pcl::PointXYZ>(free_space_pcd_file_,
+                                            *free_space_cloud_) != 0) {
+      RCLCPP_ERROR(this->get_logger(), "加载可行域 PCD 失败: %s",
+                   free_space_pcd_file_.c_str());
+      has_free_space_cloud_ = false;
+      return false;
+    }
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(this->get_logger(), "加载可行域 PCD 异常: %s, file=%s",
+                 e.what(), free_space_pcd_file_.c_str());
     has_free_space_cloud_ = false;
     return false;
   }

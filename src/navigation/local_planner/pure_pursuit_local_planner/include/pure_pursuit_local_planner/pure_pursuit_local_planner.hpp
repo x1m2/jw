@@ -63,8 +63,10 @@ struct PlannerConfig {
   double yaw_adjustment_gain;  // 角度调整增益
 
   // Local planning parameters
+  bool enable_obstacle_replanning;  // 是否启用基于障碍物中心的主动绕障
   bool enable_local_replanning;  // 是否启用A*局部重规划
   bool use_smoothed_path;        // 是否使用平滑后的路径
+  double avoidance_reentry_cooldown;  // 绕障完成后重新触发冷却时间
 
   // Frame IDs
   std::string global_frame;  // 全局坐标系
@@ -158,6 +160,12 @@ class PurePursuitLocalPlanner {
   bool has_valid_lookahead_;  // 是否有有效的前瞻点
   bool pp_aligning_;
   bool pp_correcting_;
+  bool local_replanning_active_;  // 是否正在跟踪局部绕障路径
+  bool local_avoidance_aligning_;  // 局部绕障起步时先原地对齐
+  bool has_last_avoidance_complete_time_;
+  rclcpp::Time last_avoidance_complete_time_;
+  bool latest_costmap_received_;
+  nav_msgs::msg::OccupancyGrid latest_costmap_;
   // 组件
   std::unique_ptr<ObstacleAvoidance> obstacle_avoidance_;
   std::unique_ptr<PathTracker> path_tracker_;
@@ -174,6 +182,9 @@ class PurePursuitLocalPlanner {
    * @brief 加载参数
    */
   void loadParameters();
+
+  void setLocalReplanningActive(bool active);
+  bool isLocalReplanningEnabled() const;
 
   /**
    * @brief 控制回调函数

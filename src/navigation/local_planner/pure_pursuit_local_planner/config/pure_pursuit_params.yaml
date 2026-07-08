@@ -2,16 +2,17 @@ pure_pursuit_local_planner:
   ros__parameters:
     use_sim_time: false
 
-    enable_local_replanning: false
+    enable_obstacle_replanning: true # true: 前方可绕障碍时，基于 costmap 障碍物中心生成临时点并用 A* 绕障；false: 只停障/减速
+    enable_local_replanning: true
     use_smoothed_path: false
 
     lookahead_distance_min: 0.4
     lookahead_distance_max: 0.7
-    goal_tolerance: 0.3
+    goal_tolerance: 0.20
 
-    max_linear_velocity: 0.4    ##最大线速度x
+    max_linear_velocity: 0.5    ##最大线速度x
     max_linear_velocity_y: 0.3
-    max_angular_velocity: 0.5  ##最大角速度
+    max_angular_velocity: 0.7  ##最大角速度
     min_linear_velocity: 0.1
     acceleration_limit: 0.5
     deceleration_limit: 0.8
@@ -20,6 +21,15 @@ pure_pursuit_local_planner:
     local_lookahead_distance: 1.0
     local_min_lookahead_distance: 1.0
     local_max_lookahead_distance: 3.0
+    avoidance_lateral_clearance: 1.3      # side_goal 相对障碍物中心的侧向安全距离
+    avoidance_obstacle_forward_offset: 0.0 # side_goal 相对障碍物中心沿全局路径方向的前向偏移
+    avoidance_return_min_distance: 1.5    # 从当前位置附近沿全局路径向前搜索回归点的最小距离
+    avoidance_return_max_distance: 4.0    # 回归点最大搜索距离
+    avoidance_search_step_distance: 0.3   # 回归点搜索步长
+    avoidance_goal_tolerance: 0.35        # 到达 side_goal / return_goal 的距离阈值
+    avoidance_return_goal_clearance: 0.80 # 回归点周围按车体尺寸检查的安全半径
+    avoidance_return_obstacle_clearance: 1.5 # 回归点至少距离本次障碍物中心 2m；目标点附近有障碍时直接跳过当前目标
+    avoidance_reentry_cooldown: 2.0       # 绕障完成后重新触发绕障的冷却时间
 
     dijkstra_obstacle_threshold: 10.0
     dijkstra_allow_diagonal: true
@@ -29,7 +39,7 @@ pure_pursuit_local_planner:
     dijkstra_path_deviation_weight: 0.0
     dijkstra_obstacle_avoidance_weight: 20.0
 
-    costmap_threshold: 50.0
+    costmap_threshold: 50.0 
 
     potential_field:
       attractive_gain: 8.0
@@ -48,13 +58,37 @@ pure_pursuit_local_planner:
       bilateral_damping: 0.1
 
     front_obstacle_detector:
-      detection_shape: "sector"
+      detection_shape: "sector"  # 前方检测区域的形状
       detection_width: 0.3
       detection_length: 1.0
-      sector_radius: 0.9
+      # 机器人前方 sector_radius 范围内的障碍物都会参与减速/停障判断。
+      sector_radius: 1.5
+      # 扇形总张角，60° 表示机器人正前方左右各 30°。
       sector_angle: 60.0
+      # 判定障碍物的 costmap 代价值阈值。
       obstacle_threshold: 50
-      linear_velocity_factor: 0.0
+      obstacle_ratio_threshold: 0.1
+
+      # 硬停障参数：车体用长方形近似，坐标以 base_link 为中心，x 正方向为车头。
+      robot_width: 0.80
+      robot_length: 1.10
+      safety_margin: 0.10
+      # 强制停车区域从车体前缘开始，而不是从 base_link 开始。
+      # 例如 robot_length=1.10, hard_stop_distance=0.40 时，检测 base_link 前方 x=[0.55, 0.95] 区域。
+      hard_stop_distance: 0.4
+      # 1.0m~1.5m 前方扇形区域检测到障碍时，进入左右通道判断。
+      avoid_min_distance: 1.0
+      avoid_max_distance: 1.7
+      avoid_sector_angle: 60.0
+      # 左右绕行通道宽度，至少应大于 robot_width + 2 * safety_margin。
+      side_passage_width: 1.0
+      # 绕障触发只统计全局路径走廊内的扇形障碍，路径外障碍不触发绕障/阻塞。
+      enable_path_corridor_filter: true
+      path_obstacle_margin: 0.0  
+      path_check_distance: 2.0 #全局路径前方约 2.0m 范围内的路径走廊
+
+      # 检测到前方障碍物后，对速度的缩放系数。
+      linear_velocity_factor: 0.0  # 0.0：线速度变为 0，即停止前进。
       angular_velocity_factor: 0.0
       debug_mode: true
       enable_visualization: true
@@ -70,4 +104,4 @@ pure_pursuit_local_planner:
     #角度 角速度相关参数
     yaw_tolerance: 0.26
     yaw_adjustment_gain: 0.9
-    final_yaw_min_angular_velocity: 0.28
+    final_yaw_min_angular_velocity: 0.35

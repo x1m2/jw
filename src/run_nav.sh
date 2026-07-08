@@ -275,13 +275,27 @@ info "请在主 GUI 的导航任务控制区选择任务、急停、回家、停
 info "等待导航状态机运行；收到 SIGINT / SIGTERM 时再退出导航流程"
 
 # 保持 run_nav.sh 前台运行，避免脚本退出后 trap cleanup 清理所有节点。
+# ros2 node list 依赖 ROS graph/daemon，节点刚启动或 DDS 抖动时可能短暂查不到。
+# 因此只用启动时记录的 PID 判断状态机是否真正退出；ROS graph 仅用于提示。
+NAV_STATE_MACHINE_MISSING_COUNT=0
 while true; do
     sleep 2
 
-    # 状态机都不在了，说明导航核心已异常退出。
-    if ! ros2 node list 2>/dev/null | grep -qx "/navigation_task_state_machine_node"; then
-        warn "navigation_task_state_machine_node 已退出，结束导航流程"
+    if ! kill -0 "${NAVIGATION_STATE_MACHINE_PID}" 2>/dev/null; then
+        warn "navigation_state_machine 进程已退出，结束导航流程"
         break
+    fi
+
+    if ros2 node list 2>/dev/null | grep -qx "/navigation_task_state_machine_node"; then
+        NAV_STATE_MACHINE_MISSING_COUNT=0
+        continue
+    fi
+
+    NAV_STATE_MACHINE_MISSING_COUNT=$((NAV_STATE_MACHINE_MISSING_COUNT + 1))
+
+    if [ "${NAV_STATE_MACHINE_MISSING_COUNT}" -ge 5 ]; then
+        warn "navigation_task_state_machine_node 连续多次不可见，但进程仍在运行，继续等待"
+        NAV_STATE_MACHINE_MISSING_COUNT=0
     fi
 done
 

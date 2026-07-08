@@ -290,7 +290,17 @@ colcon build --packages-select quatro --cmake-args -DCMAKE_BUILD_TYPE=Release -D
 再编译整个工作空间：
 
 ```bash
-colcon build --symlink-install --parallel-workers 1  --packages-skip quatro --cmake-args  -DCMAKE_BUILD_TYPE=Release -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+colcon build --symlink-install --parallel-workers 2 \
+  --packages-skip quatro fast_lio pgo_sc localization_sc \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DROS_EDITION=ROS2 \
+    -DHUMBLE_ROS=humble
+
+colcon build --symlink-install --parallel-workers 1 \
+  --packages-select fast_lio localization_sc pgo_sc \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+
 source install/setup.bash
 ```
 

@@ -63,6 +63,7 @@ class FastLioLocalizationScQn : public rclcpp::Node {
   PosePcd last_keyframe_;
   std::vector<PosePcdReduced> saved_map_from_bag_;
   Eigen::Matrix4d last_corrected_TF_ = Eigen::Matrix4d::Identity();
+  Eigen::Matrix4d target_corrected_TF_ = Eigen::Matrix4d::Identity();
   double keyframe_dist_thr_;
   double voxel_res_;
   bool saved_map_vis_switch_ = true;
@@ -124,7 +125,7 @@ class FastLioLocalizationScQn : public rclcpp::Node {
   Eigen::Matrix4d last_reloc_candidate_tf_ = Eigen::Matrix4d::Identity();
 
   Eigen::Matrix4d initial_pose_eig_ = Eigen::Matrix4d::Identity();
-
+  Eigen::Matrix4d reloc_success_TF_ = Eigen::Matrix4d::Identity();
   LocalizationState localization_state_ = LocalizationState::IDLE;
 
  public:

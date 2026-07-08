@@ -46,8 +46,8 @@ def generate_launch_description():
             executable='static_transform_publisher',
             name='base_link_to_livox_frame',
             arguments=[
-                '0', '0', '0',          # x y z
-                '0', '0', '0',          # roll pitch yaw
+                '0.28', '0.0', '0.70',      # x y z: 雷达在 base_link 前方0.28m，高0.70m
+                '0.0', '0.4119', '0.0',     # roll pitch yaw: 约24.5deg
                 'base_link',            # parent frame
                 lidar_frame             # child frame
             ],
@@ -72,8 +72,8 @@ def generate_launch_description():
                 'transform_tolerance': 0.05,
 
                 # 按 base_link 坐标系下的 z 高度裁剪点云
-                'min_height': -0.2,
-                'max_height': 0.5,
+                'min_height': 0.2,
+                'max_height': 1.3,
 
                 # 360 度输出 LaserScan
                 'angle_min': -3.1415926,
@@ -83,8 +83,8 @@ def generate_launch_description():
                 # MID-360 常见 10Hz 左右
                 'scan_time': 0.1,
 
-                'range_min': 0.1,
-                'range_max': 15.0,
+                'range_min': 0.4,
+                'range_max': 8.0,
 
                 'use_inf': True,
                 'inf_epsilon': 1.0,

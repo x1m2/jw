@@ -30,7 +30,7 @@ set -eo pipefail
 #   WS=/path/to/robot_rk3588_ws ./setup_robot_rk3588_env.sh
 #   WS_ZIP=/path/to/robot_rk3588_ws.zip ./setup_robot_rk3588_env.sh
 #   THIRD_PARTY_DIR=/path/to/third_party ./setup_robot_rk3588_env.sh
-#   PARALLEL_WORKERS=4 ./setup_robot_rk3588_env.sh
+#   PARALLEL_WORKERS=2 ./setup_robot_rk3588_env.sh
 #   FORCE_THIRD_PARTY=1 ./setup_robot_rk3588_env.sh   # 强制重装 GTSAM/Livox/TEASER++
 # ============================================================
 
@@ -49,7 +49,7 @@ WS_ZIP="${WS_ZIP:-${WS}.zip}"
 SRC_DIR="${WS}/src"
 # 默认第三方源码
 THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-${WS}/env}"
-PARALLEL_WORKERS="${PARALLEL_WORKERS:-1}"
+PARALLEL_WORKERS="${PARALLEL_WORKERS:-2}"
 FORCE_THIRD_PARTY="${FORCE_THIRD_PARTY:-0}"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 TZ_VALUE="${TZ_VALUE:-Asia/Shanghai}"
@@ -527,7 +527,6 @@ build_workspace() {
   info "检测到 ${pkg_count} 个 ROS2 包"
 
   # quattro 需要额外的 QUATRO_TBB=ON 配置，因此先单独处理。
-
   if colcon_package_exists "quatro"; then
     info "再单独编译 quatro，开启 TBB"
     colcon build \
@@ -544,20 +543,32 @@ build_workspace() {
     source "${WS}/install/setup.bash"
   fi
 
-  info "编译整个工作空间"
+  info "第一阶段：编译工作空间，跳过 quatro/fast_lio/pgo_sc/localization_sc"
   colcon build --symlink-install \
     --parallel-workers "${PARALLEL_WORKERS}" \
-    --packages-skip quatro \
+    --packages-skip quatro fast_lio pgo_sc localization_sc \
     --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
-    -DHUMBLE_ROS=humble \
-    -DBUILD_TESTING=OFF
+    -DHUMBLE_ROS=humble
+
+  source "/opt/ros/${ROS_DISTRO}/setup.bash"
+  if [[ -f "${WS}/install/setup.bash" ]]; then
+    source "${WS}/install/setup.bash"
+  fi
+
+  info "第二阶段：单线程编译 fast_lio/localization_sc/pgo_sc"
+  colcon build --symlink-install \
+    --parallel-workers 1 \
+    --packages-select fast_lio localization_sc pgo_sc \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release
 
   if [[ ! -f "${WS}/install/setup.bash" ]]; then
     err "编译结束后未找到 ${WS}/install/setup.bash"
     exit 1
   fi
+
+  source "${WS}/install/setup.bash"
 }
 
 setup_bashrc_source() {

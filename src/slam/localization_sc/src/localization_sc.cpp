@@ -33,6 +33,26 @@ Eigen::Matrix4d keepXYYawOnly(const Eigen::Matrix4d &T) {
 
   return out;
 }
+
+Eigen::Matrix4d interpolateTransform(const Eigen::Matrix4d &from,
+                                     const Eigen::Matrix4d &to, double alpha) {
+  alpha = std::clamp(alpha, 0.0, 1.0);
+
+  Eigen::Matrix4d out = Eigen::Matrix4d::Identity();
+
+  Eigen::Quaterniond q_from(from.block<3, 3>(0, 0));
+  Eigen::Quaterniond q_to(to.block<3, 3>(0, 0));
+  q_from.normalize();
+  q_to.normalize();
+
+  out.block<3, 3>(0, 0) =
+      q_from.slerp(alpha, q_to).toRotationMatrix();  //球面插值
+  out.block<3, 1>(0, 3) = (1.0 - alpha) * from.block<3, 1>(0, 3) +
+                          alpha * to.block<3, 1>(0, 3);  //线性插值
+
+  return out;
+}
+
 struct RelocMatchCandidate {
   int idx = -1;
   double pose_dist = 0.0;
@@ -286,30 +306,52 @@ void FastLioLocalizationScQn::odomPcdCallback(
 
   // 2. 打印 last_corrected_TF_
   {
-    Eigen::Matrix3d rot = last_corrected_TF_.block<3, 3>(0, 0);
+    Eigen::Matrix4d print_tf = last_corrected_TF_;
+    const char *tf_name = "last_corrected_TF_";
+
+    if (reloc_use_initial_pose_ && global_reloc_done_) {
+      print_tf = last_corrected_TF_ * reloc_success_TF_.inverse();
+      tf_name = "tracking_correction_delta";
+    }
+
+    Eigen::Matrix3d rot = print_tf.block<3, 3>(0, 0);
     Eigen::Quaterniond q(rot);
+    q.normalize();
 
     tf2::Quaternion tf_q(q.x(), q.y(), q.z(), q.w());
+    tf_q.normalize();
 
     double roll, pitch, yaw;
     tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
 
-    RCLCPP_INFO(this->get_logger(),
-                "last_corrected_TF_ - "
-                "x: %.3f, y: %.3f, z: %.3f, "
-                "roll: %.2f deg, pitch: %.2f deg, yaw: %.2f deg",
-                last_corrected_TF_(0, 3), last_corrected_TF_(1, 3),
-                last_corrected_TF_(2, 3), roll * 180.0 / M_PI,
-                pitch * 180.0 / M_PI, yaw * 180.0 / M_PI);
+    RCLCPP_INFO(
+        this->get_logger(),
+        "[%s] %s - "
+        "x: %.3f, y: %.3f, z: %.3f, "
+        "roll: %.2f deg, pitch: %.2f deg, yaw: %.2f deg",
+        localization_state_ == LocalizationState::IDLE
+            ? "IDLE"
+            : (localization_state_ == LocalizationState::GLOBAL_RELOCALIZING
+                   ? "GLOBAL_RELOCALIZING"
+                   : "LOCAL_TRACKING"),
+        tf_name, print_tf(0, 3), print_tf(1, 3), print_tf(2, 3),
+        roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw * 180.0 / M_PI);
   }
   if (reloc_use_initial_pose_ && need_apply_initial_pose_) {
     last_corrected_TF_ = initial_pose_eig_ * current_frame.pose_eig_.inverse();
+    target_corrected_TF_ = last_corrected_TF_;
     need_apply_initial_pose_ = false;
 
     RCLCPP_WARN(this->get_logger(),
                 "Applied initial pose to map->odom transform.");
   }
   // 1. 实时 pose = last TF * odom
+  if (global_reloc_done_) {
+    //平滑处理
+    constexpr double alpha = 0.5;
+    last_corrected_TF_ =
+        interpolateTransform(last_corrected_TF_, target_corrected_TF_, alpha);
+  }
   current_frame.pose_corrected_eig_ =
       last_corrected_TF_ * current_frame.pose_eig_;
   geometry_msgs::msg::PoseStamped current_pose_stamped =
@@ -590,8 +632,10 @@ void FastLioLocalizationScQn::handleGlobalRelocalization(
   }
 
   last_corrected_TF_ = candidate_tf;
+  target_corrected_TF_ = candidate_tf;
   last_matched_keyframe_idx_ = closest_keyframe_idx;
   global_reloc_done_ = true;
+  reloc_success_TF_ = last_corrected_TF_;
   localization_state_ = LocalizationState::LOCAL_TRACKING;
   RCLCPP_WARN(this->get_logger(),
               "[RELOCALIZATION] success. idx=%d, score=%.3f, "
@@ -637,9 +681,15 @@ void FastLioLocalizationScQn::handleLocalTracking(
                 reg_output.pose_between_eig_(2, 3), delta_yaw_deg);
     return;
   }
+  RCLCPP_WARN(this->get_logger(),
+              "[LOCAL_TRACKING] delta t :"
+              "delta=[x=%.3f, y=%.3f, z=%.3f]",
+              reg_output.pose_between_eig_(0, 3),
+              reg_output.pose_between_eig_(1, 3),
+              reg_output.pose_between_eig_(2, 3));
 
-  last_corrected_TF_ = reg_output.pose_between_eig_ * last_corrected_TF_;
-
+  // last_corrected_TF_ = reg_output.pose_between_eig_ * last_corrected_TF_;
+  // target_corrected_TF_ = reg_output.pose_between_eig_ * last_corrected_TF_;
   Eigen::Matrix4d tfed_pose =
       reg_output.pose_between_eig_ * last_keyframe_copy.pose_corrected_eig_;
 

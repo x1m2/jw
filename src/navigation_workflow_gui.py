@@ -99,6 +99,7 @@ class NavigationWorkflowGUI:
         self.emergency_stop_pub = None
         self.current_target = {"x": 0.0, "y": 0.0, "z": 0.0}
         self.robot_nav_state = False
+        self.robot_nav_state_received = False
         self.emergency_stop_state = False
         self.last_target_update = "未接收到目标点"
         self.task_folder_path = os.path.join(self.runtime_robot_data_dir, "task")
@@ -645,6 +646,7 @@ class NavigationWorkflowGUI:
 
     def nav_state_callback(self, msg):
         self.robot_nav_state = bool(msg.data)
+        self.robot_nav_state_received = True
 
     def publish_task_signal(self, signal):
         if not self.nav_running:
@@ -722,7 +724,11 @@ class NavigationWorkflowGUI:
                     f"Z: {self.current_target['z']:.3f}"
                 )
             )
-            if self.robot_nav_state:
+            if not self.nav_running:
+                self.robot_nav_state_label.config(text="未启动", fg="gray")
+            elif not self.robot_nav_state_received:
+                self.robot_nav_state_label.config(text="等待导航状态", fg="gray")
+            elif self.robot_nav_state:
                 self.robot_nav_state_label.config(text="已到达目标点", fg="green")
             else:
                 self.robot_nav_state_label.config(text="导航中", fg="blue")
@@ -1138,10 +1144,12 @@ class NavigationWorkflowGUI:
     def start_nav_after_relocalization_success(self):
         if self.nav_running:
             return
+        self.robot_nav_state = False
+        self.robot_nav_state_received = False
         self.nav_terminal_process = self.start_script_in_terminal(
             self.run_nav_script,
             "自主导航 - run_nav",
-            keep_open=True,
+            keep_open=False,
         )
         if self.nav_terminal_process is None:
             self.set_nav_status("自主导航启动失败", "red")
@@ -1167,6 +1175,8 @@ class NavigationWorkflowGUI:
 
     def _nav_finished(self):
         self.nav_running = False
+        self.robot_nav_state = False
+        self.robot_nav_state_received = False
         self.set_nav_status("自主导航已退出", "green")
         self.set_current_action("自主导航流程结束", "green")
         self.set_nav_button_running(False)
@@ -1210,6 +1220,8 @@ class NavigationWorkflowGUI:
     def _manual_kill_done(self):
         self.slam_running = self.edit_map_running = self.keyboard_running = False
         self.relocalization_running = self.nav_running = False
+        self.robot_nav_state = False
+        self.robot_nav_state_received = False
         self.set_slam_status("已清理/未启动", "gray")
         self.set_edit_map_status("已清理/未启动", "gray")
         self.set_keyboard_status("已清理/未启动", "gray")
