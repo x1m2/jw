@@ -1176,35 +1176,64 @@ void LaserMappingNode::h_share_model(
   solve_time += omp_get_wtime() - solve_start_;
 }
 
-template <typename T>
-void LaserMappingNode::set_posestamp(T &out) {
-  // FAST_LIO state: odom -> imu_link
+Eigen::Matrix4d LaserMappingNode::getOdomToBaseTransform() const {
+  // FAST-LIO state: odom -> imu_link
   Eigen::Matrix4d T_odom_imu = Eigen::Matrix4d::Identity();
   T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
   T_odom_imu.block<3, 1>(0, 3) = state_point.pos;
-  // base_link -> imu_link
+
+  // Static extrinsic: base_link -> imu_link.
   Eigen::Matrix4d T_base_imu = Eigen::Matrix4d::Identity();
-  Eigen::Matrix3d R_base_imu =
+  T_base_imu.block<3, 3>(0, 0) =
       Eigen::AngleAxisd(base_to_imu_R, Eigen::Vector3d::UnitY())
           .toRotationMatrix();
-  Eigen::Vector3d t_base_imu(base_to_imu_T[0], base_to_imu_T[1],
-                             base_to_imu_T[2]);
+  T_base_imu.block<3, 1>(0, 3) =
+      Eigen::Vector3d(base_to_imu_T[0], base_to_imu_T[1], base_to_imu_T[2]);
 
-  T_base_imu.block<3, 1>(0, 3) = t_base_imu;
-  T_base_imu.block<3, 3>(0, 0) = R_base_imu;
+  // Output pose: odom -> base_link.
+  return T_odom_imu * T_base_imu.inverse();
+}
 
-  // imu_link -> base_link
-  Eigen::Matrix4d T_imu_base = T_base_imu.inverse();
+Eigen::Matrix4d LaserMappingNode::getOutputBaseTransform() {
+  const Eigen::Matrix4d T_odom_base = getOdomToBaseTransform();
 
-  // odom -> base_link
-  Eigen::Matrix4d T_odom_base = T_odom_imu * T_imu_base;
+  if (!output_origin_initialized_) {
+    T_output_origin_inv_ = T_odom_base.inverse();
+    output_origin_initialized_ = true;
 
-  Eigen::Matrix3d R_odom_base = T_odom_base.block<3, 3>(0, 0);
-  Eigen::Quaterniond q_base(R_odom_base);
+    const Eigen::Matrix3d R_odom_base = T_odom_base.block<3, 3>(0, 0);
+    const Eigen::Vector3d euler =
+        R_odom_base.eulerAngles(2, 1, 0) * 180.0 / M_PI;
+    RCLCPP_INFO(this->get_logger(),
+                "[OUTPUT_ORIGIN] first base_link set as output origin. "
+                "raw odom base: x=%.3f, y=%.3f, z=%.3f, "
+                "roll=%.2f deg, pitch=%.2f deg, yaw=%.2f deg",
+                T_odom_base(0, 3), T_odom_base(1, 3), T_odom_base(2, 3),
+                euler(2), euler(1), euler(0));
+  }
 
-  out.pose.position.x = T_odom_base(0, 3);
-  out.pose.position.y = T_odom_base(1, 3);
-  out.pose.position.z = T_odom_base(2, 3);
+  return T_output_origin_inv_ * T_odom_base;
+}
+
+Eigen::Vector3d LaserMappingNode::transformOdomPointToOutput(
+    const Eigen::Vector3d &p_odom) {
+  if (!output_origin_initialized_) {
+    (void)getOutputBaseTransform();
+  }
+
+  const Eigen::Vector4d p_homo(p_odom.x(), p_odom.y(), p_odom.z(), 1.0);
+  return (T_output_origin_inv_ * p_homo).head<3>();
+}
+
+template <typename T>
+void LaserMappingNode::set_posestamp(T &out) {
+  const Eigen::Matrix4d T_output_base = getOutputBaseTransform();
+  const Eigen::Matrix3d R_output_base = T_output_base.block<3, 3>(0, 0);
+  const Eigen::Quaterniond q_base(R_output_base);
+
+  out.pose.position.x = T_output_base(0, 3);
+  out.pose.position.y = T_output_base(1, 3);
+  out.pose.position.z = T_output_base(2, 3);
   out.pose.orientation.x = q_base.x();
   out.pose.orientation.y = q_base.y();
   out.pose.orientation.z = q_base.z();
@@ -1252,13 +1281,15 @@ void LaserMappingNode::pointBodyToWorld(const Matrix<T, 3, 1> &pi,
 void LaserMappingNode::RGBpointBodyToWorld(PointType const *const pi,
                                            PointType *const po) {
   V3D p_body(pi->x, pi->y, pi->z);
-  V3D p_global(state_point.rot * (state_point.offset_R_L_I * p_body +
-                                  state_point.offset_T_L_I) +
-               state_point.pos);
+  V3D p_odom(state_point.rot * (state_point.offset_R_L_I * p_body +
+                                state_point.offset_T_L_I) +
+             state_point.pos);
+  const Eigen::Vector3d p_global = transformOdomPointToOutput(
+      Eigen::Vector3d(p_odom(0), p_odom(1), p_odom(2)));
 
-  po->x = p_global(0);
-  po->y = p_global(1);
-  po->z = p_global(2);
+  po->x = p_global.x();
+  po->y = p_global.y();
+  po->z = p_global.z();
   po->intensity = pi->intensity;
 }
 
@@ -1401,7 +1432,6 @@ void LaserMappingNode::publish_odometry(
   odomAftMapped.child_frame_id = "base_link";
   odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
   set_posestamp(odomAftMapped.pose);
-  pubOdomAftMapped->publish(odomAftMapped);
   auto P = kf.get_P();
   for (int i = 0; i < 6; i++) {
     int k = i < 3 ? i + 3 : i - 3;
@@ -1412,6 +1442,7 @@ void LaserMappingNode::publish_odometry(
     odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
     odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
   }
+  pubOdomAftMapped->publish(odomAftMapped);
 
   geometry_msgs::msg::TransformStamped trans;
   trans.header.frame_id = "odom";

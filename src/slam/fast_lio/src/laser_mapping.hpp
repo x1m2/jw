@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -55,6 +56,9 @@ class LaserMappingNode : public rclcpp::Node {
                          std_srvs::srv::Trigger::Response::SharedPtr res);
   template <typename T>
   void set_posestamp(T &out);
+  Eigen::Matrix4d getOdomToBaseTransform() const;
+  Eigen::Matrix4d getOutputBaseTransform();
+  Eigen::Vector3d transformOdomPointToOutput(const Eigen::Vector3d &p_odom);
 
   void pointBodyToWorld_ikfom(PointType const *const pi, PointType *const po,
                               state_ikfom &s);
@@ -206,6 +210,8 @@ class LaserMappingNode : public rclcpp::Node {
   vector<double> extrinR;
   vector<double> base_to_imu_T;
   double base_to_imu_R;
+  bool output_origin_initialized_ = false;
+  Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   deque<double> time_buffer;
   deque<PointCloudXYZI::Ptr> lidar_buffer;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
