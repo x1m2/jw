@@ -20,6 +20,7 @@ def generate_launch_description():
     config_path = LaunchConfiguration('config_path')
     config_file = LaunchConfiguration('config_file')
     rviz_cfg = LaunchConfiguration('rviz_cfg')
+    enable_imu_filter = LaunchConfiguration('enable_imu_filter')
 
     use_rviz_arg = DeclareLaunchArgument(
         "fast_lio_use_rviz",
@@ -36,12 +37,34 @@ def generate_launch_description():
         description='Yaml config file path'
     )
     declare_config_file_cmd = DeclareLaunchArgument(
-        'config_file', default_value='mid360.yaml',
+        'config_file', default_value='mid360_0.yaml',
         description='Config file'
     )
     declare_rviz_config_path_cmd = DeclareLaunchArgument(
         'rviz_cfg', default_value=default_rviz_config_path,
         description='RViz config file path'
+    )
+    declare_enable_imu_filter_cmd = DeclareLaunchArgument(
+        'enable_imu_filter',
+        default_value='true',
+        description='Start imu_tools/imu_filter_madgwick to publish /imu/data'
+    )
+
+    imu_filter_node = Node(
+        package='imu_filter_madgwick',
+        executable='imu_filter_madgwick_node',
+        name='imu_filter_madgwick',
+        condition=IfCondition(enable_imu_filter),
+        parameters=[{
+            'use_mag': False,
+            'publish_tf': False,
+            'world_frame': 'enu',
+        }],
+        remappings=[
+            ('imu/data_raw', '/livox/imu'),
+            ('imu/data', '/imu/data'),
+        ],
+        output='screen'
     )
 
     fast_lio_node = Node(
@@ -64,7 +87,9 @@ def generate_launch_description():
     ld.add_action(declare_config_path_cmd)
     ld.add_action(declare_config_file_cmd)
     ld.add_action(declare_rviz_config_path_cmd)
+    ld.add_action(declare_enable_imu_filter_cmd)
 
+    ld.add_action(imu_filter_node)
     ld.add_action(fast_lio_node)
     ld.add_action(rviz_node)
 

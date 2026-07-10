@@ -57,6 +57,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
@@ -71,6 +72,7 @@ set(dependencies
   std_msgs
   std_srvs
   visualization_msgs
+  tf2
   pcl_ros
   pcl_conversions
   livox_ros_driver2
@@ -92,7 +94,14 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-add_executable(fastlio_mapping src/main.cpp src/laser_mapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp src/imu_processing.cpp)
+add_executable(fastlio_mapping
+  src/main.cpp
+  src/laser_mapping.cpp
+  src/imu_orientation_converter.cpp
+  include/ikd-Tree/ikd_Tree.cpp
+  src/preprocess.cpp
+  src/imu_processing.cpp
+)
 target_include_directories(fastlio_mapping PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>

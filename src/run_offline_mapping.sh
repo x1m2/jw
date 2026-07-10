@@ -100,6 +100,8 @@ kill_all_related_processes() {
     local patterns=(
         "laser_mapping"
         "fast_lio"
+        "imu_filter_madgwick"
+        "imu_filter_madgwick_node"
         "mapping.launch.py"
         "pgo_sc"
         "run.launch.py"

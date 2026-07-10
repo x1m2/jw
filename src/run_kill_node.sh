@@ -168,6 +168,10 @@ kill_node_executables() {
 
     # 这里是兜底：有些 ros2 launch 的子节点命令行不一定包含 launch 文件名。
     # pattern 尽量写具体，避免误杀无关程序。
+    kill_by_pattern "livox_ros_driver2_node" "livox_ros_driver2_node executable"
+    kill_by_pattern "livox_lidar_publisher" "livox_lidar_publisher node"
+    kill_by_pattern "imu_filter_madgwick" "imu_filter_madgwick executable"
+    kill_by_pattern "imu_filter_madgwick_node" "imu_filter_madgwick_node executable"
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"
     kill_by_pattern "topology_connect" "topology_connect executable"

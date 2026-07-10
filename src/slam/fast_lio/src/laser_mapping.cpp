@@ -78,6 +78,7 @@ void LaserMappingNode::readParameters() {
   this->declare_parameter<vector<double>>("mapping.base_to_imu_T",
                                           vector<double>());
   this->declare_parameter<double>("mapping.base_to_imu_R", 0.0);
+  this->declare_parameter<bool>("z_constraint.enable", true);
   // imu constraint
   this->declare_parameter<bool>("imu_constraint.enable_auto_constraint", false);
 
@@ -147,6 +148,8 @@ void LaserMappingNode::readParameters() {
   this->get_parameter_or<vector<double>>("mapping.base_to_imu_T", base_to_imu_T,
                                          vector<double>());
   this->get_parameter_or<double>("mapping.base_to_imu_R", base_to_imu_R, 0.0);
+  this->get_parameter_or<bool>("z_constraint.enable", enable_z_constraint_,
+                               true);
   // imu constraint
   this->get_parameter_or<bool>("imu_constraint.enable_auto_constraint",
                                enable_auto_constraint, false);
@@ -254,6 +257,17 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
       imu_topic, imu_qos,
       std::bind(&LaserMappingNode::imu_cbk, this, std::placeholders::_1));
+
+  if (enable_z_constraint_) {
+    imu_orientation_converter_ = std::make_shared<ImuOrientationConverter>(
+        this, [this](bool is_stairs) { this->set_stairs_mode(is_stairs); });
+    RCLCPP_INFO(this->get_logger(),
+                "z constraint enabled. start as flat terrain. IMU orientation "
+                "converter updates terrain state internally.");
+  } else {
+    RCLCPP_INFO(this->get_logger(), "z constraint disabled.");
+  }
+
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
   pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 20);
@@ -413,6 +427,27 @@ void LaserMappingNode::livox_pcl_cbk(
                  lidar_buffer.size(), imu_buffer.size());
   }
   // sig_buffer.notify_all();
+}
+
+void LaserMappingNode::set_stairs_mode(bool is_stairs) {
+  const bool new_is_flat = !is_stairs;
+  if (new_is_flat == is_flat_terrain_) {
+    return;
+  }
+
+  is_flat_terrain_ = new_is_flat;
+  z_constraint_initialized_ = false;
+  output_z_constraint_initialized_ = false;
+
+  if (is_flat_terrain_) {
+    RCLCPP_INFO(this->get_logger(),
+                "[Z_CONSTRAINT] terrain changed to flat. imu/output z locks "
+                "will be initialized on next LIO update.");
+  } else {
+    RCLCPP_INFO(this->get_logger(),
+                "[Z_CONSTRAINT] terrain changed to stairs. imu/output z locks "
+                "released.");
+  }
 }
 
 void LaserMappingNode::imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
@@ -602,22 +637,25 @@ void LaserMappingNode::timer_callback() {
     kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
     state_point = kf.get_x();
 
-    // {
-    //   // z轴约束
-    //   static int z_constraint_initialized = false;
-    //   static double z_constraint_value = 0.0;  // 平地时的固定z值
-    //   if (!z_constraint_initialized) {
-    //     z_constraint_value = state_point.pos(2);
-    //     z_constraint_initialized = true;
-    //     RCLCPP_INFO(this->get_logger(), "平地模式：固定z轴高度为 %.3f 米",
-    //                 z_constraint_value);
-    //   }
+    if (enable_z_constraint_) {
+      if (is_flat_terrain_) {
+        if (!z_constraint_initialized_) {
+          z_constraint_value_ = state_point.pos(2);
+          z_constraint_initialized_ = true;
+          RCLCPP_INFO(this->get_logger(),
+                      "[Z_CONSTRAINT] flat mode: lock FAST-LIO imu z at %.3f",
+                      z_constraint_value_);
+        }
 
-    //   // 直接修正状态（这会影响所有后续的发布）
-    //   state_point.pos(2) = z_constraint_value;
-    //   state_point.vel(2) = 0.0;  // 同时约束z轴速度
-    //   kf.change_x(state_point);
-    // }
+        state_point.pos(2) = z_constraint_value_;
+        state_point.vel(2) = 0.0;
+        kf.change_x(state_point);
+      } else if (z_constraint_initialized_) {
+        RCLCPP_INFO(this->get_logger(),
+                    "[Z_CONSTRAINT] stairs mode: release FAST-LIO imu z");
+        z_constraint_initialized_ = false;
+      }
+    }
     ////////////////////////////////////////
     euler_cur = SO3ToEuler(state_point.rot);
     pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
@@ -1176,7 +1214,7 @@ void LaserMappingNode::h_share_model(
   solve_time += omp_get_wtime() - solve_start_;
 }
 
-Eigen::Matrix4d LaserMappingNode::getOdomToBaseTransform() const {
+Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() const {
   // FAST-LIO state: odom -> imu_link
   Eigen::Matrix4d T_odom_imu = Eigen::Matrix4d::Identity();
   T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
@@ -1194,8 +1232,8 @@ Eigen::Matrix4d LaserMappingNode::getOdomToBaseTransform() const {
   return T_odom_imu * T_base_imu.inverse();
 }
 
-Eigen::Matrix4d LaserMappingNode::getOutputBaseTransform() {
-  const Eigen::Matrix4d T_odom_base = getOdomToBaseTransform();
+Eigen::Matrix4d LaserMappingNode::get_output_base_transform() {
+  const Eigen::Matrix4d T_odom_base = get_odom_to_base_transform();
 
   if (!output_origin_initialized_) {
     T_output_origin_inv_ = T_odom_base.inverse();
@@ -1215,10 +1253,10 @@ Eigen::Matrix4d LaserMappingNode::getOutputBaseTransform() {
   return T_output_origin_inv_ * T_odom_base;
 }
 
-Eigen::Vector3d LaserMappingNode::transformOdomPointToOutput(
+Eigen::Vector3d LaserMappingNode::transform_odom_point_to_output(
     const Eigen::Vector3d &p_odom) {
   if (!output_origin_initialized_) {
-    (void)getOutputBaseTransform();
+    (void)get_output_base_transform();
   }
 
   const Eigen::Vector4d p_homo(p_odom.x(), p_odom.y(), p_odom.z(), 1.0);
@@ -1227,9 +1265,27 @@ Eigen::Vector3d LaserMappingNode::transformOdomPointToOutput(
 
 template <typename T>
 void LaserMappingNode::set_posestamp(T &out) {
-  const Eigen::Matrix4d T_output_base = getOutputBaseTransform();
+  Eigen::Matrix4d T_output_base = get_output_base_transform();
   const Eigen::Matrix3d R_output_base = T_output_base.block<3, 3>(0, 0);
   const Eigen::Quaterniond q_base(R_output_base);
+
+  if (enable_z_constraint_) {
+    if (is_flat_terrain_) {
+      if (!output_z_constraint_initialized_) {
+        output_z_constraint_value_ = T_output_base(2, 3);
+        output_z_constraint_initialized_ = true;
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[Z_CONSTRAINT] flat mode: lock output base_link z at %.3f",
+            output_z_constraint_value_);
+      }
+      T_output_base(2, 3) = output_z_constraint_value_;
+    } else if (output_z_constraint_initialized_) {
+      RCLCPP_INFO(this->get_logger(),
+                  "[Z_CONSTRAINT] stairs mode: release output base_link z");
+      output_z_constraint_initialized_ = false;
+    }
+  }
 
   out.pose.position.x = T_output_base(0, 3);
   out.pose.position.y = T_output_base(1, 3);
@@ -1284,7 +1340,7 @@ void LaserMappingNode::RGBpointBodyToWorld(PointType const *const pi,
   V3D p_odom(state_point.rot * (state_point.offset_R_L_I * p_body +
                                 state_point.offset_T_L_I) +
              state_point.pos);
-  const Eigen::Vector3d p_global = transformOdomPointToOutput(
+  const Eigen::Vector3d p_global = transform_odom_point_to_output(
       Eigen::Vector3d(p_odom(0), p_odom(1), p_odom(2)));
 
   po->x = p_global.x();

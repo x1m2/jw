@@ -34,6 +34,7 @@
 #include <thread>
 #include <visualization_msgs/msg/marker.hpp>
 
+#include "imu_orientation_converter.hpp"
 #include "imu_processing.hpp"
 #include "preprocess.hpp"
 #define INIT_TIME (0.1)
@@ -50,15 +51,16 @@ class LaserMappingNode : public rclcpp::Node {
   void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg);
   void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg);
   void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in);
+  void set_stairs_mode(bool is_stairs);
   void timer_callback();
   void map_publish_callback();
   void map_save_callback(std_srvs::srv::Trigger::Request::ConstSharedPtr req,
                          std_srvs::srv::Trigger::Response::SharedPtr res);
   template <typename T>
   void set_posestamp(T &out);
-  Eigen::Matrix4d getOdomToBaseTransform() const;
-  Eigen::Matrix4d getOutputBaseTransform();
-  Eigen::Vector3d transformOdomPointToOutput(const Eigen::Vector3d &p_odom);
+  Eigen::Matrix4d get_odom_to_base_transform() const;
+  Eigen::Matrix4d get_output_base_transform();
+  Eigen::Vector3d transform_odom_point_to_output(const Eigen::Vector3d &p_odom);
 
   void pointBodyToWorld_ikfom(PointType const *const pi, PointType *const po,
                               state_ikfom &s);
@@ -143,6 +145,7 @@ class LaserMappingNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
       sub_pcl_livox_;
+  std::shared_ptr<ImuOrientationConverter> imu_orientation_converter_;
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -212,6 +215,12 @@ class LaserMappingNode : public rclcpp::Node {
   double base_to_imu_R;
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
+  bool enable_z_constraint_ = true;
+  bool is_flat_terrain_ = true;
+  bool z_constraint_initialized_ = false;
+  double z_constraint_value_ = 0.0;
+  bool output_z_constraint_initialized_ = false;
+  double output_z_constraint_value_ = 0.0;
   deque<double> time_buffer;
   deque<PointCloudXYZI::Ptr> lidar_buffer;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
