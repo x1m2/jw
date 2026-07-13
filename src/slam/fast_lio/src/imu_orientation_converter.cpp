@@ -28,6 +28,8 @@ ImuOrientationConverter::ImuOrientationConverter(
       "imu_orientation.euler_topic", "/imu/data_orientation");
   pitch_deviation_topic_ = node_->declare_parameter<std::string>(
       "imu_orientation.pitch_deviation_topic", "/imu/pitch_deviation");
+  stairs_state_topic_ = node_->declare_parameter<std::string>(
+      "imu_orientation.stairs_state_topic", "/stairs_state");
 
   if (queue_size_ <= 0) {
     RCLCPP_WARN(node_->get_logger(),
@@ -55,6 +57,8 @@ ImuOrientationConverter::ImuOrientationConverter(
       euler_topic_, qos);
   pitch_deviation_pub_ = node_->create_publisher<std_msgs::msg::Float32>(
       pitch_deviation_topic_, qos);
+  stairs_state_pub_ =
+      node_->create_publisher<std_msgs::msg::Bool>(stairs_state_topic_, qos);
 
   filtered_euler_deg_.x = 0.0;
   filtered_euler_deg_.y = 0.0;
@@ -62,9 +66,9 @@ ImuOrientationConverter::ImuOrientationConverter(
 
   RCLCPP_INFO(node_->get_logger(),
               "IMU orientation converter embedded in fast_lio: %s -> %s, "
-              "baseline=%.1f deg, threshold=%.1f deg",
+              "baseline=%.1f deg, threshold=%.1f deg, stairs_state=%s",
               imu_topic_.c_str(), euler_topic_.c_str(), pitch_baseline_,
-              stairs_threshold_);
+              stairs_threshold_, stairs_state_topic_.c_str());
 }
 
 void ImuOrientationConverter::imuCallback(
@@ -88,6 +92,10 @@ void ImuOrientationConverter::imuCallback(
   pitch_deviation_pub_->publish(deviation_msg);
 
   const bool current_stairs_state = pitch_deviation > stairs_threshold_;
+
+  std_msgs::msg::Bool stairs_state_msg;
+  stairs_state_msg.data = current_stairs_state;
+  stairs_state_pub_->publish(stairs_state_msg);
 
   // 只在状态变化时通知 FAST-LIO，避免每帧 IMU 都重置 z 约束。
   if (current_stairs_state != last_stairs_state_) {

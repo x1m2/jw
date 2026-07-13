@@ -16,6 +16,7 @@ pure_pursuit_local_planner:
     min_linear_velocity: 0.1
     acceleration_limit: 0.5
     deceleration_limit: 0.8
+    stairs_velocity_boost: 0.1 # 检测到楼梯时，max_linear_velocity 临时增加的量
 
     local_planning_frequency: 10.0
     local_lookahead_distance: 1.0

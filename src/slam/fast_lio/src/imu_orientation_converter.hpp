@@ -7,6 +7,7 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float32.hpp>
 
 class ImuOrientationConverter {
@@ -28,6 +29,7 @@ class ImuOrientationConverter {
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr euler_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pitch_deviation_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stairs_state_pub_;
   StairsStateCallback stairs_state_callback_;
 
   double alpha_ = 0.1;
@@ -44,6 +46,7 @@ class ImuOrientationConverter {
   std::string imu_topic_;
   std::string euler_topic_;
   std::string pitch_deviation_topic_;
+  std::string stairs_state_topic_;
 };
 
 #endif  // FAST_LIO_IMU_ORIENTATION_CONVERTER_HPP

@@ -47,6 +47,7 @@ struct PlannerConfig {
   double min_linear_velocity;    // 最小线速度
   double acceleration_limit;     // 加速度限制
   double deceleration_limit;     // 减速度限制
+  double stairs_velocity_boost;  // 楼梯状态下额外增加的X方向最大线速度
 
   // Obstacle avoidance parameters
   double obstacle_detection_range;  // 障碍物检测范围
@@ -116,7 +117,9 @@ class PurePursuitLocalPlanner {
 
  private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr stairs_state_sub_;
   bool emergency_stop_active_ = false;
+  bool stairs_state_active_ = false;
   // ROS相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -210,6 +213,8 @@ class PurePursuitLocalPlanner {
    * @brief emergency_stop回调函数
    */
   void emergencyStopCallback(std_msgs::msg::Bool::ConstSharedPtr msg);
+  void stairsStateCallback(std_msgs::msg::Bool::ConstSharedPtr msg);
+  double effectiveMaxLinearVelocity() const;
 
   /**
    * @brief 平滑后局部路径回调函数

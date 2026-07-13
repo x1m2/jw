@@ -46,6 +46,7 @@
             imu_topic: "/imu/data"
             euler_topic: "/imu/data_orientation"
             pitch_deviation_topic: "/imu/pitch_deviation"
+            stairs_state_topic: "/stairs_state"
             pitch_baseline: 0.0     #平地时的 pitch 基准值 单位:度 
             stairs_threshold: 14.0  #楼梯/坡面判断阈值 
             alpha: 0.1
