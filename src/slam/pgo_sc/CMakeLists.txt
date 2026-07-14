@@ -95,8 +95,7 @@ set(ROS_DEPENDENCIES
   rosbag2_storage
 )
 
-# A. 构建核心功能库 (Modules)
-add_library(${PROJECT_NAME}_modules SHARED
+add_library(${PROJECT_NAME}_modules STATIC
   src/loop_closure.cpp
   src/pgo_sc.cpp
 )

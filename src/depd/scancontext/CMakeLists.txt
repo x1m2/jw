@@ -13,7 +13,11 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
 )
 
-add_library(${PROJECT_NAME} SHARED src/Scancontext.cpp)
+add_library(${PROJECT_NAME} STATIC src/Scancontext.cpp)
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  OUTPUT_NAME scancontext_static
+  POSITION_INDEPENDENT_CODE ON
+)
 ament_target_dependencies(${PROJECT_NAME}
   pcl_conversions
 )
@@ -40,6 +44,6 @@ install(DIRECTORY include/
 )
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME})
+ament_export_libraries(scancontext_static)
 
 ament_package()
