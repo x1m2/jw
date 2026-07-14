@@ -136,7 +136,6 @@ kill_known_launches() {
 
     # run_relocalization.sh
     kill_by_pattern "ros2 launch pcd2pgm pcd2pgm_launch.py" "pcd2pgm launch"
-    kill_by_pattern "ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan.launch.py" "pointcloud_to_laserscan launch"
     kill_by_pattern "ros2 launch localization_sc run.launch.py" "localization_sc launch"
 
     # run_nav.sh
@@ -153,7 +152,6 @@ kill_known_python_scripts() {
     print_header "[STEP 3] Kill known Python helper scripts"
 
     kill_by_pattern "keyboard_control.py" "keyboard_control.py"
-    kill_by_pattern "livox_custom_to_pointcloud2.py" "livox_custom_to_pointcloud2.py"
     kill_by_pattern "wait_reloc_success_" "wait_reloc_success"
 
     if [ "$KILL_NAV_GUI" = "1" ]; then
@@ -177,7 +175,6 @@ kill_node_executables() {
     kill_by_pattern "topology_connect" "topology_connect executable"
     kill_by_pattern "pcd2pgm" "pcd2pgm executable"
     kill_by_pattern "localization_sc" "localization_sc executable"
-    kill_by_pattern "pointcloud_to_laserscan" "pointcloud_to_laserscan executable"
     kill_by_pattern "costmap_2d" "costmap_2d executable"
     kill_by_pattern "global_path_planner" "global_path_planner executable"
     kill_by_pattern "path_smoother" "path_smoother executable"

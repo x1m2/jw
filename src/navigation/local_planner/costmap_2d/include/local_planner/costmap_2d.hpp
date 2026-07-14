@@ -7,18 +7,19 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
 #include <mutex>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
-#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <utility>
@@ -65,20 +66,47 @@ class CostMap2D {
   // ROS2相关
   rclcpp::Node::SharedPtr node_;
 
-  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
+      livox_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_pub_;
 
   // TF相关
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+  std::unique_ptr<tf2_ros::StaticTransformBroadcaster>
+      static_tf_broadcaster_;
 
-  // 激光数据回调
-  void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan_msg);
+  // Livox 原始点云回调及内部二维投影
+  void livoxCallback(
+      const livox_ros_driver2::msg::CustomMsg::SharedPtr livox_msg);
+  sensor_msgs::msg::LaserScan::SharedPtr livoxToLaserScan(
+      const livox_ros_driver2::msg::CustomMsg& livox_msg) const;
+  void processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg);
+  void publishLidarStaticTransform();
 
   // 参数
   std::string global_frame_;      // 全局坐标系
   std::string robot_base_frame_;  // 机器人基座坐标系
-  std::string scan_topic_;        // 激光话题名
+  std::string livox_topic_;       // Livox CustomMsg 话题名
+  std::string lidar_frame_;       // 雷达坐标系
+
+  // 雷达在 robot_base_frame 中的固定外参
+  double lidar_x_;
+  double lidar_y_;
+  double lidar_z_;
+  double lidar_roll_;
+  double lidar_pitch_;
+  double lidar_yaw_;
+  Eigen::Affine3d lidar_to_base_transform_;
+
+  // 三维点云裁剪及二维投影参数
+  double min_height_;
+  double max_height_;
+  double angle_min_;
+  double angle_max_;
+  double angle_increment_;
+  double range_min_;
+  double range_max_;
 
   // 代价地图参数
   double resolution_;  // 分辨率 (m/pixel)

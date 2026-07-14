@@ -6,9 +6,7 @@ ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路
 
 ```text
 /livox/lidar
-  -> livox_custom_to_pointcloud2 -> /livox/pointcloud2
-  -> pointcloud_to_laserscan     -> /scan
-  -> costmap_2d                  -> /local_costmap/costmap
+  -> costmap_2d -> /local_costmap/costmap
 
 /pose_stamped_localization + /target_points
   -> global_path_planner -> /global_path

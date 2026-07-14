@@ -58,12 +58,9 @@ declare -a PIDS=()
 LIVOX_PID=""
 FASTLIO_PID=""
 PCD2PGM_RELOC_PID=""
-POINTCLOUD_TO_LASERSCAN_RELOC_PID=""
 LOCALIZATION_PID=""
 
 # run_nav.sh 自己启动的节点 PID
-LIVOX_CONVERT_PID=""
-POINTCLOUD_TO_LASERSCAN_PID=""
 COSTMAP_PID=""
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
@@ -214,12 +211,6 @@ add_existing_pid_from_file \
     "optional"
 
 add_existing_pid_from_file \
-    POINTCLOUD_TO_LASERSCAN_RELOC_PID \
-    "pointcloud_to_laserscan" \
-    "${RELOCALIZATION_DIR}/pointcloud_to_laserscan.pid" \
-    "optional"
-
-add_existing_pid_from_file \
     LOCALIZATION_PID \
     "localization_sc" \
     "${RELOCALIZATION_DIR}/localization_sc.pid" \
@@ -228,14 +219,6 @@ add_existing_pid_from_file \
 # ==================================================
 # 启动导航节点
 # ==================================================
-
-start_bg LIVOX_CONVERT_PID "livox_custom_to_pointcloud2" \
-    "${NAV_LOG_DIR}/livox_custom_to_pointcloud2_$(log_time).log" 1 \
-    python3 "${WORKSPACE_DIR}/src/scripts/livox_custom_to_pointcloud2.py"
-
-start_bg POINTCLOUD_TO_LASERSCAN_PID "pointcloud_to_laserscan" \
-    "${NAV_LOG_DIR}/pointcloud_to_laserscan_$(log_time).log" 1 \
-    ros2 launch pointcloud_to_laserscan pointcloud_to_laserscan.launch.py
 
 start_bg COSTMAP_PID "costmap_2d" \
     "${NAV_LOG_DIR}/costmap_2d_$(log_time).log" 1 \

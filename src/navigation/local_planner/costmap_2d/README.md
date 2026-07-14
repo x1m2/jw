@@ -5,7 +5,8 @@
 ## 功能模块
 
 ### 1. CostMap2D节点
-- 订阅激光扫描数据 (`/scan`)
+- 直接订阅 Livox 原始点云 (`/livox/lidar`，`livox_ros_driver2/msg/CustomMsg`)
+- 在节点内部完成雷达外参变换、高度/距离裁剪和二维射线投影
 - 生成以机器人为中心的局部代价地图
 - 支持障碍物膨胀
 - 发布代价地图供路径规划使用
@@ -54,7 +55,7 @@ rostopic echo /costmap
 ## 主要话题
 
 ### 订阅的话题
-- `/scan` (sensor_msgs/LaserScan) - 激光扫描数据
+- `/livox/lidar` (livox_ros_driver2/msg/CustomMsg) - Livox 原始点云
 
 ### 发布的话题
 - `/costmap` (nav_msgs/OccupancyGrid) - 代价地图
@@ -65,7 +66,15 @@ rostopic echo /costmap
 ### 坐标系参数
 - `global_frame`: 全局坐标系 (默认: "map")
 - `robot_base_frame`: 机器人基座坐标系 (默认: "base_link")
-- `scan_topic`: 激光话题名 (默认: "/scan")
+- `livox_topic`: Livox 原始点云话题 (默认: "/livox/lidar")
+- `lidar_frame`: 雷达坐标系 (默认: "livox_frame")
+
+### 雷达外参与投影参数
+- `lidar_x/y/z`: 雷达在 `base_link` 中的位置，单位 m
+- `lidar_roll/pitch/yaw`: 雷达安装姿态，单位 rad
+- `min_height/max_height`: 在 `base_link` 中保留的点云高度
+- `angle_min/angle_max/angle_increment`: 内部二维射线角度范围和分辨率
+- `range_min/range_max`: 点云有效距离范围
 
 ### 地图参数
 - `resolution`: 分辨率 m/pixel (默认: 0.05)
@@ -102,7 +111,7 @@ rostopic echo /costmap
 ## 注意事项
 
 1. 确保TF树正确设置 (map -> base_link)
-2. 激光扫描数据正常发布
+2. Livox 驱动以 CustomMsg 格式发布 `/livox/lidar`
 3. 代价地图会自动以机器人为中心更新
 4. 地图尺寸为 20m x 20m (可在参数中调整)
 

@@ -38,17 +38,27 @@ CostMap2D::CostMap2D(const rclcpp::Node::SharedPtr& node)
 CostMap2D::~CostMap2D() {}
 
 bool CostMap2D::initialize() {
-  scan_sub_ = node_->create_subscription<sensor_msgs::msg::LaserScan>(
-      scan_topic_, rclcpp::SensorDataQoS(),
-      std::bind(&CostMap2D::scanCallback, this, std::placeholders::_1));
+  if (angle_increment_ <= 0.0 || angle_max_ <= angle_min_ ||
+      range_max_ <= range_min_ || max_height_ < min_height_) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Invalid Livox projection parameters: angle/range/height "
+                 "limits must be ordered and angle_increment must be > 0");
+    return false;
+  }
+
+  livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+      livox_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&CostMap2D::livoxCallback, this, std::placeholders::_1));
 
   costmap_pub_ = node_->create_publisher<nav_msgs::msg::OccupancyGrid>(
       "/costmap", rclcpp::QoS(1).reliable());
 
+  publishLidarStaticTransform();
   initializeCostMap();
 
   RCLCPP_INFO(node_->get_logger(), "CostMap2D node initialized successfully");
-  RCLCPP_INFO(node_->get_logger(), "Subscribed to: %s", scan_topic_.c_str());
+  RCLCPP_INFO(node_->get_logger(), "Subscribed to Livox CustomMsg: %s",
+              livox_topic_.c_str());
   RCLCPP_INFO(node_->get_logger(), "Publishing costmap to: costmap");
 
   return true;
@@ -57,7 +67,23 @@ bool CostMap2D::initialize() {
 void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("global_frame", "map");
   node_->declare_parameter<std::string>("robot_base_frame", "base_link");
-  node_->declare_parameter<std::string>("scan_topic", "/scan");
+  node_->declare_parameter<std::string>("livox_topic", "/livox/lidar");
+  node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
+
+  node_->declare_parameter<double>("lidar_x", 0.28);
+  node_->declare_parameter<double>("lidar_y", 0.0);
+  node_->declare_parameter<double>("lidar_z", 0.70);
+  node_->declare_parameter<double>("lidar_roll", 0.0);
+  node_->declare_parameter<double>("lidar_pitch", 0.4119);
+  node_->declare_parameter<double>("lidar_yaw", 0.0);
+
+  node_->declare_parameter<double>("min_height", 0.2);
+  node_->declare_parameter<double>("max_height", 1.3);
+  node_->declare_parameter<double>("angle_min", -M_PI);
+  node_->declare_parameter<double>("angle_max", M_PI);
+  node_->declare_parameter<double>("angle_increment", 0.0087);
+  node_->declare_parameter<double>("range_min", 0.4);
+  node_->declare_parameter<double>("range_max", 8.0);
 
   node_->declare_parameter<double>("resolution", 0.05);
   node_->declare_parameter<int>("width", 400);
@@ -77,7 +103,23 @@ void CostMap2D::loadParameters() {
 
   node_->get_parameter("global_frame", global_frame_);
   node_->get_parameter("robot_base_frame", robot_base_frame_);
-  node_->get_parameter("scan_topic", scan_topic_);
+  node_->get_parameter("livox_topic", livox_topic_);
+  node_->get_parameter("lidar_frame", lidar_frame_);
+
+  node_->get_parameter("lidar_x", lidar_x_);
+  node_->get_parameter("lidar_y", lidar_y_);
+  node_->get_parameter("lidar_z", lidar_z_);
+  node_->get_parameter("lidar_roll", lidar_roll_);
+  node_->get_parameter("lidar_pitch", lidar_pitch_);
+  node_->get_parameter("lidar_yaw", lidar_yaw_);
+
+  node_->get_parameter("min_height", min_height_);
+  node_->get_parameter("max_height", max_height_);
+  node_->get_parameter("angle_min", angle_min_);
+  node_->get_parameter("angle_max", angle_max_);
+  node_->get_parameter("angle_increment", angle_increment_);
+  node_->get_parameter("range_min", range_min_);
+  node_->get_parameter("range_max", range_max_);
 
   node_->get_parameter("resolution", resolution_);
   node_->get_parameter("width", width_);
@@ -94,6 +136,30 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("enable_pitch_detection", enable_pitch_detection_);
   node_->get_parameter("max_pitch_angle", max_pitch_angle_);
   node_->get_parameter("pitch_recovery_time", pitch_recovery_time_);
+
+  const Eigen::AngleAxisd roll_angle(lidar_roll_, Eigen::Vector3d::UnitX());
+  const Eigen::AngleAxisd pitch_angle(lidar_pitch_, Eigen::Vector3d::UnitY());
+  const Eigen::AngleAxisd yaw_angle(lidar_yaw_, Eigen::Vector3d::UnitZ());
+  lidar_to_base_transform_ = Eigen::Translation3d(lidar_x_, lidar_y_, lidar_z_) *
+                             yaw_angle * pitch_angle * roll_angle;
+}
+
+void CostMap2D::publishLidarStaticTransform() {
+  static_tf_broadcaster_ =
+      std::make_unique<tf2_ros::StaticTransformBroadcaster>(node_);
+
+  geometry_msgs::msg::TransformStamped transform;
+  transform.header.stamp = node_->now();
+  transform.header.frame_id = robot_base_frame_;
+  transform.child_frame_id = lidar_frame_;
+  transform.transform.translation.x = lidar_x_;
+  transform.transform.translation.y = lidar_y_;
+  transform.transform.translation.z = lidar_z_;
+
+  tf2::Quaternion rotation;
+  rotation.setRPY(lidar_roll_, lidar_pitch_, lidar_yaw_);
+  transform.transform.rotation = tf2::toMsg(rotation);
+  static_tf_broadcaster_->sendTransform(transform);
 }
 
 void CostMap2D::initializeCostMap() {
@@ -129,8 +195,75 @@ void CostMap2D::initializeCostMap() {
               resolution_);
 }
 
-void CostMap2D::scanCallback(
-    const sensor_msgs::msg::LaserScan::SharedPtr scan_msg) {
+void CostMap2D::livoxCallback(
+    const livox_ros_driver2::msg::CustomMsg::SharedPtr livox_msg) {
+  if (livox_msg->points.empty()) {
+    return;
+  }
+
+  if (!livox_msg->header.frame_id.empty() &&
+      livox_msg->header.frame_id != lidar_frame_) {
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 5000,
+        "Livox message frame '%s' differs from configured lidar_frame '%s'; "
+        "using configured fixed extrinsics",
+        livox_msg->header.frame_id.c_str(), lidar_frame_.c_str());
+  }
+
+  processLaserScan(*livoxToLaserScan(*livox_msg));
+}
+
+sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
+    const livox_ros_driver2::msg::CustomMsg& livox_msg) const {
+  auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
+  scan->header.stamp = livox_msg.header.stamp;
+  scan->header.frame_id = robot_base_frame_;
+  scan->angle_min = static_cast<float>(angle_min_);
+  scan->angle_max = static_cast<float>(angle_max_);
+  scan->angle_increment = static_cast<float>(angle_increment_);
+  scan->range_min = static_cast<float>(range_min_);
+  scan->range_max = static_cast<float>(range_max_);
+
+  const auto ray_count = static_cast<std::size_t>(
+      std::ceil((angle_max_ - angle_min_) / angle_increment_));
+  scan->ranges.assign(ray_count, std::numeric_limits<float>::infinity());
+
+  for (const auto& livox_point : livox_msg.points) {
+    if (!std::isfinite(livox_point.x) || !std::isfinite(livox_point.y) ||
+        !std::isfinite(livox_point.z)) {
+      continue;
+    }
+
+    const Eigen::Vector3d point_base =
+        lidar_to_base_transform_ *
+        Eigen::Vector3d(livox_point.x, livox_point.y, livox_point.z);
+
+    if (point_base.z() < min_height_ || point_base.z() > max_height_) {
+      continue;
+    }
+
+    const double range = std::hypot(point_base.x(), point_base.y());
+    if (range < range_min_ || range > range_max_) {
+      continue;
+    }
+
+    const double angle = std::atan2(point_base.y(), point_base.x());
+    if (angle < angle_min_ || angle > angle_max_) {
+      continue;
+    }
+
+    const auto index = static_cast<std::size_t>(
+        (angle - angle_min_) / angle_increment_);
+    if (index < scan->ranges.size() && range < scan->ranges[index]) {
+      scan->ranges[index] = static_cast<float>(range);
+    }
+  }
+
+  return scan;
+}
+
+void CostMap2D::processLaserScan(
+    const sensor_msgs::msg::LaserScan& scan_msg) {
   std::lock_guard<std::mutex> lock(costmap_mutex_);
 
   updateMapOrigin();
@@ -152,14 +285,14 @@ void CostMap2D::scanCallback(
     clearCostMap();
     RCLCPP_DEBUG(node_->get_logger(), "Pitch angle exceeded, costmap cleared");
   } else {
-    raytraceFreespace(*scan_msg, robot_x, robot_y);
+    raytraceFreespace(scan_msg, robot_x, robot_y);
 
     pcl::PointCloud<pcl::PointXYZ> scan_cloud;
-    scanToPointCloud(*scan_msg, scan_cloud);
+    scanToPointCloud(scan_msg, scan_cloud);
 
     pcl::PointCloud<pcl::PointXYZ> global_cloud;
     if (transformPointCloud(scan_cloud, global_cloud, global_frame_,
-                            rclcpp::Time(scan_msg->header.stamp))) {
+                            rclcpp::Time(scan_msg.header.stamp))) {
       markObstacles(global_cloud);
       inflateObstacles();
 
@@ -517,7 +650,7 @@ bool CostMap2D::isPitchAngleExceeded() {
 }
 
 void CostMap2D::updateCostMap() {
-  // 这个函数可以用于周期性更新，目前主要通过scan回调更新
+  // 这个函数可以用于周期性更新，目前主要通过 Livox 点云回调更新
 }
 
 void CostMap2D::decayObstacles() {
