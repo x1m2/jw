@@ -27,11 +27,5 @@ def generate_launch_description():
             executable='path_smoother_node',
             output='screen',
             parameters=[config_file],
-
-            remappings=[
-                ('global_path', '/global_path'),
-                ('smoothed_global_path', '/smoothed_global_path'),
-                ('path_visualization', '/path_visualization'),
-            ],
         ),
     ])
