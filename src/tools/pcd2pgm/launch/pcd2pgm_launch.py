@@ -10,7 +10,7 @@ from launch.actions import (
     SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 
 def generate_launch_description():
@@ -46,6 +46,12 @@ def generate_launch_description():
         description="Whether to launch RViz2",
     )
 
+    declare_data_dir_cmd = DeclareLaunchArgument(
+        "data_dir",
+        default_value="/robotfs/data/slam_data",
+        description="SLAM data root directory",
+    )
+
     start_pcd2pgm_cmd = Node(
         package="pcd2pgm",
         executable="pcd2pgm_node",
@@ -53,6 +59,13 @@ def generate_launch_description():
         output="screen",
         parameters=[
             params_file,
+            {
+                "pcd_file": PathJoinSubstitution([
+                    LaunchConfiguration("data_dir"),
+                    "map",
+                    "result.pcd",
+                ]),
+            },
         ],
     )
 
@@ -77,6 +90,7 @@ def generate_launch_description():
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
+    ld.add_action(declare_data_dir_cmd)
 
     ld.add_action(start_pcd2pgm_cmd)
     ld.add_action(start_rviz_cmd)

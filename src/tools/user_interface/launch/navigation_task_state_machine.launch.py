@@ -33,6 +33,12 @@ def generate_launch_description():
             description='节点名称'
         ),
 
+        DeclareLaunchArgument(
+            'data_dir',
+            default_value='/robotfs/data/slam_data',
+            description='SLAM data root directory'
+        ),
+
         Node(
             package='user_interface',
             executable='navigation_task_state_machine_node',
@@ -40,6 +46,17 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 LaunchConfiguration('params_file'),
+                {
+                    'task_folder_path': PathJoinSubstitution([
+                        LaunchConfiguration('data_dir'),
+                        'task',
+                    ]),
+                    'target_points_file': PathJoinSubstitution([
+                        LaunchConfiguration('data_dir'),
+                        'topology_map',
+                        'generated_map_target_points.txt',
+                    ]),
+                },
             ]
         )
     ])

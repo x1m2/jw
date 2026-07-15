@@ -25,6 +25,12 @@ def generate_launch_description():
         description='Path to global path planner parameter yaml file'
     )
 
+    data_dir_arg = DeclareLaunchArgument(
+        'data_dir',
+        default_value='/robotfs/data/slam_data',
+        description='SLAM data root directory'
+    )
+
     global_path_planner_node = Node(
         package='global_path_planner',
         executable='global_path_planner_node',
@@ -32,10 +38,23 @@ def generate_launch_description():
         output='screen',
         parameters=[
             LaunchConfiguration('config_file'),
+            {
+                'topology_map_file': PathJoinSubstitution([
+                    LaunchConfiguration('data_dir'),
+                    'topology_map',
+                    'connected_topology_map.txt',
+                ]),
+                'free_space_pcd_file': PathJoinSubstitution([
+                    LaunchConfiguration('data_dir'),
+                    'map',
+                    'result_free_space.pcd',
+                ]),
+            },
         ]
     )
 
     return LaunchDescription([
         config_file_arg,
+        data_dir_arg,
         global_path_planner_node,
     ])

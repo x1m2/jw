@@ -3,7 +3,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 
 
@@ -42,11 +42,18 @@ def generate_launch_description():
         default_value='/cloud_registered'
     )
 
+    data_dir_arg = DeclareLaunchArgument(
+        'data_dir',
+        default_value='/robotfs/data/slam_data',
+        description='SLAM data root directory'
+    )
+
     return LaunchDescription([
         pgo_use_rviz_arg,
         use_sim_time_arg,
         odom_topic_arg,
         lidar_topic_arg,
+        data_dir_arg,
 
         Node(
             package='pgo_sc',
@@ -56,6 +63,10 @@ def generate_launch_description():
                 config_file_path,
                 {
                     'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'basic.package_path': PathJoinSubstitution([
+                        LaunchConfiguration('data_dir'),
+                        'map',
+                    ]),
                 }
             ],
             remappings=[

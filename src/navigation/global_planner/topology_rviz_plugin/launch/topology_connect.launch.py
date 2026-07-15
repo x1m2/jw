@@ -5,7 +5,7 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -28,6 +28,12 @@ def generate_launch_description():
             description="true: 连边后退出；false: 连边后持续发布 RViz Marker"
         ),
 
+        DeclareLaunchArgument(
+            "data_dir",
+            default_value="/robotfs/data/slam_data",
+            description="SLAM data root directory"
+        ),
+
         Node(
             package="topology_rviz_plugin",
             executable="topology_connect.py",
@@ -41,6 +47,16 @@ def generate_launch_description():
                     "marker_topic": "/topology_markers",
                     "frame_id": "map",
                     "publish_period": 1.0,
+                    "input_file": PathJoinSubstitution([
+                        LaunchConfiguration("data_dir"),
+                        "topology_map",
+                        "generated_map.txt",
+                    ]),
+                    "output_file": PathJoinSubstitution([
+                        LaunchConfiguration("data_dir"),
+                        "topology_map",
+                        "connected_topology_map.txt",
+                    ]),
                 }
             ],
         )

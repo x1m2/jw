@@ -3,9 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-LOG_ROOT="${WORKSPACE_DIR}/log"
-
-readonly DATA_DIR="/robotfs/data/slam_data"
+readonly DATA_DIR="$(pwd -P)"
+LOG_ROOT="${DATA_DIR}/log"
 MAP_DIR="${DATA_DIR}/map"
 
 info() { echo "[INFO] $*"; }
@@ -208,7 +207,8 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false use_sim_time:=true
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 2 \
-    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true use_sim_time:=true
+    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true use_sim_time:=true \
+    "data_dir:=${DATA_DIR}"
 
 info "建议检查 publisher 数量："
 echo "ros2 topic info /Odometry -v"

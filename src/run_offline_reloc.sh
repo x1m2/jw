@@ -3,7 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-LOG_ROOT="${WORKSPACE_DIR}/log"
+readonly DATA_DIR="$(pwd -P)"
+LOG_ROOT="${DATA_DIR}/log"
 
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
@@ -27,8 +28,7 @@ cd "${WORKSPACE_DIR}"
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
 
-# 使用与在线节点相同的固定地图目录。
-readonly DATA_DIR="/robotfs/data/slam_data"
+# 从启动脚本时的当前目录读取离线地图。
 MAP_BAG_DIR="${DATA_DIR}/map/result_bag"
 
 if [ ! -d "${MAP_BAG_DIR}" ]; then
@@ -228,7 +228,8 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false use_sim_time:=true
 
 start_bg LOCALIZATION_PID "LOCALIZATION SC" "${LOCALIZATION_LOG_FILE}" 2 \
-    ros2 launch localization_sc run.launch.py localization_use_rviz:=true use_sim_time:=true
+    ros2 launch localization_sc run.launch.py localization_use_rviz:=true use_sim_time:=true \
+    "data_dir:=${DATA_DIR}"
 
 info "建议检查 topic："
 echo "ros2 topic info /Odometry -v"
