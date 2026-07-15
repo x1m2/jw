@@ -6,12 +6,12 @@ rviz_topology:
     topology_tool:
       marker_topic: "topology_markers"
       point_topic: "topology_points"
-      pcd_file: "${ROBOT_DATA_DIR}/map/result_free_space.pcd"
+      pcd_file: "/robotfs/data/slam_data/map/result_free_space.pcd"
 
       node_label: "节点"
 
       selection_threshold: 0.3
       bidirectional: true
 
-      save_file: "${ROBOT_DATA_DIR}/topology_map/connected_topology_map.txt"
+      save_file: "/robotfs/data/slam_data/topology_map/connected_topology_map.txt"
       auto_load_topology: true

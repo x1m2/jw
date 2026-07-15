@@ -11,7 +11,6 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     pkg_share = FindPackageShare('global_path_planner')
 
     default_config_file = PathJoinSubstitution([
@@ -33,18 +32,6 @@ def generate_launch_description():
         output='screen',
         parameters=[
             LaunchConfiguration('config_file'),
-            {
-                'topology_map_file': os.path.join(
-                    robot_data_dir,
-                    'topology_map',
-                    'connected_topology_map.txt',
-                ),
-                'free_space_pcd_file': os.path.join(
-                    robot_data_dir,
-                    'map',
-                    'result_free_space.pcd',
-                ),
-            },
         ]
     )
 

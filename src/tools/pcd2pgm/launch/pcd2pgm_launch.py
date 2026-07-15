@@ -14,7 +14,6 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     bringup_dir = get_package_share_directory("pcd2pgm")
 
     params_file = LaunchConfiguration("params_file")
@@ -54,13 +53,6 @@ def generate_launch_description():
         output="screen",
         parameters=[
             params_file,
-            {
-                "pcd_file": os.path.join(
-                    robot_data_dir,
-                    "map",
-                    "result.pcd",
-                )
-            },
         ],
     )
 

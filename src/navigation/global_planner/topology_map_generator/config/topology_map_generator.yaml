@@ -1,5 +1,5 @@
 topology_map_generator:
   ros__parameters:
-    output_file: "${ROBOT_DATA_DIR}/topology_map/generated_map.txt"
+    output_file: "/robotfs/data/slam_data/topology_map/generated_map.txt"
     pose_topic: "/pose_stamped"
     trigger_topic: "/topology_node_set"

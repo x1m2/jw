@@ -27,16 +27,14 @@ cd "${WORKSPACE_DIR}"
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
 
-# 指定当前要使用的地图根目录。
-# result_bag 放在 src 同级目录，即 ${WORKSPACE_DIR}/result_bag
-export ROBOT_DATA_DIR="${WORKSPACE_DIR}"
-
-MAP_BAG_DIR="${ROBOT_DATA_DIR}/result_bag"
+# 使用与在线节点相同的固定地图目录。
+readonly DATA_DIR="/robotfs/data/slam_data"
+MAP_BAG_DIR="${DATA_DIR}/map/result_bag"
 
 if [ ! -d "${MAP_BAG_DIR}" ]; then
     err "找不到已有地图目录: ${MAP_BAG_DIR}"
     err "请确认目录结构为："
-    err "${ROBOT_DATA_DIR}/result_bag/result_bag_0.db3"
+    err "${DATA_DIR}/map/result_bag/result_bag_0.db3"
     exit 1
 fi
 
@@ -45,7 +43,7 @@ if ! find "${MAP_BAG_DIR}" -maxdepth 1 -name "*.db3" -type f | grep -q .; then
     exit 1
 fi
 
-info "ROBOT_DATA_DIR: ${ROBOT_DATA_DIR}"
+info "数据目录: ${DATA_DIR}"
 info "已有地图目录: ${MAP_BAG_DIR}"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}

@@ -9,7 +9,7 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
-source "${SCRIPT_DIR}/load_robot_env.sh"
+readonly DATA_DIR="/robotfs/data/slam_data"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
@@ -29,12 +29,12 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-mkdir -p "${ROBOT_DATA_DIR}"
+mkdir -p "${DATA_DIR}"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then
     LOG_ROOT="${WORKFLOW_LOG_DIR}"
 else
-    LOG_ROOT="${ROBOT_DATA_DIR}/log/$(date +%Y%m%d_%H%M%S)"
+    LOG_ROOT="${DATA_DIR}/log/$(date +%Y%m%d_%H%M%S)"
 fi
 
 SLAM_LOG_DIR="${LOG_ROOT}/slam"
@@ -50,7 +50,7 @@ TOPOLOGY_LOG_FILE="${SLAM_LOG_DIR}/topology_map_generator_$(log_time).log"
 
 
 info "开始建图流程"
-info "数据目录: ${ROBOT_DATA_DIR}"
+info "数据目录: ${DATA_DIR}"
 
 # ==================================================
 # 进程记录
@@ -64,7 +64,7 @@ TOPOLOGY_PID=""
 CLEANING=0
 
 SAVE_POPUP_PID=""
-ROBOT_RUNTIME_DIR="$(dirname "${ROBOT_DATA_DIR}")"
+ROBOT_RUNTIME_DIR="$(dirname "${DATA_DIR}")"
 SAVE_POPUP_SIGNAL="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_done_$$"
 SAVE_POPUP_STATUS="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_status_$$"
 

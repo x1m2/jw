@@ -156,7 +156,7 @@ rviz2 -d install/topology_rviz_plugin/share/topology_rviz_plugin/rviz/topology_d
 3. 验证插件XML文件路径
 
 ### 无法在点云上添加节点
-1. 确保 `topology_tool.pcd_file` 指向的 PCD 文件存在，默认是 `${ROBOT_DATA_DIR}/map/result_free_space.pcd`
+1. 确保 `topology_tool.pcd_file` 指向的 PCD 文件存在，默认是 `/robotfs/data/slam_data/map/result_free_space.pcd`
 2. 检查 PCD 点云是否为空或坐标系是否与 `map` 一致
 3. 调整"Selection Threshold"参数（建议从0.3开始）
 4. 确保点击位置在点云可视化区域内

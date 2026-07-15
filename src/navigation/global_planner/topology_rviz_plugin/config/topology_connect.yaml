@@ -1,7 +1,7 @@
 topology_connect_node:
   ros__parameters:
-    input_file: "${ROBOT_DATA_DIR}/topology_map/generated_map.txt"
-    output_file: "${ROBOT_DATA_DIR}/topology_map/connected_topology_map.txt"
+    input_file: "/robotfs/data/slam_data/topology_map/generated_map.txt"
+    output_file: "/robotfs/data/slam_data/topology_map/connected_topology_map.txt"
 
     show_statistics: true
     run_once: true

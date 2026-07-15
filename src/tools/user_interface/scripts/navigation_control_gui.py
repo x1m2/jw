@@ -8,7 +8,7 @@
 - 可视化控制导航任务
 - 显示当前目标点和导航状态
 - 支持开始任务、循环任务、停止任务、继续任务、回家、紧急停止
-- 从 ROBOT_DATA_DIR 环境变量读取任务目录
+- 从固定数据目录读取任务文件
 - 自动加载 task_folder_path 目录下的 .txt 任务文件
 """
 
@@ -120,17 +120,9 @@ class NavigationControlGUI(Node):
     # YAML 读取
     # ==================================================
     def resolve_task_folder_path(self) -> str:
-        try:
-            robot_data_dir = os.environ["ROBOT_DATA_DIR"]
-            task_folder = os.path.join(robot_data_dir, "task")
-            self.get_logger().info(
-                f"从 ROBOT_DATA_DIR 读取任务目录: {task_folder}"
-            )
-            return task_folder
-
-        except Exception as e:
-            self.get_logger().error(f"读取 ROBOT_DATA_DIR 失败: {e}")
-            return ""
+        task_folder = "/robotfs/data/slam_data/task"
+        self.get_logger().info(f"任务目录: {task_folder}")
+        return task_folder
 
     def expand_path(self, path: str) -> str:
         """展开 ~ 和环境变量"""
@@ -146,7 +138,7 @@ class NavigationControlGUI(Node):
 
         navigation_task_state_machine_node:
           ros__parameters:
-            task_folder_path: "${ROBOT_DATA_DIR}/task"
+            task_folder_path: "/robotfs/data/slam_data/task"
         """
         yaml_file = self.expand_path(yaml_file)
 

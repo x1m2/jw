@@ -8,11 +8,8 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 WORKSPACE_DIR="$(dirname "${SCRIPT_DIR}")"
 
-if ! source "${SCRIPT_DIR}/load_robot_env.sh"; then
-    exit 1
-fi
-
-LOG_ROOT_BASE="${ROBOT_DATA_DIR}/log"
+readonly DATA_DIR="/robotfs/data/slam_data"
+LOG_ROOT_BASE="${DATA_DIR}/log"
 
 SELF_PID="$$"
 

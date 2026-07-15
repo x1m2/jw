@@ -28,22 +28,6 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
 
-def load_robot_env(env_file: str) -> None:
-    if not os.path.isfile(env_file):
-        raise RuntimeError(f"找不到机器人环境配置: {env_file}")
-    with open(env_file, "r", encoding="utf-8") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            key, sep, value = line.partition("=")
-            if not sep:
-                raise RuntimeError(f"robot.env 配置格式错误: {raw.rstrip()}")
-            os.environ[key.strip()] = os.path.expandvars(
-                os.path.expanduser(value.strip())
-            )
-
-
 class NavigationWorkflowGUI:
     def __init__(self):
         self.gui_file_path = os.path.realpath(__file__)
@@ -51,11 +35,9 @@ class NavigationWorkflowGUI:
         self.workspace_dir = os.path.dirname(gui_dir)
         self.script_dir = os.path.join(self.workspace_dir, "src")
 
-        load_robot_env(os.path.join(self.script_dir, "robot.env"))
-        self.robot_home = os.environ["ROBOT_HOME"]
-        self.robot_data_dir = os.environ["ROBOT_DATA_DIR"]
-        self.runtime_robot_data_dir = self.robot_data_dir
-        self.robot_runtime_dir = os.path.dirname(self.robot_data_dir)
+        self.data_dir = "/robotfs/data/slam_data"
+        self.runtime_data_dir = self.data_dir
+        self.robot_runtime_dir = os.path.dirname(self.data_dir)
 
         self.run_kill_node_script = os.path.join(self.script_dir, "run_kill_node.sh")
         self.run_slam_script = os.path.join(self.script_dir, "run_slam.sh")
@@ -102,8 +84,8 @@ class NavigationWorkflowGUI:
         self.robot_nav_state_received = False
         self.emergency_stop_state = False
         self.last_target_update = "未接收到目标点"
-        self.task_folder_path = os.path.join(self.runtime_robot_data_dir, "task")
-        self.map_dir = os.path.join(self.runtime_robot_data_dir, "map")
+        self.task_folder_path = os.path.join(self.runtime_data_dir, "task")
+        self.map_dir = os.path.join(self.runtime_data_dir, "map")
         self.map_bag_dir = os.path.join(self.map_dir, "result_bag")
         self.map_pcd_file = os.path.join(self.map_dir, "result.pcd")
         self.available_tasks = []
@@ -118,7 +100,7 @@ class NavigationWorkflowGUI:
         self.clean_tmp_launch_params_and_runtime_logs_before_gui_start()
 
         self.workflow_log_dir = os.path.join(
-            self.runtime_robot_data_dir, "log", self.workflow_time
+            self.runtime_data_dir, "log", self.workflow_time
         )
         os.makedirs(self.workflow_log_dir, exist_ok=True)
 
@@ -151,7 +133,7 @@ class NavigationWorkflowGUI:
         self.add_log("建图 / 编辑地图 / 重定位 / 自主导航 GUI 已启动")
         self.add_log(f"工作空间目录: {self.workspace_dir}")
         self.add_log(f"脚本目录: {self.script_dir}")
-        self.add_log(f"运行数据/日志根目录: {self.runtime_robot_data_dir}")
+        self.add_log(f"运行数据/日志根目录: {self.runtime_data_dir}")
         self.add_log(f"本次任务日志目录: {self.workflow_log_dir}")
         self.add_startup_kill_log_to_gui()
 
@@ -236,7 +218,7 @@ class NavigationWorkflowGUI:
         def record(message):
             outputs.append(message)
 
-        log_dir = os.path.join(self.runtime_robot_data_dir, "log")
+        log_dir = os.path.join(self.runtime_data_dir, "log")
         launch_params_pattern = os.path.join(self.robot_runtime_dir, "launch_params_*")
         try:
             should_clean = messagebox.askyesno(
@@ -837,7 +819,6 @@ class NavigationWorkflowGUI:
         env = os.environ.copy()
         env.update({
             "WORKFLOW_LOG_DIR": self.workflow_log_dir,
-            "ROBOT_DATA_DIR": self.runtime_robot_data_dir,
             "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LANGUAGE": "C.UTF-8",
         })
         return env
@@ -850,10 +831,8 @@ class NavigationWorkflowGUI:
         command = (
             f"cd {self.shell_quote(self.workspace_dir)} && "
             f"export WORKFLOW_LOG_DIR={self.shell_quote(self.workflow_log_dir)} && "
-            f"export ROBOT_DATA_DIR={self.shell_quote(self.runtime_robot_data_dir)} && "
             "echo '[INFO] 当前目录:' && pwd && "
             "echo '[INFO] WORKFLOW_LOG_DIR='${WORKFLOW_LOG_DIR} && "
-            "echo '[INFO] ROBOT_DATA_DIR='${ROBOT_DATA_DIR} && "
             f"echo '[INFO] 执行脚本: {script_path}' && "
         )
         if extra_env:
@@ -890,7 +869,6 @@ class NavigationWorkflowGUI:
         command = (
             f"cd {self.shell_quote(self.workspace_dir)} && "
             f"export WORKFLOW_LOG_DIR={self.shell_quote(self.workflow_log_dir)} && "
-            f"export ROBOT_DATA_DIR={self.shell_quote(self.runtime_robot_data_dir)} && "
             "source /opt/ros/humble/setup.bash && "
             "if [ -f install/setup.bash ]; then source install/setup.bash; fi && "
             f"python3 {self.shell_quote(python_path)}"

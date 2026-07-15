@@ -9,7 +9,7 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
-source "${SCRIPT_DIR}/load_robot_env.sh"
+readonly DATA_DIR="/robotfs/data/slam_data"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
@@ -29,12 +29,12 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-mkdir -p "${ROBOT_DATA_DIR}"
+mkdir -p "${DATA_DIR}"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then
     LOG_ROOT="${WORKFLOW_LOG_DIR}"
 else
-    LOG_ROOT="${ROBOT_DATA_DIR}/log/$(date +%Y%m%d_%H%M%S)"
+    LOG_ROOT="${DATA_DIR}/log/$(date +%Y%m%d_%H%M%S)"
 fi
 
 EDIT_MAP_DIR="${LOG_ROOT}/edit_map"
@@ -48,15 +48,15 @@ log_time() {
 TOPOLOGY_CONNECT_LOG_FILE="${EDIT_MAP_DIR}/topology_connect_$(log_time).log"
 TOPOLOGY_TOOL_LOG_FILE="${EDIT_MAP_DIR}/topology_tool_$(log_time).log"
 
-TOPOLOGY_MAP_DIR="${ROBOT_DATA_DIR}/topology_map"
+TOPOLOGY_MAP_DIR="${DATA_DIR}/topology_map"
 TARGET_POINTS_FILE="${TOPOLOGY_MAP_DIR}/generated_map.txt"
 FALLBACK_TARGET_POINTS_FILE="${TOPOLOGY_MAP_DIR}/generated_map_target_points.txt"
 
-TASK_DIR="${ROBOT_DATA_DIR}/task"
+TASK_DIR="${DATA_DIR}/task"
 TASK_FILE="${TASK_DIR}/test.txt"
 
 info "开始地图编辑流程"
-info "数据目录: ${ROBOT_DATA_DIR}"
+info "数据目录: ${DATA_DIR}"
 
 # ==================================================
 # 只关闭本脚本启动的进程组
@@ -166,7 +166,7 @@ cleanup() {
     wait 2>/dev/null || true
 
     info "地图编辑流程已结束"
-    info "数据目录: ${ROBOT_DATA_DIR}"
+    info "数据目录: ${DATA_DIR}"
 }
 
 trap cleanup EXIT INT TERM

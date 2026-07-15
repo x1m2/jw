@@ -12,7 +12,6 @@ from launch.substitutions import PathJoinSubstitution
 
 
 def generate_launch_description():
-    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
     user_interface_share = FindPackageShare('user_interface')
 
     default_params_file = PathJoinSubstitution([
@@ -41,14 +40,6 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 LaunchConfiguration('params_file'),
-                {
-                    'task_folder_path': os.path.join(robot_data_dir, 'task'),
-                    'target_points_file': os.path.join(
-                        robot_data_dir,
-                        'topology_map',
-                        'generated_map_target_points.txt',
-                    ),
-                },
             ]
         )
     ])

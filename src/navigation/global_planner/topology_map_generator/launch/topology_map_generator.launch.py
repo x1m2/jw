@@ -9,8 +9,6 @@ import os
 
 
 def generate_launch_description():
-    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
-
     config_file = LaunchConfiguration('config_file')
 
     default_config_file = os.path.join(
@@ -34,13 +32,6 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 config_file,
-                {
-                    'output_file': os.path.join(
-                        robot_data_dir,
-                        'topology_map',
-                        'generated_map.txt',
-                    )
-                },
             ]
         )
     ])

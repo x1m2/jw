@@ -4,7 +4,7 @@
       map_frame: "map"                            # publish frame
       loop_update_hz: 2.0                         # Loop detection Hz
       vis_hz: 1.0                                 # visualize Hz
-      package_path: "${ROBOT_DATA_DIR}/map"
+      package_path: "/robotfs/data/slam_data/map"
     keyframe:
       keyframe_threshold: 1.5                     # unit [meter] every this distance, generate keyframe
       num_submap_keyframes: 2                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)

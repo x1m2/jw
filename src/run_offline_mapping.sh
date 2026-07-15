@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOG_ROOT="${WORKSPACE_DIR}/log"
 
+readonly DATA_DIR="/robotfs/data/slam_data"
+MAP_DIR="${DATA_DIR}/map"
+
 info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
@@ -20,7 +23,7 @@ if [ ! -f "${WORKSPACE_DIR}/install/setup.bash" ]; then
     exit 1
 fi
 
-mkdir -p "${LOG_ROOT}"
+mkdir -p "${LOG_ROOT}" "${MAP_DIR}"
 
 cd "${WORKSPACE_DIR}"
 
@@ -198,6 +201,8 @@ kill_all_related_processes
 info "开始启动离线建图节点"
 info "工作空间: ${WORKSPACE_DIR}"
 info "日志目录: ${LOG_ROOT}"
+info "数据目录: ${DATA_DIR}"
+info "地图目录: ${MAP_DIR}"
 
 start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false use_sim_time:=true

@@ -8,8 +8,6 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    robot_data_dir = os.environ["ROBOT_DATA_DIR"]
-
     rviz_config_file = os.path.join(
         get_package_share_directory('pgo_sc'),
         'config',
@@ -58,7 +56,6 @@ def generate_launch_description():
                 config_file_path,
                 {
                     'use_sim_time': LaunchConfiguration('use_sim_time'),
-                    'basic.package_path': os.path.join(robot_data_dir, 'map'),
                 }
             ],
             remappings=[
