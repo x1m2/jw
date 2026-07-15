@@ -28,12 +28,6 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
-            'node_name',
-            default_value='navigation_task_state_machine_node',
-            description='节点名称'
-        ),
-
-        DeclareLaunchArgument(
             'data_dir',
             default_value='/robotfs/data/slam_data',
             description='SLAM data root directory'
@@ -42,7 +36,6 @@ def generate_launch_description():
         Node(
             package='user_interface',
             executable='navigation_task_state_machine_node',
-            name=LaunchConfiguration('node_name'),
             output='screen',
             parameters=[
                 LaunchConfiguration('params_file'),

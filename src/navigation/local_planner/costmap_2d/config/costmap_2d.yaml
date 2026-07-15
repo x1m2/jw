@@ -1,4 +1,4 @@
-costmap_2d_node:
+/**:
   ros__parameters:
     # 坐标系参数
     global_frame: "map"

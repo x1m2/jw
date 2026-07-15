@@ -29,7 +29,6 @@ def generate_launch_description():
         Node(
             package='costmap_2d',
             executable='costmap_2d_node',
-            name='costmap_2d_node',
             output='screen',
             parameters=[config_file],
             remappings=[

@@ -1,4 +1,4 @@
-topology_map_generator:
+/**:
   ros__parameters:
     output_file: "/robotfs/data/slam_data/topology_map/generated_map.txt"
     pose_topic: "/pose_stamped"

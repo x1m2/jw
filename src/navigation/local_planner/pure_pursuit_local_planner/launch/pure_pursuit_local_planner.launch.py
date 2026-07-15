@@ -44,11 +44,9 @@ def generate_launch_description():
         Node(
             package='pure_pursuit_local_planner',
             executable='pure_pursuit_local_planner_node',
-            name='pure_pursuit_local_planner',
             output='screen',
             parameters=[config_file],
             remappings=[
-                ('/cmd_vel', '/cmd_vel'),
                 ('/global_path', '/smoothed_global_path'),
                 ('/local_costmap', '/local_costmap/costmap'),
 
@@ -59,7 +57,6 @@ def generate_launch_description():
         #     condition=IfCondition(launch_rviz),
         #     package='rviz2',
         #     executable='rviz2',
-        #     name='rviz2',
         #     arguments=['-d', rviz_config],
         #     output='screen',
         # ),

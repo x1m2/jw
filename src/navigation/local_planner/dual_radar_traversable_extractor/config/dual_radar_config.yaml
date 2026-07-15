@@ -1,4 +1,4 @@
-dual_radar_traversable_extractor:
+/**:
   ros__parameters:
     # 双雷达可行区域提取器配置文件
 

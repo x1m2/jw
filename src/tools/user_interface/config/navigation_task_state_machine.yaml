@@ -1,4 +1,4 @@
-navigation_task_state_machine_node:
+/**:
   ros__parameters:
     task_folder_path: "/robotfs/data/slam_data/task"
 

@@ -1,4 +1,4 @@
-pure_pursuit_local_planner:
+/**:
   ros__parameters:
     use_sim_time: false
 

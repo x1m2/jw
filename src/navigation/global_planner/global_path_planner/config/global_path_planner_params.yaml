@@ -1,4 +1,4 @@
-global_path_planner_node:
+/**:
   ros__parameters:
     # 基本参数 
     # 实时定位位姿话题，类型：geometry_msgs/msg/PoseStamped

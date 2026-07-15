@@ -34,7 +34,6 @@ def generate_launch_description():
         Node(
             package='topology_map_generator',
             executable='topology_map_generator_node',
-            name='topology_map_generator',
             output='screen',
             parameters=[
                 config_file,

@@ -32,7 +32,6 @@ def generate_launch_description():
         Node(
             package=package_name,
             executable='dual_radar_traversable_extractor_node',
-            name='dual_radar_traversable_extractor',
             output='screen',
             parameters=[
                 config_file,

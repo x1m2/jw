@@ -1,4 +1,4 @@
-path_smoother:
+/**:
   ros__parameters:
     global_frame: map
 

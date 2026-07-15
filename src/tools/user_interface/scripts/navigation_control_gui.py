@@ -36,8 +36,8 @@ from ament_index_python.packages import get_package_share_directory
 class NavigationControlGUI(Node):
     def __init__(self):
         """初始化 GUI 控制界面"""
-        super().__init__("navigation_control_gui")
-        self.state_machine_node_name = "navigation_task_state_machine_node"
+        super().__init__("navigation_control_gui_node")
+        self.state_machine_parameter_scope = "/**"
         self.state_machine_yaml_name = "navigation_task_state_machine.yaml"
 
         # 从 YAML 中读取任务目录
@@ -136,7 +136,7 @@ class NavigationControlGUI(Node):
         """
         从指定 YAML 中读取：
 
-        navigation_task_state_machine_node:
+        /**:
           ros__parameters:
             task_folder_path: "/robotfs/data/slam_data/task"
         """
@@ -154,11 +154,11 @@ class NavigationControlGUI(Node):
                 self.get_logger().error("YAML 内容格式错误，顶层不是字典")
                 return None
 
-            node_config = data.get(self.state_machine_node_name)
+            node_config = data.get(self.state_machine_parameter_scope)
 
             if not isinstance(node_config, dict):
                 self.get_logger().error(
-                    f"YAML 中没有找到节点配置: {self.state_machine_node_name}"
+                    f"YAML 中没有找到参数作用域: {self.state_machine_parameter_scope}"
                 )
                 return None
 
@@ -166,7 +166,7 @@ class NavigationControlGUI(Node):
 
             if not isinstance(ros_params, dict):
                 self.get_logger().error(
-                    f"YAML 中没有找到 ros__parameters: {self.state_machine_node_name}"
+                    f"YAML 中没有找到 ros__parameters: {self.state_machine_parameter_scope}"
                 )
                 return None
 

@@ -3,7 +3,7 @@
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<rclcpp::Node>("pure_pursuit_local_planner");
+    auto node = std::make_shared<rclcpp::Node>("pure_pursuit_local_planner_node");
 
     pure_pursuit_local_planner::PurePursuitLocalPlanner planner;
     if (!planner.initialize(node))

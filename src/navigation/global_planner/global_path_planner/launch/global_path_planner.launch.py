@@ -34,7 +34,6 @@ def generate_launch_description():
     global_path_planner_node = Node(
         package='global_path_planner',
         executable='global_path_planner_node',
-        name='global_path_planner_node',
         output='screen',
         parameters=[
             LaunchConfiguration('config_file'),

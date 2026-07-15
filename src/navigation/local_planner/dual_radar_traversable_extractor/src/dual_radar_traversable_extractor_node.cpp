@@ -8,7 +8,7 @@ int main(int argc, char ** argv)
   setlocale(LC_ALL, "");
   rclcpp::init(argc, argv);
 
-  auto node = std::make_shared<rclcpp::Node>("dual_radar_traversable_extractor");
+  auto node = std::make_shared<rclcpp::Node>("dual_radar_traversable_extractor_node");
 
   try {
     auto extractor = std::make_shared<DualRadarTraversableExtractor>(node);

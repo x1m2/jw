@@ -11,7 +11,7 @@
 #include "pcl_conversions/pcl_conversions.h"
 namespace pcd2pgm {
 Pcd2PgmNode::Pcd2PgmNode(const rclcpp::NodeOptions& options)
-    : Node("pcd2pgm", options) {
+    : Node("pcd2pgm_node", options) {
   declareParameters();
   getParameters();
 

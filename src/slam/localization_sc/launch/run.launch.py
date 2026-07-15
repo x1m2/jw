@@ -27,16 +27,6 @@ def generate_launch_description():
         description='Whether to launch RViz2'
     )
 
-    odom_topic_arg = DeclareLaunchArgument(
-        'odom_topic',
-        default_value='/Odometry'
-    )
-
-    lidar_topic_arg = DeclareLaunchArgument(
-        'lidar_topic',
-        default_value='/cloud_registered'
-    )
-
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='false',
@@ -51,8 +41,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         localization_use_rviz_arg,
-        odom_topic_arg,
-        lidar_topic_arg,
         use_sim_time_arg,
         data_dir_arg,
 
@@ -60,7 +48,6 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('localization_use_rviz')),
             package='rviz2',
             executable='rviz2',
-            name='localization_rviz2',
             arguments=['-d', rviz_config_file],
             output='screen'
         ),
@@ -68,7 +55,6 @@ def generate_launch_description():
         Node(
             package='localization_sc',
             executable='localization_sc_node',
-            name='localization_sc_node',
             output='screen',
             parameters=[
                 config_file_path,
@@ -81,9 +67,5 @@ def generate_launch_description():
                     ]),
                 }
             ],
-            remappings=[
-                ('/Odometry', LaunchConfiguration('odom_topic')),
-                ('/cloud_registered', LaunchConfiguration('lidar_topic')),
-            ]
         ),
     ])

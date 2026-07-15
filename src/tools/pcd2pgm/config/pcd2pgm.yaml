@@ -1,4 +1,4 @@
-pcd2pgm:
+/**:
   ros__parameters:
     pcd_file: "/robotfs/data/slam_data/map/result.pcd"
     odom_to_lidar_odom: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

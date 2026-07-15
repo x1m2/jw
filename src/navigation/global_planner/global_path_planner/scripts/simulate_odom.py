@@ -17,7 +17,7 @@ def quaternion_from_yaw(yaw: float):
 
 class OdomSimulator(Node):
     def __init__(self):
-        super().__init__('odom_simulator')
+        super().__init__('odom_simulator_node')
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 50)
         self.tf_br = TransformBroadcaster(self)

@@ -31,7 +31,7 @@ class TargetPointsVisualizer : public rclcpp::Node {
   /**
    * @brief 构造函数
    */
-  TargetPointsVisualizer() : Node("target_points_visualizer") {
+  TargetPointsVisualizer() : Node("target_points_visualizer_node") {
     // 获取参数
     this->declare_parameter<std::string>(
         "target_points_file", "/topology_map/generated_map_target_points.txt");
@@ -357,13 +357,13 @@ int main(int argc, char** argv) {
 
     rclcpp::spin(visualizer);
   } catch (const std::exception& e) {
-    RCLCPP_ERROR(rclcpp::get_logger("target_points_visualizer"),
+    RCLCPP_ERROR(rclcpp::get_logger("target_points_visualizer_node"),
                  "目标点可视化节点运行异常: %s", e.what());
     rclcpp::shutdown();
     return -1;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("target_points_visualizer"),
+  RCLCPP_INFO(rclcpp::get_logger("target_points_visualizer_node"),
               "目标点可视化节点正常退出");
   rclcpp::shutdown();
   return 0;

@@ -41,7 +41,6 @@ def generate_launch_description():
     target_points_visualizer_node = Node(
         package='topology_rviz_plugin',
         executable='target_points_visualizer_node',
-        name='target_points_visualizer',
         output='screen',
         parameters=[
             config_file,
@@ -59,7 +58,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('rviz')),
         package='rviz2',
         executable='rviz2',
-        name='target_points_rviz',
         output='screen',
         arguments=['-d', rviz_config_file]
     )

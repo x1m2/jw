@@ -11,7 +11,7 @@
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
 PgoSc::PgoSc()
-    : Node("pgo_sc"), is_initialized_(false), loop_added_flag_vis_(false) {
+    : Node("pgo_sc_node"), is_initialized_(false), loop_added_flag_vis_(false) {
   ////// ROS2 params
   double loop_update_hz, vis_hz;
   LoopClosureConfig lc_config;

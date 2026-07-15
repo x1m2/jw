@@ -32,16 +32,6 @@ def generate_launch_description():
         description="Use simulation time /clock"
     )
 
-    odom_topic_arg = DeclareLaunchArgument(
-        'odom_topic',
-        default_value='/Odometry'
-    )
-
-    lidar_topic_arg = DeclareLaunchArgument(
-        'lidar_topic',
-        default_value='/cloud_registered'
-    )
-
     data_dir_arg = DeclareLaunchArgument(
         'data_dir',
         default_value='/robotfs/data/slam_data',
@@ -51,14 +41,11 @@ def generate_launch_description():
     return LaunchDescription([
         pgo_use_rviz_arg,
         use_sim_time_arg,
-        odom_topic_arg,
-        lidar_topic_arg,
         data_dir_arg,
 
         Node(
             package='pgo_sc',
             executable='pgo_sc_node',
-            name='pgo_sc_node',
             parameters=[
                 config_file_path,
                 {
@@ -69,10 +56,6 @@ def generate_launch_description():
                     ]),
                 }
             ],
-            remappings=[
-                ('/Odometry', LaunchConfiguration('odom_topic')),
-                ('/cloud_registered', LaunchConfiguration('lidar_topic')),
-            ],
             output='screen'
         ),
 
@@ -80,7 +63,6 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration("pgo_use_rviz")),
             package="rviz2",
             executable="rviz2",
-            name="pgo_rviz2",
             arguments=["-d", rviz_config_file],
             parameters=[
                 {

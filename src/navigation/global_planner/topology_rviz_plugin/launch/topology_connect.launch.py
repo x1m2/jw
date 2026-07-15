@@ -37,7 +37,6 @@ def generate_launch_description():
         Node(
             package="topology_rviz_plugin",
             executable="topology_connect.py",
-            name="topology_connect_node",
             output="screen",
             parameters=[
                 config_file,

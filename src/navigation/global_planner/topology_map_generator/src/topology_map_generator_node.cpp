@@ -25,7 +25,7 @@ void createParentDirectoryIfNeeded(const std::string &file_path) {
 }
 }  // namespace
 
-TopologyMapGenerator::TopologyMapGenerator() : Node("topology_map_generator") {
+TopologyMapGenerator::TopologyMapGenerator() : Node("topology_map_generator_node") {
   // 只保留手动打点所需的三个参数：
   // output_file：拓扑点输出文件；
   // pose_topic：机器人当前路径/位姿来源；

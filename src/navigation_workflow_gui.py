@@ -588,7 +588,7 @@ class NavigationWorkflowGUI:
         try:
             if not rclpy.ok():
                 rclpy.init(args=None)
-            self.nav_control_node = Node("navigation_workflow_control_gui")
+            self.nav_control_node = Node("navigation_workflow_control_gui_node")
             self.nav_task_signal_pub = self.nav_control_node.create_publisher(
                 String, "/nav_task_signal", 10
             )

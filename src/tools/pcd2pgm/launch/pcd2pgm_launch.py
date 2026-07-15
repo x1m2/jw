@@ -55,7 +55,6 @@ def generate_launch_description():
     start_pcd2pgm_cmd = Node(
         package="pcd2pgm",
         executable="pcd2pgm_node",
-        name="pcd2pgm",
         output="screen",
         parameters=[
             params_file,
@@ -73,7 +72,6 @@ def generate_launch_description():
         condition=IfCondition(pgm_use_rviz),
         package="rviz2",
         executable="rviz2",
-        name="rviz2",
         arguments=["-d", rviz_config_file],
         output="screen",
         remappings=[

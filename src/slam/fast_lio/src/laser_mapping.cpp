@@ -3,7 +3,7 @@
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
 LaserMappingNode::LaserMappingNode(const rclcpp::NodeOptions &options)
-    : Node("laser_mapping", options),
+    : Node("laser_mapping_node", options),
       extrinT(3, 0.0),
       extrinR(9, 0.0),
       XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0),
@@ -1160,14 +1160,14 @@ void LaserMappingNode::h_share_model(
     {
       if (effct_feat_num < 100 || valid_ratio < 0.10 || res_mean_last > 0.15) {
         RCLCPP_WARN(
-            rclcpp::get_logger("laser_mapping"),
+            rclcpp::get_logger("laser_mapping_node"),
             "[FASTLIO_BAD_MATCH] feats_down_size=%d, effct_feat_num=%d, "
             "valid_ratio=%.3f, mean_residual=%.4f, total_residual=%.4f",
             feats_down_size, effct_feat_num, valid_ratio, res_mean_last,
             total_residual);
 
       } else if (fastlio_match_print_count % 10 == 0) {
-        RCLCPP_INFO(rclcpp::get_logger("laser_mapping"),
+        RCLCPP_INFO(rclcpp::get_logger("laser_mapping_node"),
                     "[FASTLIO_MATCH] feats_down_size=%d, effct_feat_num=%d, "
                     "valid_ratio=%.3f, mean_residual=%.4f, total_residual=%.4f",
                     feats_down_size, effct_feat_num, valid_ratio, res_mean_last,

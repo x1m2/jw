@@ -100,12 +100,12 @@ kill_all_related_processes() {
     info "清理 ROS2 建图相关残留进程..."
 
     local patterns=(
-        "laser_mapping"
+        "laser_mapping_node"
         "fast_lio"
         "imu_filter_madgwick"
         "imu_filter_madgwick_node"
         "mapping.launch.py"
-        "pgo_sc"
+        "pgo_sc_node"
         "run.launch.py"
         "rviz2"
         "rosbag2_player"

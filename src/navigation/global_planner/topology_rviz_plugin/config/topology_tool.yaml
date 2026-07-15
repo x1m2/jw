@@ -1,4 +1,4 @@
-rviz_topology:
+/**:
   ros__parameters:
     tool_manager.tool_plugins:
       - topology_rviz_plugin/TopologyTool
