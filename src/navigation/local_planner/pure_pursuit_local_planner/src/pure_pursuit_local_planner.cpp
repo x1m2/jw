@@ -617,8 +617,11 @@ bool PurePursuitLocalPlanner::isGoalReached() {
   if (!getRobotPose(robot_pose)) return false;
 
   const auto &goal_pose = global_path_.poses.back();
-  double distance =
-      calculateDistance(robot_pose.pose.position, goal_pose.pose.position);
+  // 导航到点只判断水平面位置，忽略 SLAM 高度与路径高度之间的偏差。
+  // XY 到达后，computeVelocityCommands() 会继续单独判断并调整最终 yaw。
+  const double distance =
+      std::hypot(robot_pose.pose.position.x - goal_pose.pose.position.x,
+                 robot_pose.pose.position.y - goal_pose.pose.position.y);
 
   return distance < config_.goal_tolerance;
 }

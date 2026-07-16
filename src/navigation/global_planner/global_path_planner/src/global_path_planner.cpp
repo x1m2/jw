@@ -1,5 +1,7 @@
 #include "global_path_planner/global_path_planner.h"
 
+#include <tf2/utils.h>
+
 #include <algorithm>
 #include <fstream>
 #include <functional>
@@ -253,8 +255,12 @@ void GlobalPathPlanner::poseCallback(
     current_position_.z = pose_out.pose.position.z;
     has_current_pose_ = true;
 
-    RCLCPP_DEBUG(this->get_logger(), "更新当前位置: (%.2f, %.2f, %.2f)",
-                 current_position_.x, current_position_.y, current_position_.z);
+    const double yaw = tf2::getYaw(pose_out.pose.orientation);
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                         "SLAM  [%s]: x=%.3f, y=%.3f, z=%.3f, yaw=%.2f deg",
+                         pose_out.header.frame_id.c_str(), current_position_.x,
+                         current_position_.y, current_position_.z,
+                         yaw * 180.0 / M_PI);
   } catch (tf2::TransformException &ex) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                          "实时位姿坐标变换失败: %s", ex.what());
@@ -1236,7 +1242,7 @@ bool GlobalPathPlanner::loadFreeSpaceCloudFromPcd() {
       has_free_space_cloud_ = false;
       return false;
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     RCLCPP_ERROR(this->get_logger(), "加载可行域 PCD 异常: %s, file=%s",
                  e.what(), free_space_pcd_file_.c_str());
     has_free_space_cloud_ = false;

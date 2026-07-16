@@ -75,9 +75,9 @@ void LaserMappingNode::readParameters() {
                                           vector<double>());
   this->declare_parameter<vector<double>>("mapping.extrinsic_R",
                                           vector<double>());
-  this->declare_parameter<vector<double>>("mapping.base_to_imu_T",
+  this->declare_parameter<vector<double>>("mapping.imu_to_base_T",
                                           vector<double>());
-  this->declare_parameter<double>("mapping.base_to_imu_R", 0.0);
+  this->declare_parameter<double>("mapping.imu_to_base_R", 0.0);
   this->declare_parameter<bool>("z_constraint.enable", true);
   // imu constraint
   this->declare_parameter<bool>("imu_constraint.enable_auto_constraint", false);
@@ -145,9 +145,9 @@ void LaserMappingNode::readParameters() {
                                          vector<double>());
   this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR,
                                          vector<double>());
-  this->get_parameter_or<vector<double>>("mapping.base_to_imu_T", base_to_imu_T,
+  this->get_parameter_or<vector<double>>("mapping.imu_to_base_T", imu_to_base_T,
                                          vector<double>());
-  this->get_parameter_or<double>("mapping.base_to_imu_R", base_to_imu_R, 0.0);
+  this->get_parameter_or<double>("mapping.imu_to_base_R", imu_to_base_R, 0.0);
   this->get_parameter_or<bool>("z_constraint.enable", enable_z_constraint_,
                                true);
   // imu constraint
@@ -1220,13 +1220,13 @@ Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() const {
   T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
   T_odom_imu.block<3, 1>(0, 3) = state_point.pos;
 
-  // Static extrinsic: base_link -> imu_link.
+  // Static extrinsic: imu_link pose in base_link frame..
   Eigen::Matrix4d T_base_imu = Eigen::Matrix4d::Identity();
   T_base_imu.block<3, 3>(0, 0) =
-      Eigen::AngleAxisd(base_to_imu_R, Eigen::Vector3d::UnitY())
+      Eigen::AngleAxisd(imu_to_base_R, Eigen::Vector3d::UnitY())
           .toRotationMatrix();
   T_base_imu.block<3, 1>(0, 3) =
-      Eigen::Vector3d(base_to_imu_T[0], base_to_imu_T[1], base_to_imu_T[2]);
+      Eigen::Vector3d(imu_to_base_T[0], imu_to_base_T[1], imu_to_base_T[2]);
 
   // Output pose: odom -> base_link.
   return T_odom_imu * T_base_imu.inverse();
@@ -1274,10 +1274,9 @@ void LaserMappingNode::set_posestamp(T &out) {
       if (!output_z_constraint_initialized_) {
         output_z_constraint_value_ = T_output_base(2, 3);
         output_z_constraint_initialized_ = true;
-        RCLCPP_INFO(
-            this->get_logger(),
-            "[Z_CONSTRAINT] flat mode: lock output base_link z at %.3f",
-            output_z_constraint_value_);
+        RCLCPP_INFO(this->get_logger(),
+                    "[Z_CONSTRAINT] flat mode: lock output base_link z at %.3f",
+                    output_z_constraint_value_);
       }
       T_output_base(2, 3) = output_z_constraint_value_;
     } else if (output_z_constraint_initialized_) {

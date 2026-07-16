@@ -8,7 +8,7 @@
 
     lookahead_distance_min: 0.4
     lookahead_distance_max: 0.7
-    goal_tolerance: 0.20
+    goal_tolerance: 0.10
 
     max_linear_velocity: 0.5    ##最大线速度x
     max_linear_velocity_y: 0.3

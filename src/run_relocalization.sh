@@ -193,8 +193,8 @@ start_bg() {
 start_bg LIVOX_PID "livox_ros_driver2" "/dev/null" "${LIVOX_PID_FILE}" 4 \
     ros2 launch livox_ros_driver2 msg_MID360s_launch.py
 
-start_bg FASTLIO_PID "fast_lio" "${FASTLIO_LOG_FILE}" "${FASTLIO_PID_FILE}" 3 \
-    ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false
+# start_bg FASTLIO_PID "fast_lio" "${FASTLIO_LOG_FILE}" "${FASTLIO_PID_FILE}" 3 \
+#     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false
 
 start_bg PCD2PGM_PID "pcd2pgm" "/dev/null" "${PCD2PGM_PID_FILE}" 2 \
     ros2 launch pcd2pgm pcd2pgm_launch.py pgm_use_rviz:=false
@@ -283,8 +283,10 @@ sleep 0.5
 # ==================================================
 # 再启动 localization_sc
 # ==================================================
-start_bg LOCALIZATION_PID "localization_sc" "${LOCALIZATION_LOG_FILE}" "${LOCALIZATION_PID_FILE}" 0 \
-    ros2 launch localization_sc run.launch.py localization_use_rviz:=true
+# start_bg LOCALIZATION_PID "localization_sc" "${LOCALIZATION_LOG_FILE}" "${LOCALIZATION_PID_FILE}" 0 \
+#     ros2 launch localization_sc run.launch.py localization_use_rviz:=true
+start_bg LOCALIZATION_PID "fastlio_localization" "${LOCALIZATION_LOG_FILE}" "${LOCALIZATION_PID_FILE}" 0 \
+    ros2 launch fastlio_localization run_launch.py
 
 info "等待重定位成功，超时时间 180s..."
 

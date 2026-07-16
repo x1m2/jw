@@ -211,8 +211,8 @@ class LaserMappingNode : public rclcpp::Node {
   vector<PointVector> Nearest_Points;
   vector<double> extrinT;
   vector<double> extrinR;
-  vector<double> base_to_imu_T;
-  double base_to_imu_R;
+  vector<double> imu_to_base_T;
+  double imu_to_base_R;
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   bool enable_z_constraint_ = true;

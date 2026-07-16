@@ -21,9 +21,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='static_tf_publisher',
         arguments=[
-            '--x', '0.291',
-            '--y', '0.02329',
-            '--z', '0.65588',
+            '--x', '-0.28',
+            '--y', '0.0',
+            '--z', '0.0',
             '--roll', '0.0',
             '--pitch', '0.0',
             '--yaw', '0.0',
