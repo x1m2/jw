@@ -64,8 +64,8 @@ PgoSc::PgoSc()
   this->declare_parameter<std::string>("result.seq_name", "");
   this->declare_parameter<bool>("ground_segmentation.enable", true);
   this->declare_parameter<double>("ground_segmentation.height_threshold", 0.1);
-  this->declare_parameter<double>("ground_segmentation.free_space_voxel_resolution",
-                                  -1.0);
+  this->declare_parameter<double>(
+      "ground_segmentation.free_space_voxel_resolution", -1.0);
 
   /* get parameters */
   this->get_parameter("basic.map_frame", map_frame_);
@@ -876,7 +876,7 @@ void PgoSc::saveFlagCallback() {
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
       if (keyframes_.empty()) {
         RCLCPP_WARN(this->get_logger(),
-                    "No keyframes, skip saving result.pcd.");
+                    "No keyframes, skip saving globalmap.pcd.");
         return;
       }
       size_t reserve_size = 0;
@@ -898,7 +898,7 @@ void PgoSc::saveFlagCallback() {
     }
 
     auto voxelized_map = voxelizePcd(corrected_map, voxel_res_);
-    const std::string result_path = package_path_ + "/result.pcd";
+    const std::string result_path = package_path_ + "/globalmap.pcd";
 
     if (pcl::io::savePCDFileBinary<PointType>(result_path, *voxelized_map) !=
         0) {
@@ -922,10 +922,9 @@ void PgoSc::saveFlagCallback() {
         const std::string free_space_path =
             package_path_ + "/result_free_space.pcd";
 
-        if (pcl::io::savePCDFileBinary<PointType>(
-                free_space_path, *voxelized_free_space) != 0) {
-          RCLCPP_ERROR(this->get_logger(),
-                       "Failed to save free-space map: %s",
+        if (pcl::io::savePCDFileBinary<PointType>(free_space_path,
+                                                  *voxelized_free_space) != 0) {
+          RCLCPP_ERROR(this->get_logger(), "Failed to save free-space map: %s",
                        free_space_path.c_str());
           return;
         }
