@@ -10,14 +10,16 @@ set -eo pipefail
 #   当前脚本所在目录/
 #   └── robot_rk3588_ws/
 #       ├── src/
-#       ├── gtsam-4.1.1.zip
-#       ├── Livox-SDK2.zip           # 或 Livox-SDK2/
-#       ├── TEASER-plusplus.zip      # 或 TEASER-plusplus/
-#       ├── pmc-master.zip           # 或 pmc/
-#       ├── tinyply*.zip             # 或 tinyply/
-#       └── spectra*.zip             # 或 spectra/
+#       └── env/
+#           ├── gtsam-4.1.1.zip
+#           ├── 3d_bbs.zip              # 或 3d_bbs/
+#           ├── Livox-SDK2.zip           # 或 Livox-SDK2/
+#           ├── TEASER-plusplus.zip      # 或 TEASER-plusplus/
+#           ├── pmc-master.zip           # 或 pmc/
+#           ├── tinyply*.zip             # 或 tinyply/
+#           └── spectra*.zip             # 或 spectra/
 #
-# 第三方源码默认从工作空间根目录读取，也就是 src 的同级目录。
+# 第三方源码默认从工作空间的 env/ 目录读取，env/ 与 src/ 同级。
 #
 # 用法：
 #   chmod +x setup_robot_rk3588_env.sh
@@ -216,85 +218,10 @@ install_apt_dependencies() {
   sudo apt-get update
 
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    build-essential \
-    cmake \
-    git \
-    wget \
-    curl \
-    vim \
-    xterm \
-    xfce4-terminal \
-    nano \
-    unzip \
-    lsb-release \
-    gnupg2 \
-    ca-certificates \
-    locales \
-    tzdata \
-    fontconfig \
-    fonts-noto-cjk \
-    fonts-wqy-zenhei \
-    fonts-wqy-microhei \
-    python3-pip \
-    python3-tk \
-    python3-colcon-common-extensions \
-    python3-rosdep \
-    python3-vcstool \
-    net-tools \
     iputils-ping \
-    iproute2 \
-    netcat-openbsd \
-    dnsutils \
-    libgl1-mesa-glx \
-    libgl1-mesa-dri \
-    mesa-utils \
-    x11-apps \
-    libpcl-dev \
-    libeigen3-dev \
-    libopencv-dev \
-    libboost-all-dev \
-    libtbb-dev \
-    libyaml-cpp-dev \
-    libgoogle-glog-dev \
-    libgflags-dev \
-    libomp-dev
+    libgl1-mesa-glx 
 
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    "ros-${ROS_DISTRO}-rclcpp" \
-    "ros-${ROS_DISTRO}-rclcpp-components" \
-    "ros-${ROS_DISTRO}-std-msgs" \
-    "ros-${ROS_DISTRO}-sensor-msgs" \
-    "ros-${ROS_DISTRO}-nav-msgs" \
-    "ros-${ROS_DISTRO}-imu-tools" \
-    "ros-${ROS_DISTRO}-geometry-msgs" \
-    "ros-${ROS_DISTRO}-visualization-msgs" \
-    "ros-${ROS_DISTRO}-std-srvs" \
-    "ros-${ROS_DISTRO}-tf2" \
-    "ros-${ROS_DISTRO}-tf2-ros" \
-    "ros-${ROS_DISTRO}-tf2-eigen" \
-    "ros-${ROS_DISTRO}-tf2-geometry-msgs" \
-    "ros-${ROS_DISTRO}-tf2-sensor-msgs" \
-    "ros-${ROS_DISTRO}-angles" \
-    "ros-${ROS_DISTRO}-ament-cmake-auto" \
-    "ros-${ROS_DISTRO}-laser-geometry" \
-    "ros-${ROS_DISTRO}-message-filters" \
-    "ros-${ROS_DISTRO}-ament-cmake" \
-    "ros-${ROS_DISTRO}-ament-index-cpp" \
-    "ros-${ROS_DISTRO}-rosbag2-cpp" \
-    "ros-${ROS_DISTRO}-rosbag2-storage" \
-    "ros-${ROS_DISTRO}-rosbag2-storage-default-plugins" \
-    "ros-${ROS_DISTRO}-rosidl-default-generators" \
-    "ros-${ROS_DISTRO}-rosidl-default-runtime" \
-    "ros-${ROS_DISTRO}-pcl-ros" \
-    "ros-${ROS_DISTRO}-pcl-conversions" \
-    "ros-${ROS_DISTRO}-pcl-msgs" \
-    "ros-${ROS_DISTRO}-sophus" \
-    "ros-${ROS_DISTRO}-rviz2" \
-    "ros-${ROS_DISTRO}-teleop-twist-keyboard" \
-    "ros-${ROS_DISTRO}-teleop-twist-joy" \
-    "ros-${ROS_DISTRO}-key-teleop" \
-    "ros-${ROS_DISTRO}-rclpy" \
-    "ros-${ROS_DISTRO}-ament-index-python" \
     "ros-${ROS_DISTRO}-navigation2" \
     "ros-${ROS_DISTRO}-nav2-bringup" \
     "ros-${ROS_DISTRO}-nav2-map-server" \
@@ -306,7 +233,11 @@ install_apt_dependencies() {
     "ros-${ROS_DISTRO}-nav2-lifecycle-manager" \
     "ros-${ROS_DISTRO}-dwb-core" \
     "ros-${ROS_DISTRO}-dwb-critics" \
-    "ros-${ROS_DISTRO}-dwb-plugins"
+    "ros-${ROS_DISTRO}-dwb-plugins" \
+    "ros-${ROS_DISTRO}-imu-tools" \
+    "ros-${ROS_DISTRO}-pcl-ros" \
+    "ros-${ROS_DISTRO}-sophus" \
+    "ros-${ROS_DISTRO}-key-teleop"
 
   sudo fc-cache -fv >/dev/null || true
 }
@@ -324,7 +255,7 @@ has_library() {
   ldconfig -p 2>/dev/null | grep -qi "$pattern"
 }
 
-# 查找源码目录或 zip。默认从 ${THIRD_PARTY_DIR} 查找，即 robot_rk3588_ws 根目录。
+# 查找源码目录或 zip。默认从 ${THIRD_PARTY_DIR} 查找，即 robot_rk3588_ws/env/ 目录。
 # 用法：prepare_source_dir 逻辑名 解压目标目录 候选zip...
 # 输出：源码目录路径。
 prepare_source_dir() {
@@ -377,7 +308,7 @@ build_gtsam_411() {
   local zip_path="${THIRD_PARTY_DIR}/gtsam-4.1.1.zip"
   if [[ ! -f "${zip_path}" ]]; then
     err "未检测到 GTSAM，且缺少源码包：${zip_path}"
-    err "请把 gtsam-4.1.1.zip 放到工作空间根目录，也就是 src 同级目录"
+    err "请把 gtsam-4.1.1.zip 放到第三方目录：${THIRD_PARTY_DIR}"
     exit 1
   fi
 
@@ -498,6 +429,49 @@ build_teaserpp() {
   rm -rf "${build_root}"
 }
 
+build_3d_bbs() {
+  info "源码编译并安装 3d_bbs"
+  local build_root="${BUILD_TMP_ROOT}/3d_bbs_build_$$"
+  rm -rf "${build_root}"
+  mkdir -p "${build_root}"
+
+  local bbs_dir=""
+  if ! bbs_dir="$(prepare_source_dir "3d_bbs" "${build_root}" "3d_bbs.zip")"; then
+    err "缺少 3d_bbs 源码：请把 3d_bbs.zip 或 3d_bbs/ 放到 ${THIRD_PARTY_DIR}"
+    exit 1
+  fi
+
+  cd "${bbs_dir}"
+  rm -rf build
+  mkdir build
+  cd build
+
+  cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_CUDA=OFF
+  make -j"${PARALLEL_WORKERS}"
+  sudo make install
+  sudo ldconfig
+
+  if [[ ! -d "${bbs_dir}/test" ]]; then
+    err "3d_bbs 测试目录不存在：${bbs_dir}/test"
+    exit 1
+  fi
+
+  info "编译 3d_bbs/test"
+  cd "${bbs_dir}/test"
+  rm -rf build
+  mkdir build
+  cd build
+
+  cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_CUDA=OFF
+  make -j"${PARALLEL_WORKERS}"
+
+  rm -rf "${build_root}"
+}
+
 rosdep_install_workspace_deps() {
   info "根据工作空间 src 执行 rosdep install"
   source "/opt/ros/${ROS_DISTRO}/setup.bash"
@@ -577,29 +551,24 @@ setup_bashrc_source() {
 
   local ros_source="source /opt/ros/${ROS_DISTRO}/setup.bash"
   local ws_source="source ${WS}/install/setup.bash"
-  local robot_env_source="source ${WS}/src/load_robot_env.sh"
   local display_export="export DISPLAY=192.168.50.50:0.0"
-
-  if [[ ! -f "${WS}/src/load_robot_env.sh" ]]; then
-    err "找不到机器人环境加载脚本：${WS}/src/load_robot_env.sh"
-    exit 1
-  fi
 
   grep -qxF "${ros_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ros_source}" >> "${HOME}/.bashrc"
   grep -qxF "${ws_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${ws_source}" >> "${HOME}/.bashrc"
-  grep -qxF "${robot_env_source}" "${HOME}/.bashrc" 2>/dev/null || echo "${robot_env_source}" >> "${HOME}/.bashrc"
   grep -qxF "${display_export}" "${HOME}/.bashrc" 2>/dev/null || echo "${display_export}" >> "${HOME}/.bashrc"
 
-  cat > "${WS}/source_robot_env.sh" <<EOF
+  sed -i "\|source ${WS}/src/load_robot_env.sh|d" "${HOME}/.bashrc"
+  rm -f "${WS}/source_robot_env.sh"
+
+  cat > "${WS}/source_robot_ws.sh" <<EOF
 #!/usr/bin/env bash
 source /opt/ros/${ROS_DISTRO}/setup.bash
 source ${WS}/install/setup.bash
-source ${WS}/src/load_robot_env.sh
 export DISPLAY=192.168.50.50:0.0
 EOF
-  chmod +x "${WS}/source_robot_env.sh"
+  chmod +x "${WS}/source_robot_ws.sh"
 
-  info "已生成：${WS}/source_robot_env.sh"
+  info "已生成：${WS}/source_robot_ws.sh"
 }
 
 main() {
@@ -625,6 +594,7 @@ main() {
   build_gtsam_411
   build_livox_sdk2
   build_teaserpp
+  build_3d_bbs
 
   rosdep_install_workspace_deps
   build_workspace
@@ -636,15 +606,18 @@ main() {
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
     # shellcheck disable=SC1090
     source "${WS}/install/setup.bash"
-    # shellcheck disable=SC1090
-    source "${WS}/src/load_robot_env.sh"
     export DISPLAY=192.168.50.50:0.0
-    info "当前终端已 source 完成，ROBOT_DATA_DIR=${ROBOT_DATA_DIR}，DISPLAY=${DISPLAY}"
+    info "当前终端已 source 完成，DISPLAY=${DISPLAY}"
   else
     warn "脚本正常执行完毕，但无法修改当前父终端环境"
-    warn "当前终端请执行：source ${WS}/source_robot_env.sh"
+    warn "当前终端请执行：source ${WS}/source_robot_ws.sh"
     warn "或者重新打开终端，~/.bashrc 会自动 source"
   fi
+
+  info "为当前用户配置 /robotfs/data 读写权限"
+  sudo mkdir -p /robotfs/data/slam_data
+  sudo chown -R "$(id -u):$(id -g)" /robotfs/data
+  sudo chmod -R u+rwX /robotfs/data
 
   info "部署完成"
 }

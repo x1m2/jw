@@ -2,8 +2,8 @@
   ros__parameters:
     use_sim_time: false
 
-    enable_obstacle_replanning: true # true: 前方可绕障碍时，基于 costmap 障碍物中心生成临时点并用 A* 绕障；false: 只停障/减速
-    enable_local_replanning: true
+    enable_obstacle_replanning: false # true: 前方可绕障碍时，基于 costmap 障碍物中心生成临时点并用 A* 绕障；false: 只停障/减速
+    enable_local_replanning: false
     use_smoothed_path: false
 
     lookahead_distance_min: 0.4
