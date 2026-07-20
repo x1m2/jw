@@ -1036,7 +1036,6 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
 
     if (pp_correcting_) {
       // 边走边修正
-      target_velocity *= 0.9;
       cmd_vel.linear.x = target_velocity;
       cmd_vel.angular.z = angular_gain * yaw_error;
 
