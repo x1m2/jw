@@ -30,7 +30,7 @@ def generate_launch_description():
             package='costmap_2d',
             executable='costmap_2d_node',
             output='screen',
-            parameters=[config_file],
+            parameters=[config_file, {'runtime_profile': 'test'}],
             remappings=[
                 ('/costmap', '/local_costmap/costmap'),
             ]

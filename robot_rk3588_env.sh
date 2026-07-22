@@ -431,14 +431,50 @@ build_teaserpp() {
 
 build_3d_bbs() {
   info "源码编译并安装 3d_bbs"
-  local build_root="${BUILD_TMP_ROOT}/3d_bbs_build_$$"
-  rm -rf "${build_root}"
-  mkdir -p "${build_root}"
+  local bbs_dir="${THIRD_PARTY_DIR}/3d_bbs"
+  local zip_path="${THIRD_PARTY_DIR}/3d_bbs.zip"
 
-  local bbs_dir=""
-  if ! bbs_dir="$(prepare_source_dir "3d_bbs" "${build_root}" "3d_bbs.zip")"; then
-    err "缺少 3d_bbs 源码：请把 3d_bbs.zip 或 3d_bbs/ 放到 ${THIRD_PARTY_DIR}"
-    exit 1
+  if [[ ! -d "${bbs_dir}" ]]; then
+    if [[ ! -f "${zip_path}" ]]; then
+      err "缺少 3d_bbs 源码：请把 3d_bbs.zip 或 3d_bbs/ 放到 ${THIRD_PARTY_DIR}"
+      exit 1
+    fi
+
+    local extract_tmp unpacked_dir
+    local -a top_dirs=()
+    mkdir -p "${THIRD_PARTY_DIR}"
+    extract_tmp="$(mktemp -d "${THIRD_PARTY_DIR}/.3d_bbs.extract.XXXXXX")"
+    info "解压 3d_bbs 到：${bbs_dir}"
+
+    if ! unzip -q "${zip_path}" -d "${extract_tmp}"; then
+      rm -rf "${extract_tmp}"
+      err "3d_bbs 压缩包解压失败：${zip_path}"
+      exit 1
+    fi
+
+    if [[ -d "${extract_tmp}/3d_bbs" ]]; then
+      unpacked_dir="${extract_tmp}/3d_bbs"
+    elif [[ -f "${extract_tmp}/CMakeLists.txt" ]]; then
+      unpacked_dir="${extract_tmp}"
+    else
+      mapfile -t top_dirs < <(
+        find "${extract_tmp}" -mindepth 1 -maxdepth 1 -type d \
+          ! -name "__MACOSX" -print
+      )
+      if [[ "${#top_dirs[@]}" -ne 1 || ! -f "${top_dirs[0]}/CMakeLists.txt" ]]; then
+        rm -rf "${extract_tmp}"
+        err "无法识别 3d_bbs.zip 的源码目录"
+        exit 1
+      fi
+      unpacked_dir="${top_dirs[0]}"
+    fi
+
+    mv "${unpacked_dir}" "${bbs_dir}"
+    if [[ -d "${extract_tmp}" ]]; then
+      rm -rf "${extract_tmp}"
+    fi
+  else
+    info "检测到已解压的 3d_bbs，直接复用：${bbs_dir}"
   fi
 
   cd "${bbs_dir}"
@@ -468,8 +504,6 @@ build_3d_bbs() {
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_CUDA=OFF
   make -j"${PARALLEL_WORKERS}"
-
-  rm -rf "${build_root}"
 }
 
 rosdep_install_workspace_deps() {
@@ -616,6 +650,7 @@ main() {
 
   info "为当前用户配置 /robotfs/data 读写权限"
   sudo mkdir -p /robotfs/data/slam_data
+  sudo mkdir -p /robotfs/data/slam_data/bag
   sudo chown -R "$(id -u):$(id -g)" /robotfs/data
   sudo chmod -R u+rwX /robotfs/data
 

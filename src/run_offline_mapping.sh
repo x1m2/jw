@@ -100,7 +100,7 @@ kill_all_related_processes() {
     info "清理 ROS2 建图相关残留进程..."
 
     local patterns=(
-        "laser_mapping_node"
+        "fastlio_mapping_node"
         "fast_lio"
         "imu_filter_madgwick"
         "imu_filter_madgwick_node"

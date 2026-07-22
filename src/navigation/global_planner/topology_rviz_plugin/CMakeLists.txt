@@ -12,6 +12,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(robot_runtime REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_rendering REQUIRED)
@@ -71,6 +72,7 @@ add_executable(target_points_visualizer_node
 
 ament_target_dependencies(target_points_visualizer_node
   rclcpp
+  robot_runtime
   geometry_msgs
   visualization_msgs
   tf2

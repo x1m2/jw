@@ -40,6 +40,7 @@ def generate_launch_description():
             parameters=[
                 LaunchConfiguration('params_file'),
                 {
+                    'runtime_profile': 'test',
                     'task_folder_path': PathJoinSubstitution([
                         LaunchConfiguration('data_dir'),
                         'task',

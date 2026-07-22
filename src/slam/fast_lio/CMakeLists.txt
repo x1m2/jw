@@ -62,6 +62,8 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(robot_interfaces REQUIRED)
+find_package(robot_runtime REQUIRED)
 
 set(dependencies
   rclcpp
@@ -76,6 +78,8 @@ set(dependencies
   pcl_ros
   pcl_conversions
   livox_ros_driver2
+  robot_interfaces
+  robot_runtime
 )
 
 # Thirdparty libraries
@@ -94,7 +98,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-add_executable(fastlio_mapping
+add_executable(fastlio_mapping_node
   src/main.cpp
   src/laser_mapping.cpp
   src/imu_orientation_converter.cpp
@@ -102,30 +106,30 @@ add_executable(fastlio_mapping
   src/preprocess.cpp
   src/imu_processing.cpp
 )
-target_include_directories(fastlio_mapping PUBLIC
+target_include_directories(fastlio_mapping_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
 )
-target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
-target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
+target_link_libraries(fastlio_mapping_node ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
+target_include_directories(fastlio_mapping_node PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
 
 if($ENV{ROS_DISTRO} IN_LIST EOL_LIST)
   # Custommsg to support foxy & galactic
-  rosidl_target_interfaces(fastlio_mapping
+  rosidl_target_interfaces(fastlio_mapping_node
     ${PROJECT_NAME} "rosidl_typesupport_cpp")
 else()
   rosidl_get_typesupport_target(cpp_typesupport_target
     ${PROJECT_NAME} "rosidl_typesupport_cpp")
-  target_link_libraries(fastlio_mapping ${cpp_typesupport_target})
+  target_link_libraries(fastlio_mapping_node ${cpp_typesupport_target})
 endif()
 
-ament_target_dependencies(fastlio_mapping ${dependencies})
+ament_target_dependencies(fastlio_mapping_node ${dependencies})
 
 # ---------------- Install --------------- #
-install(TARGETS fastlio_mapping
+install(TARGETS fastlio_mapping_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

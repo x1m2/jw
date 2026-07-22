@@ -1,3 +1,4 @@
+#include <atomic>
 #include <csignal>
 #include <unistd.h>
 #include <rclcpp/rclcpp.hpp>
@@ -14,6 +15,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 
+#include "ros2_main.hpp"
 #include "system/Header.h"
 #include "system/ParametersRos2.h"
 #include "system/System.hpp"
@@ -27,41 +29,9 @@
 // #include "robot_msgs/ModuleStatus.h"
 #endif
 
-int lidar_type;
-System slam;
-std::string map_frame;
-std::string lidar_frame;
-std::string baselink_frame;
 FILE *location_log = nullptr;
-FILE *last_pose_record = nullptr;
 
-double lidar_turnover_roll, lidar_turnover_pitch;
-bool path_en = true, scan_pub_en = false, dense_pub_en = false, lidar_tf_broadcast = false, imu_tf_broadcast = false;
-rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull;
-rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubLidarOdom;
-rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubImuOdom;
-rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubImuPath;
-rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubrelocalizationDebug;
-rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubGlobalMap;
-rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr pubOccGrid;
-#ifdef WORK
-// rclcpp::Publisher<localization_msg::msg::vehicle_pose>::SharedPtr pubOdomDev;
-// rclcpp::Publisher<robot_msgs::msg::ModuleStatus>::SharedPtr pubModulesStatus;
-rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr reloc_status_pub;
-rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_robot_pose;
-#endif
-std::unique_ptr<tf2_ros::Buffer> tf_buffer;
-std::shared_ptr<tf2_ros::TransformListener> tf_listener;
-std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
-
-bool flg_exit = false;
-void SigHandle(int sig)
-{
-    flg_exit = true;
-    LOG_WARN("catch sig %d", sig);
-}
-
-void publish_cloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pubCloud, PointCloudType::Ptr cloud, const double& lidar_end_time, const std::string& frame_id)
+void FastlioLocalizationNode::publish_cloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pubCloud, PointCloudType::Ptr cloud, const double& lidar_end_time, const std::string& frame_id)
 {
     sensor_msgs::msg::PointCloud2 cloud_msg;
     pcl::toROSMsg(*cloud, cloud_msg);
@@ -70,7 +40,7 @@ void publish_cloud(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &
     pubCloud->publish(cloud_msg);
 }
 
-void publish_cloud_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pubLaserCloudFull, PointCloudType::Ptr laserCloud, const state_ikfom &state, const double& lidar_end_time)
+void FastlioLocalizationNode::publish_cloud_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pubLaserCloudFull, PointCloudType::Ptr laserCloud, const state_ikfom &state, const double& lidar_end_time)
 {
     PointCloudType::Ptr laserCloudWorld(new PointCloudType(laserCloud->size(), 1));
     pointcloudLidarToWorld(laserCloud, laserCloudWorld, state);
@@ -78,7 +48,7 @@ void publish_cloud_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
 }
 
 template <typename T>
-void set_posestamp(T &out, const QD &rot, const V3D &pos)
+void FastlioLocalizationNode::set_posestamp(T &out, const QD &rot, const V3D &pos)
 {
     out.pose.position.x = pos.x();
     out.pose.position.y = pos.y();
@@ -89,7 +59,7 @@ void set_posestamp(T &out, const QD &rot, const V3D &pos)
     out.pose.orientation.w = rot.w();
 }
 
-void publish_tf(const QD &rot, const V3D &pos, const double &lidar_end_time)
+void FastlioLocalizationNode::publish_tf(const QD &rot, const V3D &pos, const double &lidar_end_time)
 {
     geometry_msgs::msg::TransformStamped transform_stamped;
     transform_stamped.header.stamp = rclcpp::Time(lidar_end_time * 1e9);
@@ -105,7 +75,7 @@ void publish_tf(const QD &rot, const V3D &pos, const double &lidar_end_time)
     tf_broadcaster->sendTransform(transform_stamped);
 }
 
-void publish_geometry_msgs(rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &pub_robot_pose, const state_ikfom &state, const double &lidar_end_time, QD &baselink_rot, V3D &baselink_pos)
+void FastlioLocalizationNode::publish_geometry_msgs(rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &pub_robot_pose, const state_ikfom &state, const double &lidar_end_time, QD &baselink_rot, V3D &baselink_pos)
 {
     static bool first_time = true;
     static Eigen::Quaterniond lidar2baselink_q;
@@ -165,7 +135,7 @@ void publish_geometry_msgs(rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::S
 }
 
 
-void publish_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubLidarOdom, const state_ikfom &state, const double &lidar_end_time, QD &baselink_rot, V3D &baselink_pos)
+void FastlioLocalizationNode::publish_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubLidarOdom, const state_ikfom &state, const double &lidar_end_time, QD &baselink_rot, V3D &baselink_pos)
 {
     static bool first_time = true;
     static Eigen::Quaterniond lidar2baselink_q;
@@ -225,7 +195,7 @@ void publish_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pub
         publish_tf(baselink_rot, baselink_pos, lidar_end_time);
 }
 
-void publish_module_status(bool level)
+void FastlioLocalizationNode::publish_module_status(bool level)
 {
     // robot_msgs::ModuleStatus status;
     // status.header.stamp = ros::Time().fromSec(time);
@@ -327,7 +297,7 @@ void publish_odometry2(rclcpp::Publisher<localization_msg::msg::vehicle_pose>::S
 }
 #endif
 
-void publish_imu_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubImuOdom, const state_ikfom &state, const double &imu_time)
+void FastlioLocalizationNode::publish_imu_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubImuOdom, const state_ikfom &state, const double &imu_time)
 {
     static bool first_time = true;
     static Eigen::Quaterniond lidar2baselink_q;
@@ -387,7 +357,7 @@ void publish_imu_odometry(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr 
         publish_tf(baselink_rot, baselink_pos, imu_time);
 }
 
-void publish_imu_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath, const QD &rot, const V3D &pos, const double &lidar_end_time)
+void FastlioLocalizationNode::publish_imu_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath, const QD &rot, const V3D &pos, const double &lidar_end_time)
 {
     static geometry_msgs::msg::PoseStamped msg_body_pose;
     set_posestamp(msg_body_pose, rot, pos);
@@ -408,20 +378,20 @@ void publish_imu_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath
 }
 
 #ifdef gnss_with_direction
-void gnss_cbk(const nav_msgs::msg::Odometry::SharedPtr msg)
+void FastlioLocalizationNode::gnss_cbk(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     slam.relocalization->gnss_pose = GnssPose(msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9,
                                               V3D(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z),
                                               QD(msg->pose.pose.orientation.w, msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z));
 }
 #else
-void gnss_cbk(const sensor_msgs::msg::NavSatFix::SharedPtr msg)
+void FastlioLocalizationNode::gnss_cbk(const sensor_msgs::msg::NavSatFix::SharedPtr msg)
 {
     slam.relocalization->gnss_pose = GnssPose(msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9, V3D(msg->latitude, msg->longitude, msg->altitude));
 }
 #endif
 
-bool load_last_pose(const PointCloudType::Ptr &scan)
+bool FastlioLocalizationNode::load_last_pose(const PointCloudType::Ptr &scan)
 {
     static bool use_last_pose = true;
     if (!use_last_pose)
@@ -466,9 +436,9 @@ bool load_last_pose(const PointCloudType::Ptr &scan)
     return slam.system_state_vaild;
 }
 
-void sensor_data_process()
+void FastlioLocalizationNode::sensor_data_process()
 {
-    if (flg_exit)
+    if (stopping.load())
         return;
 
     if (!slam.frontend->sync_sensor_data())
@@ -476,10 +446,8 @@ void sensor_data_process()
 
     LOG_DEBUG("sync_sensor_data");
 #ifdef MEASURES_BUFFER
-    // for relocalization data cache
     static std::deque<shared_ptr<MeasureCollection>> measures_cache;
 #endif
-
     if (!slam.system_state_vaild)
     {
         if (last_pose_record && load_last_pose(slam.frontend->measures->lidar))
@@ -617,7 +585,7 @@ void sensor_data_process()
     }
 }
 
-void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+void FastlioLocalizationNode::standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     static double last_time = 0;
     check_time_interval(last_time, msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9, 1.0 / slam.frontend->lidar->scan_rate, "lidar_time_interval");
@@ -651,7 +619,7 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     sensor_data_process();
 }
 
-void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
+void FastlioLocalizationNode::livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
 {
     static double last_time = 0;
     check_time_interval(last_time, msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9, 1.0 / slam.frontend->lidar->scan_rate, "lidar_time_interval");
@@ -680,7 +648,7 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
     sensor_data_process();
 }
 
-void imu_cbk(const sensor_msgs::msg::Imu::SharedPtr msg)
+void FastlioLocalizationNode::imu_cbk(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
     const auto &angular_velocity = V3D(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
     const auto &linear_acceleration = V3D(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
@@ -701,7 +669,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::SharedPtr msg)
     }
 }
 
-void publish_global_map()
+void FastlioLocalizationNode::publish_global_map()
 {
     if (pubGlobalMap->get_subscription_count() != 0)
     {
@@ -712,7 +680,8 @@ void publish_global_map()
         pubGlobalMap->publish(cloud_msg);
     }
 
-    if (pubOccGrid->get_subscription_count() != 0 && !slam.p2p->map_data.empty())
+    if (pubOccGrid->get_subscription_count() != 0 && slam.p2p &&
+        !slam.p2p->map_data.empty())
     {
         nav_msgs::msg::OccupancyGrid msg;
         msg.header.stamp = rclcpp::Clock().now();
@@ -732,7 +701,7 @@ void publish_global_map()
     }
 }
 
-void initialPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+void FastlioLocalizationNode::initialPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
 {
     const geometry_msgs::msg::Pose &pose = msg->pose.pose;
     const auto &ori = msg->pose.pose.orientation;
@@ -749,16 +718,24 @@ void initialPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::Sh
     slam.relocalization->set_init_pose(init_pose);
 }
 
-int main(int argc, char **argv)
+FastlioLocalizationNode::FastlioLocalizationNode(
+    const rclcpp::NodeOptions &options)
+    : rclcpp::Node("fastlio_localization", options),
+      slam_owner(std::make_unique<System>()),
+      slam(*slam_owner)
 {
-    rclcpp::init(argc, argv);
-    auto node = std::make_shared<rclcpp::Node>("fastlio_localization");
+}
+
+void FastlioLocalizationNode::initialize()
+{
+    auto node = std::static_pointer_cast<rclcpp::Node>(shared_from_this());
     tf_buffer = std::make_unique<tf2_ros::Buffer>(node->get_clock());
     tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
     tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(*node);
 
     string lidar_topic, imu_topic, gnss_topic;
-    bool relocate_use_last_pose = true, location_log_enable = true;
+    bool relocate_use_last_pose = true;
+    bool location_log_enable = true;
     std::string last_pose_record_path;
     std::string location_log_save_path;
 
@@ -799,14 +776,28 @@ int main(int argc, char **argv)
     load_parameters(node, slam, lidar_type);
 
     /*** ROS subscribe initialization ***/
-    rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl1;
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl2;
     if (lidar_type == AVIA)
-        sub_pcl1 = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lidar_topic, 1000, livox_pcl_cbk);
+        sub_pcl1 = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+            lidar_topic, 1000,
+            [this](livox_ros_driver2::msg::CustomMsg::SharedPtr message) {
+                livox_pcl_cbk(std::move(message));
+            });
     else
-        sub_pcl2 = node->create_subscription<sensor_msgs::msg::PointCloud2>(lidar_topic, 1000, standard_pcl_cbk);
-    auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 1000, imu_cbk);
-    auto sub_gnss = node->create_subscription<sensor_msgs::msg::NavSatFix>(gnss_topic, 1000, gnss_cbk);
+        sub_pcl2 = node->create_subscription<sensor_msgs::msg::PointCloud2>(
+            lidar_topic, 1000,
+            [this](sensor_msgs::msg::PointCloud2::SharedPtr message) {
+                standard_pcl_cbk(std::move(message));
+            });
+    sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(
+        imu_topic, 1000,
+        [this](sensor_msgs::msg::Imu::SharedPtr message) {
+            imu_cbk(std::move(message));
+        });
+    sub_gnss = node->create_subscription<sensor_msgs::msg::NavSatFix>(
+        gnss_topic, 1000,
+        [this](sensor_msgs::msg::NavSatFix::SharedPtr message) {
+            gnss_cbk(std::move(message));
+        });
     pubLaserCloudFull = node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 1000);
     pubLidarOdom = node->create_publisher<nav_msgs::msg::Odometry>("/lidar_localization", 1000);
     pubImuOdom = node->create_publisher<nav_msgs::msg::Odometry>("/imu_localization", 1000);
@@ -814,8 +805,13 @@ int main(int argc, char **argv)
     pubGlobalMap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/global_map", 1);
     pubOccGrid = node->create_publisher<nav_msgs::msg::OccupancyGrid>("/grid_map", 1);
 
-    rclcpp::TimerBase::SharedPtr timer = node->create_wall_timer(2000ms, publish_global_map);
-    auto sub_initpose = node->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 1, initialPoseCallback);
+    timer = node->create_wall_timer(
+        2000ms, [this]() { publish_global_map(); });
+    sub_initpose = node->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/initialpose", 1,
+        [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr message) {
+            initialPoseCallback(std::move(message));
+        });
     pubrelocalizationDebug = node->create_publisher<sensor_msgs::msg::PointCloud2>("/relocalization_debug", 1);
 
 #ifdef WORK
@@ -824,15 +820,29 @@ int main(int argc, char **argv)
     reloc_status_pub = node->create_publisher<std_msgs::msg::Bool>("/reloc_success", 1);
     pub_robot_pose = node->create_publisher<geometry_msgs::msg::PoseStamped>("/pose_stamped_localization", 1000);
 #endif
-    //------------------------------------------------------------------------------------------------------
-    signal(SIGINT, SigHandle);
+}
 
-    rclcpp::spin(node);
-
-	if (relocate_use_last_pose)
+FastlioLocalizationNode::~FastlioLocalizationNode()
+{
+    requestStop();
+    if (slam.relocalization_thread.joinable())
+        slam.relocalization_thread.join();
+    if (last_pose_record)
+    {
         fclose(last_pose_record);
-    if (location_log_enable && location_log)
+        last_pose_record = nullptr;
+    }
+    if (location_log)
+    {
         fclose(location_log);
+        location_log = nullptr;
+    }
+}
 
-    return 0;
+void FastlioLocalizationNode::requestStop()
+{
+    if (stopping.exchange(true))
+        return;
+    if (timer)
+        timer->cancel();
 }

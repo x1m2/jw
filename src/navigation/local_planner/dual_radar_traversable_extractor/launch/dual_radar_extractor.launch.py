@@ -35,6 +35,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 config_file,
+                {'runtime_profile': 'test'},
                 {'use_dual_radar': ParameterValue(use_dual_radar, value_type=bool)},
             ],
         ),

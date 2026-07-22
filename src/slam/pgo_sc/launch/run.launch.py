@@ -50,6 +50,7 @@ def generate_launch_description():
                 config_file_path,
                 {
                     'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'runtime_profile': 'test',
                     'basic.package_path': PathJoinSubstitution([
                         LaunchConfiguration('data_dir'),
                         'map',

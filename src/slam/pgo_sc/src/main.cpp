@@ -2,14 +2,30 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "pgo_sc.hpp"
+#include "robot_runtime/managed_worker.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<PgoSc>();
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(),
-                                                    4U);
-  executor.add_node(node);
-  executor.spin();
+
+  auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+      "pgo_worker",
+      [](const robot_runtime::ManagedWorker::StartContext &context) {
+        robot_runtime::ManagedWorker::AlgorithmInstance instance;
+        rclcpp::NodeOptions options;
+        if (!context.resource_path.empty()) {
+          options.append_parameter_override("basic.package_path",
+                                            context.resource_path);
+        }
+        auto pgo = std::make_shared<PgoSc>(options);
+        instance.node = pgo;
+        if (!context.resource_path.empty()) {
+          instance.before_stop = [pgo]() { pgo->saveMap(); };
+        }
+        return instance;
+      });
+
+  rclcpp::spin(worker);
+  worker.reset();
   rclcpp::shutdown();
   return 0;
 }

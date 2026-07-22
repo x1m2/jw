@@ -28,6 +28,8 @@
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
   <depend>livox_ros_driver2</depend>
+  <depend>robot_interfaces</depend>
+  <depend>robot_runtime</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>imu_filter_madgwick</exec_depend>

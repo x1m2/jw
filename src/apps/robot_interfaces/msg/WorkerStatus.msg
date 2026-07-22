@@ -1,0 +1,12 @@
+uint8 STOPPED=0
+uint8 STARTING=1
+uint8 RUNNING=2
+uint8 STOPPING=3
+uint8 ERROR=255
+builtin_interfaces/Time stamp
+string worker_name
+uint8 state
+uint64 session_id
+bool ready
+int32 error_code
+string message

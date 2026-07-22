@@ -7,11 +7,14 @@
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+
+#include "robot_runtime/managed_worker.hpp"
 
 /**
  * @brief 目标点结构体
@@ -344,18 +347,19 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
   try {
-    auto visualizer = std::make_shared<TargetPointsVisualizer>();
-
-    if (!visualizer->initialize()) {
-      RCLCPP_ERROR(visualizer->get_logger(), "目标点可视化节点初始化失败");
-      rclcpp::shutdown();
-      return -1;
-    }
-
-    visualizer->start();
-    RCLCPP_INFO(visualizer->get_logger(), "目标点可视化节点开始运行");
-
-    rclcpp::spin(visualizer);
+    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+        "target_points_visualizer_worker", []() {
+          auto visualizer = std::make_shared<TargetPointsVisualizer>();
+          if (!visualizer->initialize()) {
+            throw std::runtime_error("目标点可视化节点初始化失败");
+          }
+          visualizer->start();
+          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          instance.node = visualizer;
+          return instance;
+        });
+    rclcpp::spin(worker);
+    worker.reset();
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("target_points_visualizer_node"),
                  "目标点可视化节点运行异常: %s", e.what());
@@ -363,8 +367,6 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("target_points_visualizer_node"),
-              "目标点可视化节点正常退出");
   rclcpp::shutdown();
   return 0;
 }

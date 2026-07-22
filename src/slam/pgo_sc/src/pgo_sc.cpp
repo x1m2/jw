@@ -7,11 +7,14 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
-PgoSc::PgoSc()
-    : Node("pgo_sc_node"), is_initialized_(false), loop_added_flag_vis_(false) {
+PgoSc::PgoSc(const rclcpp::NodeOptions &options)
+    : Node("pgo_sc", options),
+      is_initialized_(false),
+      loop_added_flag_vis_(false) {
   ////// ROS2 params
   double loop_update_hz, vis_hz;
   LoopClosureConfig lc_config;
@@ -224,8 +227,14 @@ PgoSc::~PgoSc() {}
 
 void PgoSc::segmentGroundForKeyframe(PosePcd &pose_pcd) {
   pose_pcd.pcd_ground_.clear();
-
+  RCLCPP_INFO(this->get_logger(),
+              "Segmenting ground for keyframe %d, input cloud size: %zu",
+              pose_pcd.idx_, pose_pcd.pcd_.size());
   if (!enable_ground_segmentation_ || !ground_segmenter_) {
+    RCLCPP_WARN(this->get_logger(),
+                "Skipping ground segmentation: enabled=%s, segmenter=%s",
+                enable_ground_segmentation_ ? "true" : "false",
+                ground_segmenter_ ? "initialized" : "null");
     return;
   }
 
@@ -260,12 +269,12 @@ void PgoSc::segmentGroundForKeyframe(PosePcd &pose_pcd) {
   pose_pcd.pcd_ground_.height = 1;
   pose_pcd.pcd_ground_.is_dense = true;
 
-  RCLCPP_DEBUG(this->get_logger(),
-               "PatchWork++ keyframe %d: input=%zu ground=%zu filtered=%zu "
-               "nonground=%zu time=%.3f ms",
-               pose_pcd.idx_, pose_pcd.pcd_.size(), ground_cloud.size(),
-               pose_pcd.pcd_ground_.size(), nonground_cloud.size(),
-               time_taken * 1000.0);
+  RCLCPP_INFO(this->get_logger(),
+              "PatchWork++ keyframe %d: input=%zu ground=%zu filtered=%zu "
+              "nonground=%zu time=%.3f ms",
+              pose_pcd.idx_, pose_pcd.pcd_.size(), ground_cloud.size(),
+              pose_pcd.pcd_ground_.size(), nonground_cloud.size(),
+              time_taken * 1000.0);
 }
 
 // ====================== odom + pcd callback ======================
@@ -698,6 +707,16 @@ void PgoSc::optimizeGraph(bool is_loop) {
 }
 // ====================== save callback ======================
 void PgoSc::saveFlagCallback() {
+  if (package_path_.empty()) {
+    throw std::runtime_error("basic.package_path is empty");
+  }
+  std::error_code directory_error;
+  fs::create_directories(package_path_, directory_error);
+  if (directory_error) {
+    throw std::runtime_error("failed to create map directory: " +
+                             directory_error.message());
+  }
+
   std::string seq_directory = package_path_ + "/" + seq_name_;
   std::string scans_directory = seq_directory + "/scans";
 
@@ -893,6 +912,11 @@ void PgoSc::saveFlagCallback() {
         if (!keyframes_[i].pcd_ground_.empty()) {
           *corrected_free_space += transformPcd(
               keyframes_[i].pcd_ground_, keyframes_[i].pose_corrected_eig_);
+        } else {
+          RCLCPP_WARN(this->get_logger(),
+                      "Keyframe %zu has no ground points, skipping free-space "
+                      "map for this keyframe.",
+                      i);
         }
       }
     }
@@ -943,6 +967,8 @@ void PgoSc::saveFlagCallback() {
 
   RCLCPP_INFO(this->get_logger(), "Map save finished, published /save_done.");
 }
+
+void PgoSc::saveMap() { saveFlagCallback(); }
 
 // ====================== Keyframe Utilities ======================
 void PgoSc::updateOdomsAndPaths(const PosePcd &pose_pcd_in) {

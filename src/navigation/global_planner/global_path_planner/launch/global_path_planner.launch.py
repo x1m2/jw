@@ -38,6 +38,7 @@ def generate_launch_description():
         parameters=[
             LaunchConfiguration('config_file'),
             {
+                'runtime_profile': 'test',
                 'topology_map_file': PathJoinSubstitution([
                     LaunchConfiguration('data_dir'),
                     'topology_map',

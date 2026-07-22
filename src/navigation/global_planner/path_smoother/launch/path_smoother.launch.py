@@ -26,6 +26,6 @@ def generate_launch_description():
             package='path_smoother',
             executable='path_smoother_node',
             output='screen',
-            parameters=[config_file],
+            parameters=[config_file, {'runtime_profile': 'test'}],
         ),
     ])

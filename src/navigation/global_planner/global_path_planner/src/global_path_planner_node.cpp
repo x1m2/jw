@@ -2,6 +2,9 @@
 
 #include <clocale>
 #include <memory>
+#include <stdexcept>
+
+#include "robot_runtime/managed_worker.hpp"
 
 int main(int argc, char ** argv)
 {
@@ -9,17 +12,20 @@ int main(int argc, char ** argv)
 
     rclcpp::init(argc, argv);
 
-    auto planner = std::make_shared<global_path_planner::GlobalPathPlanner>();
+    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+        "global_path_planner_worker", []() {
+            auto planner =
+                std::make_shared<global_path_planner::GlobalPathPlanner>();
+            if (!planner->initialize()) {
+                throw std::runtime_error("全局路径规划器初始化失败");
+            }
+            robot_runtime::ManagedWorker::AlgorithmInstance instance;
+            instance.node = planner;
+            return instance;
+        });
 
-    if (!planner->initialize())
-    {
-        RCLCPP_ERROR(planner->get_logger(), "全局路径规划器初始化失败");
-        rclcpp::shutdown();
-        return -1;
-    }
-
-    RCLCPP_INFO(planner->get_logger(), "全局路径规划器节点启动");
-    rclcpp::spin(planner);
+    rclcpp::spin(worker);
+    worker.reset();
 
     rclcpp::shutdown();
     return 0;

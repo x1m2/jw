@@ -10,7 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(robot_runtime REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -24,6 +26,7 @@ include_directories(include)
 set(dependencies
   rclcpp
   std_msgs
+  std_srvs
   geometry_msgs
   nav_msgs
   sensor_msgs
@@ -49,7 +52,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 add_executable(${PROJECT_NAME}_node src/pure_pursuit_node.cpp)
 target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME})
-ament_target_dependencies(${PROJECT_NAME}_node ${dependencies})
+ament_target_dependencies(${PROJECT_NAME}_node ${dependencies} robot_runtime)
 
 install(TARGETS
   ${PROJECT_NAME}

@@ -65,9 +65,13 @@ typedef message_filters::sync_policies::ApproximateTime<
 
 class PgoSc : public rclcpp::Node {
  public:
-  explicit PgoSc();
+  explicit PgoSc(
+      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
 
   ~PgoSc() override;
+
+  // OTA停止建图时由Worker同步保存当前地图。
+  void saveMap();
 
  private:
   ///// Basic params

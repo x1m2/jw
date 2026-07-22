@@ -26,6 +26,13 @@ class KeyboardControl(Node):
         self.linear_scale = self.get_parameter('linear_scale').value
         self.angular_scale = self.get_parameter('angular_scale').value
 
+        # W 键独立分档：连续按下时 0.5 -> 0.6 -> 0.7。
+        self.forward_min_speed = 0.5
+        self.forward_max_speed = 0.7
+        self.forward_speed_step = 0.1
+        self.forward_speed = self.forward_min_speed
+        self.last_key_was_forward = False
+
         self.linear_x = 0.0
         self.linear_y = 0.0
         self.angular_z = 0.0
@@ -82,7 +89,8 @@ class KeyboardControl(Node):
             """
 控制方法
 ---------------------------
-W/S : 前进/后退
+W   : 前进（连续按下速度 0.5 -> 0.6 -> 0.7）
+S   : 后退
 A/D : 左移/右移
 Q/E : 左转/右转
 K   : 保存拓扑节点
@@ -123,33 +131,70 @@ CTRL-C : 退出
                 self.stop_robot()
 
                 if key == 'w':
-                    self.linear_x = self.linear_scale
+                    previous_speed = self.forward_speed
+                    speed_changed = not self.last_key_was_forward
+
+                    if self.last_key_was_forward:
+                        self.forward_speed = min(
+                            self.forward_speed + self.forward_speed_step,
+                            self.forward_max_speed
+                        )
+                    else:
+                        self.forward_speed = self.forward_min_speed
+
+                    self.linear_x = self.forward_speed
+                    self.last_key_was_forward = True
+
+                    speed_changed = (
+                        speed_changed or
+                        abs(self.forward_speed - previous_speed) > 1e-9
+                    )
+                    if speed_changed:
+                        self.get_logger().info(
+                            f'W 当前线速度: {self.forward_speed:.1f} m/s'
+                        )
 
                 elif key == 's':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.linear_x = -self.linear_scale
 
                 elif key == 'a':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.linear_y = self.linear_scale
 
                 elif key == 'd':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.linear_y = -self.linear_scale
 
                 elif key == 'q':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.angular_z = self.angular_scale
 
                 elif key == 'e':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.angular_z = -self.angular_scale
 
                 elif ch == ' ':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     self.stop_robot()
 
                 elif key == 'k':
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     msg = Bool()
                     msg.data = True
                     self.topology_pub.publish(msg)
                     self.get_logger().info('发布拓扑节点保存命令')
 
                 else:
+                    self.last_key_was_forward = False
+                    self.forward_speed = self.forward_min_speed
                     continue
 
         finally:

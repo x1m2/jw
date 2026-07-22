@@ -25,7 +25,35 @@ PurePursuitLocalPlanner::PurePursuitLocalPlanner()
           false)  // 新增：路径进度索引，防止回头，平滑局部路径标志，朝向调整标志，目标位姿标志
 {}
 
-PurePursuitLocalPlanner::~PurePursuitLocalPlanner() {}
+PurePursuitLocalPlanner::~PurePursuitLocalPlanner() { stop(); }
+
+void PurePursuitLocalPlanner::stop() {
+  if (control_timer_) {
+    control_timer_->cancel();
+  }
+  if (cmd_vel_pub_) {
+    geometry_msgs::msg::Twist stop_command;
+    cmd_vel_pub_->publish(stop_command);
+    last_cmd_vel_ = stop_command;
+  }
+}
+
+bool PurePursuitLocalPlanner::setPaused(bool paused) {
+  navigation_paused_.store(paused);
+  if (paused) {
+    // 立即发送一次零速度，并要求控制循环持续发送，防止底盘沿用旧指令。
+    reset_velocity_on_next_control_.store(true);
+    if (cmd_vel_pub_) {
+      cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    }
+    RCLCPP_INFO(node_->get_logger(), "Navigation velocity output paused");
+  } else {
+    // 不恢复暂停前的速度；下一周期以零速度为基准重新计算。
+    reset_velocity_on_next_control_.store(true);
+    RCLCPP_INFO(node_->get_logger(), "Navigation velocity output resumed");
+  }
+  return true;
+}
 
 bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   node_ = node;
@@ -87,6 +115,16 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
                                                                1);
   nav_state_pub_ =
       node_->create_publisher<std_msgs::msg::Bool>("/nav_state", 1);
+
+  // RobotRuntime内部控制接口，不作为APP直接调用的业务API。
+  pause_service_ = node_->create_service<std_srvs::srv::SetBool>(
+      "/pure_pursuit/set_paused",
+      [this](const std_srvs::srv::SetBool::Request::SharedPtr request,
+             std_srvs::srv::SetBool::Response::SharedPtr response) {
+        response->success = setPaused(request->data);
+        response->message = request->data ? "navigation paused"
+                                          : "navigation resumed";
+      });
 
   // 初始化订阅器
   global_path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
@@ -650,6 +688,17 @@ bool PurePursuitLocalPlanner::getRobotPose(
 }
 
 void PurePursuitLocalPlanner::controlCallback() {
+  if (reset_velocity_on_next_control_.exchange(false)) {
+    last_cmd_vel_ = geometry_msgs::msg::Twist();
+    last_control_time_ = node_->now();
+  }
+
+  if (navigation_paused_.load()) {
+    // 暂停期间每个控制周期都发送零速度，导航路径和任务状态保持不变。
+    cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    return;
+  }
+
   geometry_msgs::msg::Twist cmd_vel;
   if (computeVelocityCommands(cmd_vel)) {
     cmd_vel_pub_->publish(cmd_vel);

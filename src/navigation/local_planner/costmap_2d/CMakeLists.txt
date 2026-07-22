@@ -2,9 +2,8 @@ cmake_minimum_required(VERSION 3.8)
 project(costmap_2d)
 
 # 编译标准
-if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
-endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -14,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(rclcpp REQUIRED)
+find_package(robot_runtime REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -76,6 +76,7 @@ add_executable(costmap_2d_node
 # 节点依赖
 ament_target_dependencies(costmap_2d_node
   rclcpp
+  robot_runtime
   std_msgs
   sensor_msgs
   geometry_msgs

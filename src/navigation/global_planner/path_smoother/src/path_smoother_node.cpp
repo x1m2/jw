@@ -5,6 +5,9 @@
 #include <clocale>
 #include <exception>
 #include <memory>
+#include <stdexcept>
+
+#include "robot_runtime/managed_worker.hpp"
 
 int main(int argc, char ** argv)
 {
@@ -12,28 +15,28 @@ int main(int argc, char ** argv)
 
   rclcpp::init(argc, argv);
 
-  auto node = std::make_shared<rclcpp::Node>("path_smoother_node");
-
-  RCLCPP_INFO(node->get_logger(), "启动路径平滑节点...");
-
   try {
-    path_smoother::PathSmoother smoother(node);
-
-    if (!smoother.initialize()) {
-      RCLCPP_ERROR(node->get_logger(), "路径平滑器初始化失败");
-      rclcpp::shutdown();
-      return -1;
-    }
-
-    RCLCPP_INFO(node->get_logger(), "路径平滑节点启动成功");
-    smoother.spin();
+    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+        "path_smoother_worker", []() {
+          auto node = std::make_shared<rclcpp::Node>("path_smoother");
+          auto smoother = std::make_shared<path_smoother::PathSmoother>(node);
+          if (!smoother->initialize()) {
+            throw std::runtime_error("路径平滑器初始化失败");
+          }
+          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          instance.node = node;
+          instance.owner = smoother;
+          return instance;
+        });
+    rclcpp::spin(worker);
+    worker.reset();
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(node->get_logger(), "路径平滑节点运行异常: %s", e.what());
+    RCLCPP_ERROR(rclcpp::get_logger("path_smoother_worker"),
+                 "路径平滑节点运行异常: %s", e.what());
     rclcpp::shutdown();
     return -1;
   }
 
-  RCLCPP_INFO(node->get_logger(), "路径平滑节点已退出");
   rclcpp::shutdown();
   return 0;
 }

@@ -4,6 +4,7 @@
 #include <tf2/time.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -19,6 +20,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -88,6 +90,12 @@ class PurePursuitLocalPlanner {
    */
   bool initialize(rclcpp::Node::SharedPtr node);
 
+  /** Stop control updates and publish a zero velocity command. */
+  void stop();
+
+  /** 暂停时保留导航任务，只持续输出零速度；继续后重新计算控制量。 */
+  bool setPaused(bool paused);
+
   /**
    * @brief 设置全局路径
    * @param global_path 全局路径
@@ -131,6 +139,7 @@ class PurePursuitLocalPlanner {
       velocity_arrow_pub_;  // 速度箭头发布器
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
       nav_state_pub_;  // 导航状态发布器
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_path_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
@@ -180,6 +189,8 @@ class PurePursuitLocalPlanner {
   // 控制相关
   geometry_msgs::msg::Twist last_cmd_vel_;
   rclcpp::Time last_control_time_;
+  std::atomic_bool navigation_paused_{false};
+  std::atomic_bool reset_velocity_on_next_control_{false};
 
   /**
    * @brief 加载参数

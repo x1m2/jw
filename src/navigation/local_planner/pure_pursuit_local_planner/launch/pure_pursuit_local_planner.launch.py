@@ -45,7 +45,7 @@ def generate_launch_description():
             package='pure_pursuit_local_planner',
             executable='pure_pursuit_local_planner_node',
             output='screen',
-            parameters=[config_file],
+            parameters=[config_file, {'runtime_profile': 'test'}],
             remappings=[
                 ('/global_path', '/smoothed_global_path'),
                 ('/local_costmap', '/local_costmap/costmap'),

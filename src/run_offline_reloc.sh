@@ -117,7 +117,7 @@ kill_all_related_processes() {
     info "清理 FAST-LIO / PGO / localization / rosbag / RViz 相关残留进程..."
 
     local patterns=(
-        "laser_mapping_node"
+        "fastlio_mapping_node"
         "fast_lio"
         "mapping.launch.py"
 

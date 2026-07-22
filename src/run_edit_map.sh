@@ -10,6 +10,8 @@ warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
 readonly DATA_DIR="/robotfs/data/slam_data"
+readonly BBS_BUILD_DIR="${WORKSPACE_DIR}/env/3d_bbs/test/build"
+readonly MAP_DIR="${DATA_DIR}/map"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
@@ -57,6 +59,27 @@ TASK_FILE="${TASK_DIR}/test.txt"
 
 info "开始地图编辑流程"
 info "数据目录: ${DATA_DIR}"
+
+# ==================================================
+# 生成 3d_bbs 地图数据
+# ==================================================
+if [ ! -x "${BBS_BUILD_DIR}/saver" ]; then
+    err "找不到 3d_bbs saver 可执行文件: ${BBS_BUILD_DIR}/saver"
+    err "请先运行 robot_rk3588_env.sh 完成 3d_bbs/test 编译"
+    exit 1
+fi
+
+if [ ! -d "${MAP_DIR}" ]; then
+    err "地图目录不存在: ${MAP_DIR}"
+    exit 1
+fi
+
+info "运行 3d_bbs saver..."
+(
+    cd "${BBS_BUILD_DIR}"
+    ./saver "${MAP_DIR}/" 0.5 6
+)
+info "3d_bbs saver 执行完成"
 
 # ==================================================
 # 只关闭本脚本启动的进程组

@@ -26,6 +26,8 @@
   <depend>quatro</depend>
   <depend>scancontext</depend>
   <depend>patchworkpp</depend>
+  <depend>robot_interfaces</depend>
+  <depend>robot_runtime</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
