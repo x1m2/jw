@@ -40,7 +40,7 @@
             imu_to_base_R: 0.0   #23.6 0.4119 
 
         z_constraint:
-            enable: true
+            enable: false
 
         imu_orientation:
             imu_topic: "/imu/data"
