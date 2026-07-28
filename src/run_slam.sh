@@ -10,6 +10,8 @@ warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
 readonly DATA_DIR="/robotfs/data/slam_data"
+readonly BBS_BUILD_DIR="${WORKSPACE_DIR}/env/3d_bbs/test/build"
+readonly MAP_DIR="${DATA_DIR}/map"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
@@ -87,7 +89,7 @@ root.attributes("-topmost", True)
 
 label = tk.Label(
     root,
-    text="检测到 Ctrl+C\n\n正在保存地图和轨迹\n请不要关闭终端...",
+    text="检测到 Ctrl+C\n\n正在保存地图、轨迹并生成 3d_bbs 数据\n请不要关闭终端...",
     font=("WenQuanYi Micro Hei", 15),
     justify="center",
 )
@@ -122,8 +124,14 @@ def check_done():
 
         if status == "success":
             label.config(
-                text="地图和轨迹已保存完成\n\n"
+                text="地图、轨迹和 3d_bbs 数据已生成完成\n\n"
                      "保存目录：\n" + log_dir + "\n\n"
+                     "请点击“完成”退出建图流程"
+            )
+        elif status == "bbs_failed":
+            label.config(
+                text="地图和轨迹已保存，但 3d_bbs 数据生成失败\n\n"
+                     "请查看终端错误信息。\n"
                      "请点击“完成”退出建图流程"
             )
         else:
@@ -179,6 +187,32 @@ kill_process_group_safe() {
     fi
 }
 
+generate_3d_bbs_data() {
+    # pgo_sc 的 /save_done 到达后再运行，避免 saver 读取未写完的地图。
+    if [ ! -x "${BBS_BUILD_DIR}/saver" ]; then
+        err "找不到 3d_bbs saver 可执行文件: ${BBS_BUILD_DIR}/saver"
+        err "请先运行 robot_rk3588_env.sh 完成 3d_bbs/test 编译"
+        return 1
+    fi
+
+    if [ ! -d "${MAP_DIR}" ]; then
+        err "地图目录不存在: ${MAP_DIR}"
+        return 1
+    fi
+
+    info "运行 3d_bbs saver..."
+    if (
+        cd "${BBS_BUILD_DIR}"
+        ./saver "${MAP_DIR}/" 0.5 6
+    ); then
+        info "3d_bbs saver 执行完成"
+        return 0
+    fi
+
+    err "3d_bbs saver 执行失败"
+    return 1
+}
+
 cleanup() {
     if [ "${CLEANING}" -eq 1 ]; then
         return
@@ -222,7 +256,11 @@ touch '${SAVE_DONE_FLAG}'
         echo "failed" > "${SAVE_POPUP_STATUS}"
     else
         info "地图和轨迹保存完成"
-        echo "success" > "${SAVE_POPUP_STATUS}"
+        if generate_3d_bbs_data; then
+            echo "success" > "${SAVE_POPUP_STATUS}"
+        else
+            echo "bbs_failed" > "${SAVE_POPUP_STATUS}"
+        fi
     fi
 
     rm -f "${SAVE_DONE_FLAG}" 2>/dev/null || true
@@ -300,14 +338,16 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
     ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true
 
-start_bg TOPOLOGY_PID "topology_map_generator" "${TOPOLOGY_LOG_FILE}" 1 \
-    ros2 launch topology_map_generator topology_map_generator.launch.py
+# 建图过程中按 K 保存拓扑点的旧流程已停用。
+# 建图完成后统一使用 rviz_topology_editor 在优化后的 PCD 地图上打点。
+# start_bg TOPOLOGY_PID "topology_map_generator" "${TOPOLOGY_LOG_FILE}" 1 \
+#     ros2 launch topology_map_generator topology_map_generator.launch.py
 
 # ==================================================
 # 前台键盘控制
 # ==================================================
 echo ""
-info "键盘控制已启动，开始建图打点"
+info "键盘控制已启动，开始建图"
 info "结束建图：在当前终端按 Ctrl+C"
 echo ""
 

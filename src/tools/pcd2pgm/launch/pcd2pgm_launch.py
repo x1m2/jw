@@ -62,7 +62,7 @@ def generate_launch_description():
                 "pcd_file": PathJoinSubstitution([
                     LaunchConfiguration("data_dir"),
                     "map",
-                    "result.pcd",
+                    "globalmap.pcd",
                 ]),
             },
         ],

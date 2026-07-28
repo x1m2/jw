@@ -1,0 +1,40 @@
+/**:
+  ros__parameters:
+    # 最终PGO地图或某一楼层用于编辑的PCD。
+    pcd_file: "/robotfs/data/slam_data/map/globalmap.pcd"
+
+    # 与按K打点相同的输出。目标点文件会自动生成为
+    # generated_map_target_points.txt。
+    output_file: "/robotfs/data/slam_data/topology_map/generated_map.txt"
+    connected_topology_file: "/robotfs/data/slam_data/topology_map/connected_topology_map.txt"
+    task_file: "/robotfs/data/slam_data/task/test.txt"
+
+    frame_id: "map"
+    goal_topic: "/rviz_topology_editor/goal_pose"
+    cloud_topic: "/rviz_topology_editor/map_cloud"
+    marker_topic: "/rviz_topology_editor/markers"
+
+    # true时将显示点云压到z=0，适合RViz的2D Goal Pose。
+    # 原始PCD仍用于下面的高度查询。
+    flatten_cloud_for_display: false
+
+    # pcd_percentile：在点击位置附近从PCD估计Z，再加target_z_offset。
+    # fixed：直接使用fixed_z，适合已经确定楼层参考高度的情况。
+    z_mode: "pcd_percentile"
+    fixed_z: 0.0
+    target_z_offset: 0.3
+    z_search_radius: 0.8
+    z_percentile: 0.1
+
+    # 当前编辑楼层的高度范围。多楼层地图必须限制该范围，
+    # 防止相同XY查询到其他楼层。
+    z_min: -2.0
+    z_max: 3.5
+
+    # false：点击只进入编辑列表，点击RViz“保存并生成”后统一落盘。
+    # true：每次点击额外保存原始点文件；连边和任务文件仍由保存按钮生成。
+    auto_save_raw_points: false
+
+    # 状态机任务文件每个点的默认参数。
+    task_wait_sec: 0
+    task_publish_data: 1

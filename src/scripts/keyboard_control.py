@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+# from std_msgs.msg import Bool  # K 键拓扑打点停用期间不需要
 
 import sys
 import termios
@@ -43,11 +43,14 @@ class KeyboardControl(Node):
             10
         )
 
-        self.topology_pub = self.create_publisher(
-            Bool,
-            '/topology_node_set',
-            10
-        )
+        # K 键拓扑打点已停用。后续统一在建图完成后使用
+        # rviz_topology_editor 在优化后的 PCD 地图上打点。
+        #
+        # self.topology_pub = self.create_publisher(
+        #     Bool,
+        #     '/topology_node_set',
+        #     10
+        # )
 
         self.running = True
 
@@ -93,7 +96,6 @@ W   : 前进（连续按下速度 0.5 -> 0.6 -> 0.7）
 S   : 后退
 A/D : 左移/右移
 Q/E : 左转/右转
-K   : 保存拓扑节点
 空格 : 停止
 ESC : 退出
 CTRL-C : 退出
@@ -162,12 +164,12 @@ CTRL-C : 退出
                 elif key == 'a':
                     self.last_key_was_forward = False
                     self.forward_speed = self.forward_min_speed
-                    self.linear_y = self.linear_scale
+                    self.linear_y = -self.linear_scale
 
                 elif key == 'd':
                     self.last_key_was_forward = False
                     self.forward_speed = self.forward_min_speed
-                    self.linear_y = -self.linear_scale
+                    self.linear_y = self.linear_scale
 
                 elif key == 'q':
                     self.last_key_was_forward = False
@@ -184,13 +186,14 @@ CTRL-C : 退出
                     self.forward_speed = self.forward_min_speed
                     self.stop_robot()
 
-                elif key == 'k':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
-                    msg = Bool()
-                    msg.data = True
-                    self.topology_pub.publish(msg)
-                    self.get_logger().info('发布拓扑节点保存命令')
+                # K 键拓扑打点已停用，保留代码便于必要时恢复。
+                # elif key == 'k':
+                #     self.last_key_was_forward = False
+                #     self.forward_speed = self.forward_min_speed
+                #     msg = Bool()
+                #     msg.data = True
+                #     self.topology_pub.publish(msg)
+                #     self.get_logger().info('发布拓扑节点保存命令')
 
                 else:
                     self.last_key_was_forward = False

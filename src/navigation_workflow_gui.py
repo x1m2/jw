@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""建图 / 地图编辑 / 键盘控制 / 重定位 / 自主导航 GUI。
+"""建图 / 地图打点 / 键盘控制 / 重定位与自主导航 GUI。
 
-重定位结果只读取 run_relocalization.sh 写入的：
+重定位与导航由 run_nav.sh 分阶段执行。GUI 读取：
   relocalization_exit_code.txt
   relocalization_success.txt
-不再使用外层终端进程的返回码判断重定位是否成功。
+并通过 navigation_confirm.txt 将人工确认结果交给同一个脚本。
 """
 
 import datetime
@@ -41,12 +41,11 @@ class NavigationWorkflowGUI:
 
         self.run_kill_node_script = os.path.join(self.script_dir, "run_kill_node.sh")
         self.run_slam_script = os.path.join(self.script_dir, "run_slam.sh")
-        self.run_edit_map_script = os.path.join(self.script_dir, "run_edit_map.sh")
+        self.run_rviz_topology_editor_script = os.path.join(
+            self.script_dir, "run_rviz_topology_editor.sh"
+        )
         self.keyboard_control_script = os.path.join(
             self.script_dir, "scripts", "keyboard_control.py"
-        )
-        self.run_relocalization_script = os.path.join(
-            self.script_dir, "run_relocalization.sh"
         )
         self.run_nav_script = os.path.join(self.script_dir, "run_nav.sh")
 
@@ -57,7 +56,6 @@ class NavigationWorkflowGUI:
         self.slam_terminal_process = None
         self.edit_map_terminal_process = None
         self.keyboard_terminal_process = None
-        self.relocalization_terminal_process = None
         self.nav_terminal_process = None
 
         self.slam_running = False
@@ -87,7 +85,7 @@ class NavigationWorkflowGUI:
         self.task_folder_path = os.path.join(self.runtime_data_dir, "task")
         self.map_dir = os.path.join(self.runtime_data_dir, "map")
         self.map_bag_dir = os.path.join(self.map_dir, "result_bag")
-        self.map_pcd_file = os.path.join(self.map_dir, "result.pcd")
+        self.map_pcd_file = os.path.join(self.map_dir, "globalmap.pcd")
         self.available_tasks = []
 
         self.workflow_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -113,6 +111,9 @@ class NavigationWorkflowGUI:
         self.relocalization_success_file = os.path.join(
             self.relocalization_result_dir, "relocalization_success.txt"
         )
+        self.navigation_confirm_file = os.path.join(
+            self.relocalization_result_dir, "navigation_confirm.txt"
+        )
 
         self.font_family = self.select_chinese_font()
         self.mono_font_family = self.font_family
@@ -120,7 +121,7 @@ class NavigationWorkflowGUI:
         self.load_available_tasks()
 
         self.root.deiconify()
-        self.root.title("建图 / 地图编辑 / 键盘控制 / 重定位 / 自主导航控制界面")
+        self.root.title("建图 / 地图打点 / 键盘控制 / 重定位 / 自主导航控制界面")
         self.root.geometry("820x820")
         self.root.resizable(True, True)
         self.create_widgets()
@@ -130,7 +131,7 @@ class NavigationWorkflowGUI:
         self.root.after(200, self.update_nav_control_display)
         self.update_map_status_display()
  
-        self.add_log("建图 / 编辑地图 / 重定位 / 自主导航 GUI 已启动")
+        self.add_log("建图 / 地图打点 / 重定位 / 自主导航 GUI 已启动")
         self.add_log(f"工作空间目录: {self.workspace_dir}")
         self.add_log(f"脚本目录: {self.script_dir}")
         self.add_log(f"运行数据/日志根目录: {self.runtime_data_dir}")
@@ -281,7 +282,7 @@ class NavigationWorkflowGUI:
         main.rowconfigure(5, weight=0)
 
         tk.Label(
-            main, text="建图 / 地图编辑 / 键盘控制 / 重定位 / 自主导航控制界面",
+            main, text="建图 / 地图打点 / 键盘控制 / 重定位 / 自主导航控制界面",
             font=(self.font_family, 18, "bold"), fg="navy",
         ).grid(row=0, column=0, pady=(0, 15))
 
@@ -344,12 +345,12 @@ class NavigationWorkflowGUI:
             controls.columnconfigure(i, weight=1)
 
         self.start_slam_button = tk.Button(
-            controls, text="开始建图并打点", command=self.start_slam,
+            controls, text="开始建图", command=self.start_slam,
             bg="green", fg="white", font=(self.font_family, 13, "bold"), height=2,
         )
         self.start_slam_button.grid(row=0, column=0, padx=5, pady=5, sticky=(tk.W, tk.E))
         self.start_edit_map_button = tk.Button(
-            controls, text="启动地图编辑", command=self.start_edit_map,
+            controls, text="启动地图打点", command=self.start_edit_map,
             bg="orange", fg="white", font=(self.font_family, 13, "bold"), height=2,
         )
         self.start_edit_map_button.grid(row=0, column=1, padx=5, pady=5, sticky=(tk.W, tk.E))
@@ -366,8 +367,8 @@ class NavigationWorkflowGUI:
         tk.Label(
             tips,
             text=(
-                "1. 没有地图时：先点击“开始建图并打点”，完成地图和目标点采集。\n"
-                "2. 建图完成后点击“启动地图编辑”，检查并编辑拓扑点、路径和任务。\n"
+                "1. 没有地图时：先点击“开始建图”，完成地图采集与保存。\n"
+                "2. 建图完成后点击“启动地图打点”，在RViz中设置拓扑点并保存。\n"
                 "3. 有可用地图和任务后，点击“自主导航”，系统会先启动重定位。"
             ),
             font=(self.font_family, 10), fg="gray", justify=tk.LEFT, anchor=tk.W,
@@ -959,17 +960,19 @@ class NavigationWorkflowGUI:
 
     def start_edit_map(self):
         if self.edit_map_running:
-            messagebox.showwarning("提示", "地图编辑已经在运行")
+            messagebox.showwarning("提示", "地图打点已经在运行")
             return
         self.update_map_status_display()
         self.edit_map_terminal_process = self.start_script_in_terminal(
-            self.run_edit_map_script, "地图编辑 - run_edit_map", keep_open=False
+            self.run_rviz_topology_editor_script,
+            "地图打点 - rviz_topology_editor",
+            keep_open=True,
         )
         if self.edit_map_terminal_process is None:
             return
         self.edit_map_running = True
-        self.set_edit_map_status("地图编辑运行中", "orange")
-        self.set_current_action("地图编辑已启动，请在弹出的终端 / RViz 中编辑地图", "orange")
+        self.set_edit_map_status("地图打点运行中", "orange")
+        self.set_current_action("地图打点已启动，请在RViz中设置目标点", "orange")
         self.set_edit_map_button_running(True)
         threading.Thread(target=self.watch_edit_map_process, daemon=True).start()
 
@@ -977,14 +980,16 @@ class NavigationWorkflowGUI:
         if self.edit_map_terminal_process is None:
             return
         ret = self.edit_map_terminal_process.wait()
-        self.add_log_from_thread(f"run_edit_map.sh 终端进程退出，返回码: {ret}")
+        self.add_log_from_thread(
+            f"run_rviz_topology_editor.sh 终端进程退出，返回码: {ret}"
+        )
         self.root.after(0, self._edit_map_finished)
 
     def _edit_map_finished(self):
         self.edit_map_running = False
-        self.set_edit_map_status("地图编辑已退出", "green")
+        self.set_edit_map_status("地图打点已退出", "green")
         self.update_map_status_display()
-        self.set_current_action("地图编辑流程结束", "green")
+        self.set_current_action("地图打点流程结束", "green")
         self.set_edit_map_button_running(False)
 
     # ------------------------- relocalization + nav -------------------------
@@ -1007,27 +1012,29 @@ class NavigationWorkflowGUI:
 
         try:
             os.makedirs(self.relocalization_result_dir, exist_ok=True)
-            for path in [self.relocalization_exit_code_file, self.relocalization_success_file]:
+            for path in [
+                self.relocalization_exit_code_file,
+                self.relocalization_success_file,
+                self.navigation_confirm_file,
+            ]:
                 if os.path.isfile(path):
                     os.remove(path)
         except Exception as e:
             self.add_log(f"[WARN] 删除旧重定位结果文件失败: {e}")
 
-        # 关键：这里不再把 exit_code_file 传给外层终端包装器。
-        # 结果文件只能由 run_relocalization.sh 自己写。
-        self.relocalization_terminal_process = self.start_script_in_terminal(
-            self.run_relocalization_script,
-            "重定位 - run_relocalization",
+        self.nav_terminal_process = self.start_script_in_terminal(
+            self.run_nav_script,
+            "重定位与自主导航 - run_nav",
             keep_open=False,
         )
-        if self.relocalization_terminal_process is None:
+        if self.nav_terminal_process is None:
             return
         self.relocalization_running = True
         self.set_relocalization_status("正在重定位", "orange")
         self.set_nav_status("等待重定位成功", "orange")
         self.set_current_action("正在执行重定位，成功后需要人工确认位置", "orange")
         self.set_nav_button_running(True)
-        self.add_log("已启动 run_relocalization.sh，等待重定位成功")
+        self.add_log("已启动 run_nav.sh，当前处于重定位阶段")
         threading.Thread(target=self.watch_relocalization_then_start_nav, daemon=True).start()
 
     def watch_relocalization_then_start_nav(self):
@@ -1044,11 +1051,13 @@ class NavigationWorkflowGUI:
         )
 
         while time.time() - start < timeout_sec:
-            if self.relocalization_terminal_process is not None:
-                terminal_return_code = self.relocalization_terminal_process.poll()
+            if self.nav_terminal_process is not None:
+                terminal_return_code = self.nav_terminal_process.poll()
             real_return_code = self.read_int_file(self.relocalization_exit_code_file)
             success_flag = self.read_int_file(self.relocalization_success_file)
             if real_return_code is not None and success_flag is not None:
+                break
+            if terminal_return_code is not None:
                 break
             elapsed = time.time() - start
             if elapsed - last_progress >= 10.0:
@@ -1067,6 +1076,14 @@ class NavigationWorkflowGUI:
         )
 
         if real_return_code is None or success_flag is None:
+            if terminal_return_code is not None:
+                self.root.after(
+                    0,
+                    lambda: self._relocalization_failed(
+                        terminal_return_code, success_flag
+                    ),
+                )
+                return
             self.root.after(0, lambda: self._relocalization_timeout(timeout_sec))
             return
         if real_return_code != 0 or success_flag != 1:
@@ -1075,6 +1092,7 @@ class NavigationWorkflowGUI:
         self.root.after(0, self.ask_user_confirm_pose)
 
     def _relocalization_timeout(self, timeout_sec):
+        self.write_navigation_confirmation(0)
         self.set_relocalization_status("重定位超时", "red")
         self.set_nav_status("未启动", "gray")
         self.set_current_action("未等到重定位最终结果，未启动自主导航", "red")
@@ -1093,7 +1111,7 @@ class NavigationWorkflowGUI:
         self.add_log(f"重定位失败：exit_code={exit_code}，success_flag={success_flag}")
         messagebox.showerror(
             "重定位失败",
-            "run_relocalization.sh 已结束，但未返回成功结果。\n\n"
+            "run_nav.sh 的重定位阶段未返回成功结果。\n\n"
             f"真实返回码: {exit_code}\n成功标志: {success_flag}\n\n"
             "请查看 relocalization 日志。",
         )
@@ -1109,31 +1127,43 @@ class NavigationWorkflowGUI:
         ):
             self.set_relocalization_status("重定位已确认", "green")
             self.set_nav_status("正在启动自主导航", "green")
-            self.set_current_action("用户确认位置正确，正在启动 run_nav.sh", "green")
-            self.add_log("用户确认重定位位置正确，开始启动 run_nav.sh")
+            self.set_current_action("用户确认位置正确，run_nav.sh 正在启动导航节点", "green")
+            self.add_log("用户确认重定位位置正确，通知 run_nav.sh 继续启动导航")
             self.start_nav_after_relocalization_success()
             return
+        self.write_navigation_confirmation(0)
         self.set_relocalization_status("重定位成功但未确认", "orange")
         self.set_nav_status("未启动", "gray")
         self.set_current_action("用户未确认重定位结果，已取消启动自主导航", "red")
         self.set_nav_button_running(False)
-        self.add_log("用户未确认重定位结果，取消启动 run_nav.sh")
+        self.add_log("用户未确认重定位结果，通知 run_nav.sh 清理并退出")
+        threading.Thread(
+            target=self.watch_cancelled_nav_process, daemon=True
+        ).start()
+
+    def write_navigation_confirmation(self, confirmed):
+        try:
+            os.makedirs(self.relocalization_result_dir, exist_ok=True)
+            temporary_path = self.navigation_confirm_file + ".tmp"
+            with open(temporary_path, "w", encoding="utf-8") as file:
+                file.write("1\n" if confirmed else "0\n")
+            os.replace(temporary_path, self.navigation_confirm_file)
+            return True
+        except Exception as error:
+            self.add_log(f"[ERROR] 写入重定位确认结果失败: {error}")
+            return False
 
     def start_nav_after_relocalization_success(self):
         if self.nav_running:
             return
+        if not self.write_navigation_confirmation(1):
+            self.set_nav_status("自主导航启动失败", "red")
+            self.set_current_action("无法通知 run_nav.sh 启动导航", "red")
+            self.set_nav_button_running(False)
+            messagebox.showerror("启动失败", "无法写入重定位确认文件。")
+            return
         self.robot_nav_state = False
         self.robot_nav_state_received = False
-        self.nav_terminal_process = self.start_script_in_terminal(
-            self.run_nav_script,
-            "自主导航 - run_nav",
-            keep_open=False,
-        )
-        if self.nav_terminal_process is None:
-            self.set_nav_status("自主导航启动失败", "red")
-            self.set_current_action("run_nav.sh 启动失败", "red")
-            self.set_nav_button_running(False)
-            return
         self.nav_running = True
         self.set_nav_status("自主导航运行中", "purple")
         self.set_current_action("自主导航已启动，请在主界面导航任务控制区操作", "purple")
@@ -1150,6 +1180,14 @@ class NavigationWorkflowGUI:
         ret = self.nav_terminal_process.wait()
         self.add_log_from_thread(f"run_nav.sh 终端进程退出，返回码: {ret}")
         self.root.after(0, self._nav_finished)
+
+    def watch_cancelled_nav_process(self):
+        if self.nav_terminal_process is None:
+            return
+        ret = self.nav_terminal_process.wait()
+        self.add_log_from_thread(
+            f"run_nav.sh 已按取消结果清理退出，返回码: {ret}"
+        )
 
     def _nav_finished(self):
         self.nav_running = False

@@ -54,7 +54,7 @@ void Pcd2PgmNode::publishCallback() {
 }
 
 void Pcd2PgmNode::declareParameters() {
-  declare_parameter("pcd_file", "/map/result.pcd");
+  declare_parameter("pcd_file", "/robotfs/data/slam_data/map/globalmap.pcd");
   declare_parameter("thre_z_min", 0.5);
   declare_parameter("thre_z_max", 2.0);
   declare_parameter("flag_pass_through", false);

@@ -40,13 +40,25 @@ fi
 
 NAV_LOG_DIR="${LOG_ROOT}/nav"
 RELOCALIZATION_DIR="${LOG_ROOT}/relocalization"
-mkdir -p "${NAV_LOG_DIR}"
+mkdir -p "${NAV_LOG_DIR}" "${RELOCALIZATION_DIR}"
+
+RELOCALIZATION_EXIT_CODE_FILE="${RELOCALIZATION_DIR}/relocalization_exit_code.txt"
+RELOCALIZATION_SUCCESS_FILE="${RELOCALIZATION_DIR}/relocalization_success.txt"
+NAVIGATION_CONFIRM_FILE="${RELOCALIZATION_DIR}/navigation_confirm.txt"
+ROBOT_RUNTIME_DIR="$(dirname "${DATA_DIR}")"
+WAIT_SCRIPT="${ROBOT_RUNTIME_DIR}/wait_reloc_success_$$.py"
+
+rm -f \
+    "${RELOCALIZATION_EXIT_CODE_FILE}" \
+    "${RELOCALIZATION_SUCCESS_FILE}" \
+    "${NAVIGATION_CONFIRM_FILE}" \
+    "${WAIT_SCRIPT}"
 
 log_time() {
     date +%Y%m%d_%H%M%S
 }
 
-info "开始自主导航流程"
+info "开始重定位与自主导航流程"
 info "数据目录: ${DATA_DIR}"
 
 # ==================================================
@@ -54,13 +66,13 @@ info "数据目录: ${DATA_DIR}"
 # ==================================================
 declare -a PIDS=()
 
-# run_relocalization.sh 保留的后台节点 PID
+# 重定位阶段节点 PID
 LIVOX_PID=""
-FASTLIO_PID=""
 PCD2PGM_RELOC_PID=""
 LOCALIZATION_PID=""
+WAIT_PID=""
 
-# run_nav.sh 自己启动的节点 PID
+# 导航阶段节点 PID
 COSTMAP_PID=""
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
@@ -70,6 +82,15 @@ TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
 
 CLEANING=0
+
+write_relocalization_result() {
+    local exit_code="$1"
+    local success_flag="$2"
+
+    echo "${exit_code}" > "${RELOCALIZATION_EXIT_CODE_FILE}"
+    echo "${success_flag}" > "${RELOCALIZATION_SUCCESS_FILE}"
+    info "写入重定位结果: exit_code=${exit_code}, success=${success_flag}"
+}
 
 # ==================================================
 # 安全关闭进程组
@@ -112,6 +133,11 @@ cleanup() {
     trap - EXIT INT TERM
 
     info "退出自主导航流程，清理后台节点..."
+    rm -f "${WAIT_SCRIPT}" 2>/dev/null || true
+
+    if [ -n "${WAIT_PID}" ] && kill -0 "${WAIT_PID}" 2>/dev/null; then
+        kill -SIGTERM "${WAIT_PID}" 2>/dev/null || true
+    fi
 
     for pid in "${PIDS[@]}"; do
         kill_process_group_safe "${pid}" "navigation 后台节点"
@@ -153,68 +179,112 @@ start_bg() {
 }
 
 # ==================================================
-# 读取 run_relocalization.sh 保留的 PID
-# add_existing_pid_from_file PID变量名 节点名 PID文件 required/optional
+# 重定位阶段
 # ==================================================
-add_existing_pid_from_file() {
-    local pid_var="$1"
-    local name="$2"
-    local pid_file="$3"
-    local required="$4"
+info "启动重定位依赖节点..."
 
-    if [ ! -f "${pid_file}" ]; then
-        if [ "${required}" = "required" ]; then
-            err "找不到 ${name} PID 文件: ${pid_file}"
-            err "请先通过 GUI 完成重定位，再启动导航"
-            exit 1
-        fi
-        return
+start_bg LIVOX_PID "livox_ros_driver2" "/dev/null" 4 \
+    ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+
+start_bg PCD2PGM_RELOC_PID "pcd2pgm" "/dev/null" 2 \
+    ros2 launch pcd2pgm pcd2pgm_launch.py pgm_use_rviz:=false
+
+# 在 localization 启动前先订阅，避免错过 /reloc_success=true。
+cat > "${WAIT_SCRIPT}" <<'PY'
+#!/usr/bin/env python3
+import sys
+import time
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Bool
+
+
+class WaitRelocalizationSuccess(Node):
+    def __init__(self, timeout_sec):
+        super().__init__("wait_reloc_success")
+        self.timeout_sec = float(timeout_sec)
+        self.start_time = time.time()
+        self.success = False
+        self.sub = self.create_subscription(
+            Bool, "/reloc_success", self.callback, 10
+        )
+
+    def callback(self, msg):
+        if msg.data:
+            self.success = True
+
+    def timeout_reached(self):
+        return (time.time() - self.start_time) > self.timeout_sec
+
+
+def main():
+    timeout_sec = float(sys.argv[1]) if len(sys.argv) >= 2 else 180.0
+    rclpy.init()
+    node = WaitRelocalizationSuccess(timeout_sec)
+
+    try:
+        while rclpy.ok() and not node.success:
+            rclpy.spin_once(node, timeout_sec=0.2)
+            if node.timeout_reached():
+                break
+    except KeyboardInterrupt:
+        pass
+
+    success = node.success
+    node.destroy_node()
+    if rclpy.ok():
+        rclpy.shutdown()
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
+PY
+
+chmod +x "${WAIT_SCRIPT}"
+python3 "${WAIT_SCRIPT}" 180 > /dev/null 2>&1 &
+WAIT_PID=$!
+sleep 0.5
+
+start_bg LOCALIZATION_PID "fastlio_localization" \
+    "${RELOCALIZATION_DIR}/fastlio_localization_$(log_time).log" 0 \
+    ros2 launch fastlio_localization run_launch.py
+
+info "等待重定位成功，超时时间 180s..."
+if wait "${WAIT_PID}"; then
+    WAIT_PID=""
+    rm -f "${WAIT_SCRIPT}"
+    write_relocalization_result 0 1
+    info "重定位成功，等待 GUI 确认当前位置和朝向"
+else
+    WAIT_PID=""
+    rm -f "${WAIT_SCRIPT}"
+    write_relocalization_result 1 0
+    err "重定位失败或超时"
+    err "日志目录: ${RELOCALIZATION_DIR}"
+    exit 1
+fi
+
+# GUI 读取上面的结果后弹出人工确认框，再写入 navigation_confirm.txt。
+CONFIRM_TIMEOUT_SEC=300
+CONFIRM_WAITED_SEC=0
+while [ ! -f "${NAVIGATION_CONFIRM_FILE}" ]; do
+    sleep 1
+    CONFIRM_WAITED_SEC=$((CONFIRM_WAITED_SEC + 1))
+    if [ "${CONFIRM_WAITED_SEC}" -ge "${CONFIRM_TIMEOUT_SEC}" ]; then
+        err "等待 GUI 确认重定位结果超时"
+        exit 1
     fi
+done
 
-    local pid
-    pid="$(cat "${pid_file}")"
+CONFIRM_VALUE="$(tr -d '[:space:]' < "${NAVIGATION_CONFIRM_FILE}")"
+if [ "${CONFIRM_VALUE}" != "1" ]; then
+    warn "用户未确认重定位结果，取消启动导航"
+    exit 1
+fi
 
-    if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
-        if [ "${required}" = "required" ]; then
-            err "${name} 进程不存在或已退出: ${pid}"
-            err "请重新执行重定位"
-            exit 1
-        fi
-        return
-    fi
-
-    printf -v "${pid_var}" "%s" "${pid}"
-    PIDS+=("${pid}")
-    info "${name} 已运行"
-}
-
-# ==================================================
-# 检查重定位阶段保留的节点
-# localization_sc 必须存在；其他节点可选存在。
-# ==================================================
-add_existing_pid_from_file \
-    LIVOX_PID \
-    "livox_ros_driver2" \
-    "${RELOCALIZATION_DIR}/livox_ros_driver2.pid" \
-    "optional"
-
-add_existing_pid_from_file \
-    FASTLIO_PID \
-    "fast_lio" \
-    "${RELOCALIZATION_DIR}/fast_lio.pid" \
-    "optional"
-
-add_existing_pid_from_file \
-    PCD2PGM_RELOC_PID \
-    "pcd2pgm" \
-    "${RELOCALIZATION_DIR}/pcd2pgm.pid" \
-    "optional"
-
-add_existing_pid_from_file \
-    LOCALIZATION_PID \
-    "localization_sc" \
-    "${RELOCALIZATION_DIR}/localization_sc.pid" \
-    "required"
+info "用户已确认重定位结果，开始启动导航节点"
 
 # ==================================================
 # 启动导航节点
@@ -250,7 +320,7 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 
 # ==================================================
 # 导航保持运行：
-# run_nav.sh 只负责启动和清理导航后台节点。
+# run_nav.sh 统一负责重定位、人工确认后的导航启动和后台节点清理。
 # 任务选择、急停、回家、停止/继续任务统一在 navigation_workflow_gui.py 内操作。
 # ==================================================
 info "导航后台节点已启动"

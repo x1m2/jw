@@ -1,6 +1,7 @@
 #!/bin/bash
 # kill_robot_ros2_nodes.sh
-# 用于停止 run_slam.sh / run_edit_map.sh / run_relocalization.sh / run_nav.sh 启动的 ROS2 节点和相关 Python 脚本
+# 用于停止 run_slam.sh / run_rviz_topology_editor.sh / run_nav.sh
+# 启动的 ROS2 节点和相关 Python 脚本
 
 set +e
 
@@ -13,7 +14,7 @@ LOG_ROOT_BASE="${DATA_DIR}/log"
 
 SELF_PID="$$"
 
-# 是否杀 RViz。默认杀，因为 topology_tool.launch.py 通常会启动 RViz。
+# 是否杀 RViz。地图打点和导航可视化流程会启动 RViz，默认清理。
 KILL_RVIZ=${KILL_RVIZ:-1}
 
 # 是否杀导航控制 GUI。默认不杀，避免把当前主 GUI 也关掉。
@@ -127,15 +128,14 @@ kill_known_launches() {
     kill_by_pattern "ros2 launch pgo_sc run.launch.py" "pgo_sc launch"
     kill_by_pattern "ros2 launch topology_map_generator topology_map_generator.launch.py" "topology_map_generator launch"
 
-    # run_edit_map.sh
-    kill_by_pattern "ros2 launch topology_rviz_plugin topology_connect.launch.py" "topology_connect launch"
-    kill_by_pattern "ros2 launch topology_rviz_plugin topology_tool.launch.py" "topology_tool launch"
+    # run_rviz_topology_editor.sh
+    kill_by_pattern "ros2 launch rviz_topology_editor rviz_topology_editor.launch.py" "rviz_topology_editor launch"
 
-    # run_relocalization.sh
+    # run_nav.sh 重定位阶段
     kill_by_pattern "ros2 launch pcd2pgm pcd2pgm_launch.py" "pcd2pgm launch"
-    kill_by_pattern "ros2 launch localization_sc run.launch.py" "localization_sc launch"
+    kill_by_pattern "ros2 launch fastlio_localization run_launch.py" "fastlio_localization launch"
 
-    # run_nav.sh
+    # run_nav.sh 导航阶段
     kill_by_pattern "ros2 launch costmap_2d costmap_2d.launch.py" "costmap_2d launch"
     kill_by_pattern "ros2 launch global_path_planner global_path_planner.launch.py" "global_path_planner launch"
     kill_by_pattern "ros2 launch path_smoother path_smoother.launch.py" "path_smoother launch"
@@ -169,9 +169,9 @@ kill_node_executables() {
     kill_by_pattern "imu_filter_madgwick_node" "imu_filter_madgwick_node executable"
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"
-    kill_by_pattern "topology_connect" "topology_connect executable"
+    kill_by_pattern "rviz_topology_editor_node" "rviz_topology_editor executable"
     kill_by_pattern "pcd2pgm" "pcd2pgm executable"
-    kill_by_pattern "localization_sc" "localization_sc executable"
+    kill_by_pattern "fastlio_localization_ros2" "fastlio_localization executable"
     kill_by_pattern "costmap_2d" "costmap_2d executable"
     kill_by_pattern "global_path_planner" "global_path_planner executable"
     kill_by_pattern "path_smoother" "path_smoother executable"

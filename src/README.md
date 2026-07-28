@@ -121,7 +121,7 @@ ros2 launch global_path_planner global_path_planner.launch.py
 
 ### 6. 拓扑地图生成
 
-`navigation/global_planner/topology_map_generator` 用于手动记录拓扑点。
+`test/topology_map_generator` 是已停用的建图中手动拓扑打点功能包。
 
 工作方式：
 
@@ -291,14 +291,14 @@ colcon build --packages-select quatro --cmake-args -DCMAKE_BUILD_TYPE=Release -D
 
 ```bash
 colcon build --symlink-install --parallel-workers 2 \
-  --packages-skip quatro fast_lio pgo_sc localization_sc \
+  --packages-skip quatro fast_lio pgo_sc  fastlio_localization localization_sc \
   --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
     -DHUMBLE_ROS=humble
 
 colcon build --symlink-install --parallel-workers 1 \
-  --packages-select fast_lio localization_sc pgo_sc \
+  --packages-select fast_lio fastlio_localization pgo_sc \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 source install/setup.bash
@@ -338,7 +338,7 @@ pure_pursuit_local_planner / costmap_2d / 避障模块
 ```
 
 ## PCD
-LIBGL_ALWAYS_SOFTWARE=1 pcl_viewer result.pcd --no-vbo
+LIBGL_ALWAYS_SOFTWARE=1 pcl_viewer globalmap.pcd --no-vbo
 
 ## 手动保存地图：
 ros2 service call /map_save std_srvs/srv/Trigger
