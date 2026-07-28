@@ -146,6 +146,11 @@ private:
     declare_parameter<double>("z_percentile", 0.1);
     declare_parameter<double>("z_min", -2.0);
     declare_parameter<double>("z_max", 3.5);
+    declare_parameter<double>("marker_arrow_length", 2.0);
+    declare_parameter<double>("marker_arrow_width", 0.4);
+    declare_parameter<double>("marker_text_scale", 1.0);
+    declare_parameter<double>("marker_text_height_offset", 1.2);
+    declare_parameter<double>("edge_width", 0.15);
     declare_parameter<bool>("auto_save_raw_points", false);
     declare_parameter<int64_t>("task_wait_sec", 0);
     declare_parameter<int64_t>("task_publish_data", 1);
@@ -171,6 +176,13 @@ private:
     z_percentile_ = get_parameter("z_percentile").as_double();
     z_min_ = get_parameter("z_min").as_double();
     z_max_ = get_parameter("z_max").as_double();
+    marker_arrow_length_ =
+        get_parameter("marker_arrow_length").as_double();
+    marker_arrow_width_ = get_parameter("marker_arrow_width").as_double();
+    marker_text_scale_ = get_parameter("marker_text_scale").as_double();
+    marker_text_height_offset_ =
+        get_parameter("marker_text_height_offset").as_double();
+    edge_width_ = get_parameter("edge_width").as_double();
     auto_save_raw_points_ = get_parameter("auto_save_raw_points").as_bool();
     task_wait_sec_ = get_parameter("task_wait_sec").as_int();
     task_publish_data_ = get_parameter("task_publish_data").as_int();
@@ -194,6 +206,13 @@ private:
     }
     if (z_min_ > z_max_) {
       throw std::invalid_argument("z_min must not be greater than z_max");
+    }
+    if (marker_arrow_length_ <= 0.0 || marker_arrow_width_ <= 0.0 ||
+        marker_text_scale_ <= 0.0 || marker_text_height_offset_ < 0.0 ||
+        edge_width_ <= 0.0) {
+      throw std::invalid_argument(
+          "marker sizes and edge_width must be positive; "
+          "marker_text_height_offset must be non-negative");
     }
   }
 
@@ -481,7 +500,7 @@ private:
       edges.type = visualization_msgs::msg::Marker::LINE_LIST;
       edges.action = visualization_msgs::msg::Marker::ADD;
       edges.pose.orientation.w = 1.0;
-      edges.scale.x = 0.08;
+      edges.scale.x = edge_width_;
       edges.color.r = 0.0F;
       edges.color.g = 0.7F;
       edges.color.b = 1.0F;
@@ -519,9 +538,9 @@ private:
       arrow.pose.orientation.y = point.qy;
       arrow.pose.orientation.z = point.qz;
       arrow.pose.orientation.w = point.qw;
-      arrow.scale.x = 0.8;
-      arrow.scale.y = 0.15;
-      arrow.scale.z = 0.15;
+      arrow.scale.x = marker_arrow_length_;
+      arrow.scale.y = marker_arrow_width_;
+      arrow.scale.z = marker_arrow_width_;
       arrow.color.r = 0.1F;
       arrow.color.g = 0.9F;
       arrow.color.b = 0.2F;
@@ -532,14 +551,14 @@ private:
       label.ns = "rviz_topology_point_labels";
       label.id = point.id * 2 + 1;
       label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-      label.pose.position.z += 0.4;
+      label.pose.position.z += marker_text_height_offset_;
       label.pose.orientation.x = 0.0;
       label.pose.orientation.y = 0.0;
       label.pose.orientation.z = 0.0;
       label.pose.orientation.w = 1.0;
       label.scale.x = 0.0;
       label.scale.y = 0.0;
-      label.scale.z = 0.3;
+      label.scale.z = marker_text_scale_;
       label.color.r = 1.0F;
       label.color.g = 0.0F;
       label.color.b = 0.0F;
@@ -641,6 +660,11 @@ private:
   double z_percentile_{0.1};
   double z_min_{-2.0};
   double z_max_{3.5};
+  double marker_arrow_length_{2.0};
+  double marker_arrow_width_{0.4};
+  double marker_text_scale_{1.0};
+  double marker_text_height_offset_{1.2};
+  double edge_width_{0.15};
   int64_t task_wait_sec_{0};
   int64_t task_publish_data_{1};
 

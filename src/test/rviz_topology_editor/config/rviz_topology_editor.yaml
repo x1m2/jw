@@ -31,6 +31,13 @@
     z_min: -2.0
     z_max: 3.5
 
+    # 大地图中拓扑点、ID文字和连线的显示尺寸，单位均为米。
+    marker_arrow_length: 2.0       # 箭头的长度
+    marker_arrow_width: 0.4        # 箭头杆和箭头头部的宽度
+    marker_text_scale: 1.0         # ID文字大小
+    marker_text_height_offset: 1.2 # ID文字相对拓扑点向上的偏移，避免与箭头重叠
+    edge_width: 0.15               # 保存后显示的相邻拓扑点连线宽度
+
     # false：点击只进入编辑列表，点击RViz“保存并生成”后统一落盘。
     # true：每次点击额外保存原始点文件；连边和任务文件仍由保存按钮生成。
     auto_save_raw_points: false
