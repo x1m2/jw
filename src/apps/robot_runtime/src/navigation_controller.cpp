@@ -15,35 +15,33 @@ NavigationController::NavigationController(
                              callback_group),
       path_smoother_worker_(node, "/path_smoother_worker/set_state",
                             callback_group),
-      target_visualizer_worker_(
-          node, "/target_points_visualizer_worker/set_state", callback_group),
-      navigation_task_worker_(node, "/navigation_task_worker/set_state",
-                              callback_group),
       pure_pursuit_worker_(node, "/pure_pursuit_worker/set_state",
                            callback_group),
       // 纯跟踪最后启动，避免依赖模块未就绪时提前输出速度。
       start_order_{&dual_radar_worker_, &costmap_worker_,
                    &global_planner_worker_, &path_smoother_worker_,
-                   &target_visualizer_worker_, &navigation_task_worker_,
                    &pure_pursuit_worker_},
       // 停止时优先关闭运动控制，确保机器人先停下来。
-      stop_order_{&pure_pursuit_worker_, &navigation_task_worker_,
-                  &path_smoother_worker_, &global_planner_worker_,
-                  &costmap_worker_, &dual_radar_worker_,
-                  &target_visualizer_worker_} {
+      stop_order_{&pure_pursuit_worker_, &path_smoother_worker_,
+                  &global_planner_worker_,
+                  &costmap_worker_, &dual_radar_worker_} {
   pause_client_ = node->create_client<std_srvs::srv::SetBool>(
       "/pure_pursuit/set_paused", rmw_qos_profile_services_default,
       callback_group);
 }
 
 void NavigationController::start(uint64_t session_id,
+                                 const std::string &topology_file,
+                                 const std::string &map_directory,
                                  Completion completion) {
   // 从启动顺序的第一个 Worker 开始异步串行启动。
-  startNext(session_id, 0U, std::make_shared<WorkerList>(),
-            std::move(completion));
+  startNext(session_id, 0U, topology_file, map_directory,
+            std::make_shared<WorkerList>(), std::move(completion));
 }
 
 void NavigationController::startNext(uint64_t session_id, std::size_t index,
+                                     const std::string &topology_file,
+                                     const std::string &map_directory,
                                      std::shared_ptr<WorkerList> started,
                                      Completion completion) {
   if (index == start_order_.size()) {
@@ -52,9 +50,9 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
   }
 
   WorkerClient *worker = start_order_[index];
-  worker->start(
-      session_id,
+  auto worker_completion =
       [this, session_id, index, worker, started,
+       topology_file, map_directory,
        completion = std::move(completion)](
           bool success, const std::string &message) mutable {
         if (!success) {
@@ -65,8 +63,17 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
           return;
         }
         started->push_back(worker);
-        startNext(session_id, index + 1U, started, std::move(completion));
-      });
+        startNext(session_id, index + 1U, topology_file, map_directory,
+                  started, std::move(completion));
+      };
+
+  // 全局规划器按当前map_id动态加载task拓扑和map可行域点云。
+  if (worker == &global_planner_worker_) {
+    worker->start(session_id, topology_file, map_directory,
+                  std::move(worker_completion));
+  } else {
+    worker->start(session_id, std::move(worker_completion));
+  }
 }
 
 void NavigationController::rollbackStart(uint64_t session_id,

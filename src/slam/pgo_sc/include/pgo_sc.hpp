@@ -30,6 +30,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/serialized_message.hpp>
+#include <robot_interfaces/msg/map_keyframe.hpp>
 #include <rosbag2_cpp/converter_options.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_storage/storage_options.hpp>
@@ -132,6 +133,8 @@ class PgoSc : public rclcpp::Node {
       debug_coarse_aligned_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       debug_fine_aligned_pub_;
+  rclcpp::Publisher<robot_interfaces::msg::MapKeyframe>::SharedPtr
+      keyframe_cloud_pub_;
   ///// ROS2 Subscribers
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_save_flag_;
   rclcpp::TimerBase::SharedPtr loop_timer_;
@@ -158,6 +161,7 @@ class PgoSc : public rclcpp::Node {
       const gtsam::Values &corrected_esti_in);
   void optimizeGraph(bool is_loop);
   void segmentGroundForKeyframe(PosePcd &pose_pcd);
+  void publishKeyframe(const PosePcd &keyframe);
 
   // Callbacks
   void odomPcdCallback(

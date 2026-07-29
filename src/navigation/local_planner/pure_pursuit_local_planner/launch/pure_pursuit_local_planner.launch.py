@@ -12,6 +12,7 @@ def generate_launch_description():
     config_file = LaunchConfiguration('config_file')
     rviz_config = LaunchConfiguration('rviz_config')
     launch_rviz = LaunchConfiguration('launch_rviz')
+    runtime_profile = LaunchConfiguration('runtime_profile')
 
     return LaunchDescription([
 
@@ -40,12 +41,17 @@ def generate_launch_description():
             default_value='false',
             description='Whether to launch RViz2'
         ),
+        DeclareLaunchArgument(
+            'runtime_profile',
+            default_value='test',
+            description='test autostarts; platform waits for robot_runtime'
+        ),
 
         Node(
             package='pure_pursuit_local_planner',
             executable='pure_pursuit_local_planner_node',
             output='screen',
-            parameters=[config_file, {'runtime_profile': 'test'}],
+            parameters=[config_file, {'runtime_profile': runtime_profile}],
             remappings=[
                 ('/global_path', '/smoothed_global_path'),
                 ('/local_costmap', '/local_costmap/costmap'),

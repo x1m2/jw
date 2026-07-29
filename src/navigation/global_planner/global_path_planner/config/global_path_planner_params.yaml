@@ -2,7 +2,7 @@
   ros__parameters:
     # 基本参数 
     # 实时定位位姿话题，类型：geometry_msgs/msg/PoseStamped
-    topology_map_file: "/robotfs/data/slam_data/topology_map/connected_topology_map.txt"
+    topology_map_file: "/robotfs/data/slam_data/map_0/topology_map/connected_topology_map.txt"
     global_frame: "map"
     pose_topic: "/pose_stamped_localization"
     # 路径规划参数
@@ -25,7 +25,7 @@
     edge_sample_count: 100
     safety_sphere_radius: 0.3
     valid_point_threshold: 0.9
-    free_space_pcd_file: "/robotfs/data/slam_data/map/result_free_space.pcd"
+    free_space_pcd_file: "/robotfs/data/slam_data/map_0/map/result_free_space.pcd"
 
     # 是否对临时连接做可行域点云合法性检查。
     # true：会使用 free_space_pcd_file 加载的可行域 PCD 检查边是否可走；

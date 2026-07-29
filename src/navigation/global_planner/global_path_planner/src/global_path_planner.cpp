@@ -11,14 +11,15 @@
 
 namespace global_path_planner {
 
-GlobalPathPlanner::GlobalPathPlanner()
-    : rclcpp::Node("global_path_planner_node"),
+GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions& options)
+    : rclcpp::Node("global_path_planner_node", options),
+      has_free_space_cloud_(false),
       has_current_pose_(false),
-      has_goal_(false),
-      has_free_space_cloud_(false) {
+      has_goal_(false) {
   // 声明并读取 ROS2 参数
   this->declare_parameter<std::string>(
-      "topology_map_file", "/root/slam_data/topology_map/generated_map.txt");
+      "topology_map_file",
+      "/robotfs/data/slam_data/map_0/topology_map/connected_topology_map.txt");
   this->declare_parameter<std::string>("global_frame", "map");
   this->declare_parameter<std::string>("robot_frame", "base_link");
   this->declare_parameter<std::string>("pose_topic",
@@ -40,7 +41,8 @@ GlobalPathPlanner::GlobalPathPlanner()
   this->declare_parameter<double>("safety_sphere_radius", 0.3);
   this->declare_parameter<double>("valid_point_threshold", 0.9);
   this->declare_parameter<std::string>(
-      "free_space_pcd_file", "/root/slam_data/map/result_free_space.pcd");
+      "free_space_pcd_file",
+      "/robotfs/data/slam_data/map_0/map/result_free_space.pcd");
   this->declare_parameter<bool>("enable_temp_connection_feasibility_check",
                                 false);
 
@@ -495,7 +497,7 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
 }
 
 void GlobalPathPlanner::addTemporaryConnections(
-    std::vector<TopologyNode> &temp_nodes,
+    std::vector<TopologyNode> & /*temp_nodes*/,
     std::vector<TopologyEdge> &temp_edges, int temp_node_id,
     const geometry_msgs::msg::Point &position) {
   // 创建临时节点用于边合法性检查
@@ -664,7 +666,7 @@ void GlobalPathPlanner::addTemporaryConnections(
 }
 
 void GlobalPathPlanner::addGoalTemporaryConnection(
-    std::vector<TopologyNode> &temp_nodes,
+    std::vector<TopologyNode> & /*temp_nodes*/,
     std::vector<TopologyEdge> &temp_edges, int goal_node_id,
     const geometry_msgs::msg::Point &goal_position) {
   RCLCPP_INFO(this->get_logger(),

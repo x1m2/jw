@@ -10,7 +10,11 @@ from launch.actions import (
     SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 
 
 def generate_launch_description():
@@ -52,6 +56,16 @@ def generate_launch_description():
         description="SLAM data root directory",
     )
 
+    declare_map_id_cmd = DeclareLaunchArgument(
+        "map_id",
+        default_value="0",
+        description="Map ID; defaults to map_0",
+    )
+
+    map_directory = PythonExpression([
+        "'map_' + '", LaunchConfiguration("map_id"), "'"
+    ])
+
     start_pcd2pgm_cmd = Node(
         package="pcd2pgm",
         executable="pcd2pgm_node",
@@ -61,6 +75,7 @@ def generate_launch_description():
             {
                 "pcd_file": PathJoinSubstitution([
                     LaunchConfiguration("data_dir"),
+                    map_directory,
                     "map",
                     "globalmap.pcd",
                 ]),
@@ -89,6 +104,7 @@ def generate_launch_description():
     ld.add_action(declare_rviz_config_file_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_data_dir_cmd)
+    ld.add_action(declare_map_id_cmd)
 
     ld.add_action(start_pcd2pgm_cmd)
     ld.add_action(start_rviz_cmd)

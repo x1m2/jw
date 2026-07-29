@@ -1,9 +1,7 @@
 #include "robot_runtime/robot_runtime_node.hpp"
 
-#include <cctype>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <future>
 #include <stdexcept>
@@ -12,54 +10,57 @@
 namespace robot_runtime {
 
 RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
-  map_root_ = declare_parameter<std::string>(
-      "map_storage.root_directory", "/robotfs/data/slam_data/map");
+  const auto map_root = declare_parameter<std::string>(
+      "map_storage.root_directory", "/robotfs/data/slam_data");
   const auto configured_max_maps =
       declare_parameter<int64_t>("map_storage.max_maps", 5);
+  if (configured_max_maps <= 0) {
+    throw std::invalid_argument(
+        "map_storage.max_maps must be greater than zero");
+  }
+  start_mapping_timeout_sec_ = declare_parameter<double>(
+      "map_storage.start_mapping_timeout_sec", 30.0);
   finish_mapping_timeout_sec_ = declare_parameter<double>(
       "map_storage.finish_mapping_timeout_sec", 300.0);
   relocalization_timeout_sec_ = declare_parameter<double>(
       "localization.relocalization_timeout_sec", 60.0);
   localization_stop_timeout_sec_ = declare_parameter<double>(
       "localization.stop_timeout_sec", 10.0);
-  navigation_control_timeout_sec_ = declare_parameter<double>(
+  const auto bbs_saver_executable = declare_parameter<std::string>(
+      "localization.bbs.saver_executable",
+      "/home/jw-zkl/robotics_platform/3rdparty/3d_bbs/test/build/saver");
+  const auto bbs_min_level_resolution = declare_parameter<double>(
+      "localization.bbs.min_level_resolution", 0.5);
+  const auto bbs_max_level =
+      declare_parameter<int64_t>("localization.bbs.max_level", 6);
+  const auto bbs_generation_timeout_sec = declare_parameter<double>(
+      "localization.bbs.generation_timeout_sec", 120.0);
+  const auto navigation_control_timeout_sec = declare_parameter<double>(
       "navigation.control_timeout_sec", 3.0);
-  display_pcd_filename_ = declare_parameter<std::string>(
-      "map_display.pcd_filename", "globalmap.pcd");
-  const auto map_display_topic = declare_parameter<std::string>(
-      "map_display.topic", "/robot/map/point_cloud");
-  const auto map_display_frame =
-      declare_parameter<std::string>("map_display.frame_id", "map");
-  if (map_root_.empty() ||
-      !std::filesystem::path(map_root_).is_absolute()) {
+  const auto navigation_worker_timeout_sec = declare_parameter<double>(
+      "navigation.worker_timeout_sec", 30.0);
+  const auto navigation_goal_timeout_sec = declare_parameter<double>(
+      "navigation.goal_timeout_sec", 300.0);
+  if (start_mapping_timeout_sec_ <= 0.0 ||
+      finish_mapping_timeout_sec_ <= 0.0) {
     throw std::invalid_argument(
-        "map_storage.root_directory must be an absolute path");
-  }
-  if (configured_max_maps <= 0) {
-    throw std::invalid_argument(
-        "map_storage.max_maps must be greater than zero");
-  }
-  if (finish_mapping_timeout_sec_ <= 0.0) {
-    throw std::invalid_argument(
-        "map_storage.finish_mapping_timeout_sec must be greater than zero");
+        "map_storage mapping timeouts must be greater than zero");
   }
   if (relocalization_timeout_sec_ <= 0.0 ||
       localization_stop_timeout_sec_ <= 0.0 ||
-      navigation_control_timeout_sec_ <= 0.0) {
+      navigation_control_timeout_sec <= 0.0 ||
+      navigation_worker_timeout_sec <= 0.0 ||
+      navigation_goal_timeout_sec <= 0.0) {
     throw std::invalid_argument(
         "localization and navigation timeout parameters must be greater than zero");
   }
-  if (display_pcd_filename_.empty() ||
-      std::filesystem::path(display_pcd_filename_).is_absolute() ||
-      display_pcd_filename_.find('/') != std::string::npos ||
-      map_display_topic.empty() || map_display_frame.empty()) {
-    throw std::invalid_argument(
-        "map_display parameters must contain a filename, topic and frame_id");
-  }
-  max_maps_ = static_cast<std::size_t>(configured_max_maps);
-
-  map_publisher_ = std::make_unique<MapPublisher>(
-      this, map_display_topic, map_display_frame);
+  map_storage_ = std::make_unique<MapStorage>(
+      map_root, static_cast<std::size_t>(configured_max_maps));
+  bbs_voxel_generator_ = std::make_unique<BbsVoxelGenerator>(
+      BbsVoxelGenerator::Config{bbs_saver_executable,
+                                bbs_min_level_resolution, bbs_max_level,
+                                bbs_generation_timeout_sec});
+  topology_file_writer_ = std::make_unique<TopologyFileWriter>();
 
   // 可重入回调组允许 Worker 的异步响应驱动下一步启停操作。
   worker_callback_group_ =
@@ -70,55 +71,88 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
   // start_localization会同步等待结果，结果订阅必须位于独立回调组。
   localization_result_callback_group_ =
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  navigation_result_callback_group_ =
+      create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   mapping_controller_ =
       std::make_unique<MappingController>(this, worker_callback_group_);
   localization_controller_ =
       std::make_unique<LocalizationController>(this, worker_callback_group_);
-  navigation_controller_ =
-      std::make_unique<NavigationController>(this, worker_callback_group_);
+  navigation_task_executor_ = std::make_unique<NavigationTaskExecutor>(
+      this, worker_callback_group_, &state_machine_,
+      topology_file_writer_.get(),
+      NavigationTaskExecutor::Config{navigation_control_timeout_sec,
+                                     navigation_worker_timeout_sec,
+                                     navigation_goal_timeout_sec},
+      NavigationTaskExecutor::Callbacks{
+          [this]() { publishMode(); },
+          [this](uint8_t state) { publishRuntimeState(state); },
+          [this](int32_t code, const std::string &message) {
+            enterError(code, message);
+          }});
 
-  // 使用 transient_local，使新订阅者可以立即获得最近一次模式。
-  mode_pub_ = create_publisher<std_msgs::msg::String>(
+  // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。
+  runtime_state_pub_ = create_publisher<RuntimeState>(
       "/robot/runtime_state",
       rclcpp::QoS(1).reliable().transient_local());
+  keyframe_cloud_pub_ = create_publisher<MapKeyframe>(
+      "/robot/keyframe_cloud", rclcpp::QoS(100).reliable());
+  current_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/robot/current_pose", rclcpp::QoS(20).reliable());
+  body_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/robot/cloud_body", rclcpp::QoS(20).best_effort());
 
-  // 对上层统一暴露机器人级控制服务，隐藏内部 Worker 编排细节。
+  // 算法内部Topic不直接暴露给APP，由Runtime转换为统一的 /robot/* Topic。
+  keyframe_cloud_sub_ = create_subscription<MapKeyframe>(
+      "/pgo/keyframe_cloud", rclcpp::QoS(100).reliable(),
+      std::bind(&RobotRuntimeNode::keyframeCloudCallback, this,
+                std::placeholders::_1));
+  mapping_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/pose_stamped", rclcpp::QoS(20).reliable(),
+      std::bind(&RobotRuntimeNode::currentPoseCallback, this,
+                std::placeholders::_1));
+  localization_pose_sub_ =
+      create_subscription<geometry_msgs::msg::PoseStamped>(
+          "/pose_stamped_localization", rclcpp::QoS(20).reliable(),
+          std::bind(&RobotRuntimeNode::currentPoseCallback, this,
+                    std::placeholders::_1));
+  body_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/cloud_registered_body", rclcpp::QoS(20).best_effort(),
+      std::bind(&RobotRuntimeNode::bodyCloudCallback, this,
+                std::placeholders::_1));
+
+  initial_pose_pub_ =
+      create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+          "/initialpose", rclcpp::QoS(1).reliable());
+
+  // 协议2.1～2.5、2.7～2.9：只创建协议中定义的APP Service。
   start_mapping_service_ = create_service<StartMapping>(
       "/robot/start_mapping",
       std::bind(&RobotRuntimeNode::startMappingCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
-  stop_mapping_service_ = create_service<Trigger>(
-      "/robot/stop_mapping",
-      std::bind(&RobotRuntimeNode::stopMappingCallback, this,
-                std::placeholders::_1, std::placeholders::_2));
-  reset_error_service_ = create_service<Trigger>(
-      "/robot/reset_error",
-      std::bind(&RobotRuntimeNode::resetErrorCallback, this,
+  finish_mapping_service_ = create_service<Trigger>(
+      "/robot/finish_mapping",
+      std::bind(&RobotRuntimeNode::finishMappingCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
   load_map_service_ = create_service<LoadMap>(
       "/robot/load_map",
       std::bind(&RobotRuntimeNode::loadMapCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
-  start_localization_service_ = create_service<Trigger>(
+  delete_map_service_ = create_service<DeleteMap>(
+      "/robot/delete_map",
+      std::bind(&RobotRuntimeNode::deleteMapCallback, this,
+                std::placeholders::_1, std::placeholders::_2));
+  start_localization_service_ = create_service<StartLocalization>(
       "/robot/start_localization",
       std::bind(&RobotRuntimeNode::startLocalizationCallback, this,
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default,
       localization_control_callback_group_);
-  stop_localization_service_ = create_service<Trigger>(
-      "/robot/stop_localization",
-      std::bind(&RobotRuntimeNode::stopLocalizationCallback, this,
+  navigate_to_pose_service_ = create_service<NavigateToPose>(
+      "/robot/navigate_to_pose",
+      std::bind(&RobotRuntimeNode::navigateToPoseCallback, this,
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default,
-      localization_control_callback_group_);
-  start_navigation_service_ = create_service<Trigger>(
-      "/robot/start_navigation",
-      std::bind(&RobotRuntimeNode::startNavigationCallback, this,
-                std::placeholders::_1, std::placeholders::_2));
-  stop_navigation_service_ = create_service<Trigger>(
-      "/robot/stop_navigation",
-      std::bind(&RobotRuntimeNode::stopNavigationCallback, this,
-                std::placeholders::_1, std::placeholders::_2));
+      navigation_result_callback_group_);
   pause_navigation_service_ = create_service<Trigger>(
       "/robot/pause_navigation",
       std::bind(&RobotRuntimeNode::pauseNavigationCallback, this,
@@ -127,6 +161,16 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
       "/robot/resume_navigation",
       std::bind(&RobotRuntimeNode::resumeNavigationCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
+
+  // 协议2.6：巡检导航使用Action，支持逐点反馈、最终结果和任务取消。
+  start_navigation_action_ = rclcpp_action::create_server<StartNavigation>(
+      this, "/robot/start_navigation",
+      std::bind(&RobotRuntimeNode::handleNavigationGoal, this,
+                std::placeholders::_1, std::placeholders::_2),
+      std::bind(&RobotRuntimeNode::handleNavigationCancel, this,
+                std::placeholders::_1),
+      std::bind(&RobotRuntimeNode::handleNavigationAccepted, this,
+                std::placeholders::_1));
 
   // fastlio_localization 重定位成功后自动将运行模式切换为 ready。
   rclcpp::SubscriptionOptions reloc_subscription_options;
@@ -137,31 +181,33 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
       std::bind(&RobotRuntimeNode::relocalizationResultCallback, this,
                 std::placeholders::_1),
       reloc_subscription_options);
-
-  // 删除结果必须明确返回APP，因此使用请求/响应Service。
-  delete_map_service_ = create_service<DeleteMap>(
-      "/robot/delete_map",
-      std::bind(&RobotRuntimeNode::deleteMapCallback, this,
-                std::placeholders::_1, std::placeholders::_2));
+  rclcpp::SubscriptionOptions navigation_subscription_options;
+  navigation_subscription_options.callback_group =
+      navigation_result_callback_group_;
+  navigation_state_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/nav_state", rclcpp::QoS(10).reliable(),
+      std::bind(&RobotRuntimeNode::navigationStateCallback, this,
+                std::placeholders::_1),
+      navigation_subscription_options);
 
   state_machine_.initialize();
   publishMode();
   RCLCPP_INFO(get_logger(), "Robot runtime ready");
 }
 
+RobotRuntimeNode::~RobotRuntimeNode() = default;
+
 void RobotRuntimeNode::startMappingCallback(
     const StartMapping::Request::SharedPtr request,
     StartMapping::Response::SharedPtr response) {
-  std::string validation_message;
-  if (!validateMapId(request->map_id, validation_message)) {
-    response->success = false;
-    response->message = validation_message;
-    return;
-  }
+  // 协议2.1：APP只提供map_id；Runtime负责目录、会话和算法启动顺序。
+  const std::string map_id = std::to_string(request->map_id);
 
   std::error_code exists_error;
-  const auto final_map_path = mapPath(request->map_id);
-  const bool map_exists = std::filesystem::exists(final_map_path, exists_error);
+  const auto final_data_path = map_storage_->dataPath(map_id);
+  const auto final_map_path = map_storage_->mapPath(map_id);
+  const bool map_exists =
+      std::filesystem::exists(final_data_path, exists_error);
   if (exists_error) {
     response->success = false;
     response->message = "failed to inspect map directory: " +
@@ -180,16 +226,16 @@ void RobotRuntimeNode::startMappingCallback(
   if (!complete_map_exists) {
     std::size_t saved_map_count = 0U;
     std::string count_message;
-    if (!countSavedMaps(saved_map_count, count_message)) {
+    if (!map_storage_->countSavedMaps(saved_map_count, count_message)) {
       response->success = false;
       response->message = count_message;
       return;
     }
-    if (saved_map_count >= max_maps_) {
+    if (saved_map_count >= map_storage_->maxMaps()) {
       response->success = false;
       response->message = "map limit reached: " +
                           std::to_string(saved_map_count) + "/" +
-                          std::to_string(max_maps_);
+                          std::to_string(map_storage_->maxMaps());
       return;
     }
   }
@@ -206,70 +252,80 @@ void RobotRuntimeNode::startMappingCallback(
   // 同名地图复用统一删除逻辑，旧目录在新建图开始前整体移除。
   if (map_exists) {
     std::string delete_message;
-    if (!deleteMapDirectory(request->map_id, delete_message)) {
-      state_machine_.enterError();
+    if (!map_storage_->deleteMap(map_id, delete_message)) {
       response->success = false;
       response->message =
           "failed to replace existing map: " + delete_message;
-      publishMode();
+      enterError(RuntimeState::MAP_ERROR, response->message);
       return;
     }
     RCLCPP_INFO(get_logger(), "%s", delete_message.c_str());
   }
 
-  // 建图期间由PGO发布实时地图，先清除之前加载的静态地图。
+  // 开始新建图后，之前由load_map记录的地图选择失效。
   if (!selected_map_id_.empty()) {
     selected_map_id_.clear();
-    selected_map_path_.clear();
-    map_publisher_->clear();
   }
 
   // 每次新任务使用新的会话编号，避免混用旧任务命令。
   ++session_id_;
   const uint64_t session_id = session_id_;
-  active_map_id_ = request->map_id;
+  active_map_id_ = map_id;
   active_map_staging_path_ =
-      std::filesystem::path(map_root_) / ".staging" /
-      (active_map_id_ + "_" + std::to_string(session_id));
+      map_storage_->stagingPath(active_map_id_, session_id);
 
   std::error_code create_error;
   std::filesystem::create_directories(active_map_staging_path_, create_error);
   if (create_error) {
-    state_machine_.enterError();
     response->success = false;
     response->message = "failed to create map staging directory: " +
                         create_error.message();
-    publishMode();
+    enterError(RuntimeState::MAP_ERROR, response->message);
     return;
   }
   publishMode();
 
+  using StartResult = std::pair<bool, std::string>;
+  auto completion = std::make_shared<std::promise<StartResult>>();
+  auto future = completion->get_future();
+  // PGO先启动并接收暂存目录，随后启动FAST-LIO；两者节点级Ready后才响应APP。
   mapping_controller_->start(
       session_id, active_map_id_, active_map_staging_path_.string(),
-      [this](bool success, const std::string &message) {
-        if (success) {
-          state_machine_.mappingStarted();
-          RCLCPP_INFO(get_logger(), "%s", message.c_str());
-        } else {
-          std::error_code cleanup_error;
-          std::filesystem::remove_all(active_map_staging_path_, cleanup_error);
-          state_machine_.enterError();
-          RCLCPP_ERROR(get_logger(), "%s", message.c_str());
-        }
-        publishMode();
+      [completion](bool success, const std::string &message) {
+        completion->set_value({success, message});
       });
 
+  if (future.wait_for(std::chrono::duration<double>(
+          start_mapping_timeout_sec_)) != std::future_status::ready) {
+    response->success = false;
+    response->message = "start mapping timed out, map_id=" + active_map_id_;
+    enterError(RuntimeState::SLAM_ERROR, response->message);
+    return;
+  }
+  const auto [started, start_message] = future.get();
+  if (!started) {
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(active_map_staging_path_, cleanup_error);
+    response->success = false;
+    response->message = start_message;
+    enterError(RuntimeState::SLAM_ERROR, response->message);
+    return;
+  }
+
+  state_machine_.mappingStarted();
+  publishMode();
   response->success = true;
-  response->message = "start mapping accepted, map_id=" + active_map_id_;
+  response->message = "mapping started, map_id=" + active_map_id_;
 }
 
-void RobotRuntimeNode::stopMappingCallback(
+void RobotRuntimeNode::finishMappingCallback(
     const Trigger::Request::SharedPtr,
     Trigger::Response::SharedPtr response) {
+  // 协议2.2：停止数据生产、触发PGO保存并发布正式地图目录。
   if (!state_machine_.beginStopMapping()) {
     response->success = false;
     response->message =
-        "stop mapping rejected, current state=" +
+        "finish mapping rejected, current state=" +
         std::string(toString(state_machine_.mode()));
     return;
   }
@@ -288,33 +344,34 @@ void RobotRuntimeNode::stopMappingCallback(
   const auto timeout = std::chrono::duration<double>(
       finish_mapping_timeout_sec_);
   if (future.wait_for(timeout) != std::future_status::ready) {
-    state_machine_.enterError();
-    publishMode();
     response->success = false;
     response->message = "finish mapping timed out, map_id=" + active_map_id_;
+    enterError(RuntimeState::SLAM_ERROR, response->message);
     RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
     return;
   }
 
   const auto [workers_stopped, stop_message] = future.get();
   if (!workers_stopped) {
-    state_machine_.enterError();
-    publishMode();
     response->success = false;
     response->message = "finish mapping failed: " + stop_message;
+    enterError(RuntimeState::SLAM_ERROR, response->message);
     RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
     return;
   }
 
+  // Worker全部停止后，检查globalmap.pcd并将暂存目录原子发布为正式地图。
   std::string finalize_message;
-  if (!finalizeActiveMap(finalize_message)) {
-    state_machine_.enterError();
-    publishMode();
+  if (!map_storage_->finalize(active_map_staging_path_, active_map_id_,
+                              finalize_message)) {
     response->success = false;
     response->message = "map save failed: " + finalize_message;
+    enterError(RuntimeState::MAP_ERROR, response->message);
     RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
     return;
   }
+  active_map_id_.clear();
+  active_map_staging_path_.clear();
 
   state_machine_.mappingStopped();
   publishMode();
@@ -324,20 +381,10 @@ void RobotRuntimeNode::stopMappingCallback(
               finalize_message.c_str());
 }
 
-void RobotRuntimeNode::resetErrorCallback(
-    const Trigger::Request::SharedPtr,
-    Trigger::Response::SharedPtr response) {
-  response->success = state_machine_.resetError();
-  response->message = response->success
-                          ? "error state reset"
-                          : "reset rejected, current state=" +
-                                std::string(toString(state_machine_.mode()));
-  if (response->success) publishMode();
-}
-
 void RobotRuntimeNode::loadMapCallback(
     const LoadMap::Request::SharedPtr request,
     LoadMap::Response::SharedPtr response) {
+  // 协议2.4：load_map只检查并记录map_id，不加载PCD、不启动定位算法。
   if (state_machine_.mode() != RobotMode::kIdle) {
     response->success = false;
     response->message =
@@ -346,67 +393,67 @@ void RobotRuntimeNode::loadMapCallback(
     return;
   }
 
-  std::string validation_message;
-  if (!validateMapId(request->map_id, validation_message)) {
-    response->success = false;
-    response->message = validation_message;
-    return;
-  }
+  publishRuntimeState(RuntimeState::LOADING_MAP);
+  const std::string map_id = std::to_string(request->map_id);
 
-  const auto requested_map_path = mapPath(request->map_id);
-  std::error_code exists_error;
-  if (!std::filesystem::exists(requested_map_path / "globalmap.pcd",
-                               exists_error) ||
-      exists_error) {
+  const auto global_map_path = map_storage_->mapPath(map_id) / "globalmap.pcd";
+  std::error_code filesystem_error;
+  const bool map_file_exists =
+      std::filesystem::exists(global_map_path, filesystem_error);
+  if (filesystem_error || !map_file_exists) {
     response->success = false;
-    response->message = exists_error
-                            ? "failed to inspect map: " + exists_error.message()
+    response->message = filesystem_error
+                            ? "failed to inspect map: " +
+                                  filesystem_error.message()
                             : "map is incomplete or does not exist: " +
-                                  request->map_id;
+                                  map_id;
+    publishMode();
     return;
   }
 
-  const auto display_pcd_path =
-      requested_map_path / display_pcd_filename_;
-  std::error_code display_exists_error;
-  if (!std::filesystem::exists(display_pcd_path, display_exists_error) ||
-      display_exists_error) {
+  const bool is_regular_file =
+      std::filesystem::is_regular_file(global_map_path, filesystem_error);
+  if (filesystem_error || !is_regular_file) {
     response->success = false;
-    response->message =
-        display_exists_error
-            ? "failed to inspect display map: " +
-                  display_exists_error.message()
-            : "display map does not exist: " + display_pcd_path.string();
+    response->message = filesystem_error
+                            ? "failed to inspect map file: " +
+                                  filesystem_error.message()
+                            : "globalmap.pcd is not a regular file: " +
+                                  global_map_path.string();
+    publishMode();
     return;
   }
 
-  // 只有PCD读取和发布均成功，才更新当前选中的地图。
-  std::string publish_message;
-  if (!map_publisher_->loadAndPublish(display_pcd_path, publish_message)) {
-    response->success = false;
-    response->message = publish_message;
-    return;
+  // load_map只选择地图，不读取PCD、不发布点云，也不启动算法。
+  selected_map_id_ = map_id;
+  navigation_task_executor_->configureMap(
+      map_storage_->taskPath(map_id),
+      map_storage_->mapPath(map_id));
+  {
+    // 切换地图后旧地图位姿失效，等待新一轮定位输出map位姿。
+    std::lock_guard<std::mutex> lock(current_pose_mutex_);
+    current_pose_ = geometry_msgs::msg::PoseStamped();
+    has_current_pose_ = false;
   }
-
-  selected_map_id_ = request->map_id;
-  selected_map_path_ = requested_map_path;
   response->success = true;
-  response->message = "map loaded: " + selected_map_id_ + "; " +
-                      publish_message;
+  response->message = "map selected: " + selected_map_id_;
+  publishMode();
   RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
 void RobotRuntimeNode::startLocalizationCallback(
-    const Trigger::Request::SharedPtr,
-    Trigger::Response::SharedPtr response) {
-  if (selected_map_id_.empty() || selected_map_path_.empty()) {
+    const StartLocalization::Request::SharedPtr request,
+    StartLocalization::Response::SharedPtr response) {
+  // 协议2.5：使用最近一次load_map选中的地图启动重定位。
+  if (selected_map_id_.empty()) {
     response->success = false;
     response->message = "no map selected; call /robot/load_map first";
     return;
   }
 
+  const auto selected_map_path = map_storage_->mapPath(selected_map_id_);
   std::error_code exists_error;
-  if (!std::filesystem::exists(selected_map_path_ / "globalmap.pcd",
+  if (!std::filesystem::exists(selected_map_path / "globalmap.pcd",
                                exists_error) ||
       exists_error) {
     response->success = false;
@@ -418,8 +465,7 @@ void RobotRuntimeNode::startLocalizationCallback(
     return;
   }
 
-  // 只保护“进入状态、登记任务、发送START”这一小段；等待结果期间释放，
-  // 使stop_localization能够并发进入并取消本次重定位。
+  // 同一时间只允许一个重定位请求执行。
   std::unique_lock<std::mutex> command_lock(localization_command_mutex_);
   if (!state_machine_.beginLocalization()) {
     response->success = false;
@@ -429,6 +475,22 @@ void RobotRuntimeNode::startLocalizationCallback(
     return;
   }
 
+  // 状态进入starting_localization后，先生成3D-BBS层级体素地图。
+  publishMode();
+  std::string bbs_message;
+  if (!bbs_voxel_generator_->generate(selected_map_path, selected_map_id_,
+                                      bbs_message)) {
+    state_machine_.localizationFailed();
+    publishMode();
+    response->success = false;
+    response->message = "3D-BBS preparation failed: " + bbs_message;
+    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+  RCLCPP_INFO(get_logger(), "%s", bbs_message.c_str());
+
+  const bool use_initial_pose = request->use_initial_pose;
+  const geometry_msgs::msg::Pose initial_pose = request->initial_pose;
   ++session_id_;
   const uint64_t session_id = session_id_;
   {
@@ -439,16 +501,15 @@ void RobotRuntimeNode::startLocalizationCallback(
     localization_result_success_ = false;
     localization_result_message_.clear();
   }
-  publishMode();
-
+  // 将map_id和地图目录传给纯定位Worker，算法对象在收到START后创建。
   localization_controller_->start(
-      session_id, selected_map_id_, selected_map_path_.string(),
-      [this, session_id](bool success, const std::string &message) {
+      session_id, selected_map_id_, selected_map_path.string(),
+      [this, session_id, use_initial_pose,
+       initial_pose](bool success, const std::string &message) {
         {
           std::lock_guard<std::mutex> lock(localization_result_mutex_);
           if (!localization_attempt_active_ ||
               localization_attempt_session_id_ != session_id ||
-              localization_cancelled_session_id_ == session_id ||
               localization_result_ready_) {
             return;
           }
@@ -461,6 +522,14 @@ void RobotRuntimeNode::startLocalizationCallback(
         }
         if (success) {
           state_machine_.localizationStarted();
+          if (use_initial_pose) {
+            // APP要求使用初始位姿时，转换成算法使用的 /initialpose 消息。
+            geometry_msgs::msg::PoseWithCovarianceStamped initial_pose_message;
+            initial_pose_message.header.stamp = now();
+            initial_pose_message.header.frame_id = "map";
+            initial_pose_message.pose.pose = initial_pose;
+            initial_pose_pub_->publish(initial_pose_message);
+          }
           RCLCPP_INFO(get_logger(), "%s", message.c_str());
         } else {
           state_machine_.localizationFailed();
@@ -473,35 +542,22 @@ void RobotRuntimeNode::startLocalizationCallback(
 
   bool result_received = false;
   bool result_success = false;
-  bool cancelled = false;
   std::string result_message;
   {
     std::unique_lock<std::mutex> lock(localization_result_mutex_);
     result_received = localization_result_cv_.wait_for(
         lock, std::chrono::duration<double>(relocalization_timeout_sec_),
         [this, session_id]() {
-          return localization_cancelled_session_id_ == session_id ||
-                 (localization_attempt_session_id_ == session_id &&
-                  localization_result_ready_);
+          return localization_attempt_session_id_ == session_id &&
+                 localization_result_ready_;
         });
-    cancelled = localization_cancelled_session_id_ == session_id;
-    if (cancelled) {
-      result_message = "relocalization cancelled by stop request";
-      result_success = false;
-    } else if (result_received) {
+    if (result_received) {
       result_success = localization_result_success_;
       result_message = localization_result_message_;
     }
     if (localization_attempt_session_id_ == session_id) {
       localization_attempt_active_ = false;
     }
-  }
-
-  // stop_localization负责停止Worker、析构节点和完成状态流转，避免重复STOP。
-  if (cancelled) {
-    response->success = false;
-    response->message = result_message;
-    return;
   }
 
   if (result_received && result_success) {
@@ -537,7 +593,7 @@ void RobotRuntimeNode::startLocalizationCallback(
   if (stop_result.first) {
     state_machine_.localizationFailed();
   } else {
-    state_machine_.enterError();
+    enterError(RuntimeState::LOCALIZATION_ERROR, stop_result.second);
   }
   publishMode();
 
@@ -546,82 +602,16 @@ void RobotRuntimeNode::startLocalizationCallback(
   RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
 }
 
-void RobotRuntimeNode::stopLocalizationCallback(
-    const Trigger::Request::SharedPtr,
-    Trigger::Response::SharedPtr response) {
-  using StopResult = std::pair<bool, std::string>;
-  auto completion = std::make_shared<std::promise<StopResult>>();
-  auto future = completion->get_future();
-  uint64_t session_id = 0U;
-
-  {
-    // 与start_localization的启动片段串行，保证STOP不会早于START发送。
-    std::scoped_lock command_lock(localization_command_mutex_);
-    if (!state_machine_.beginStopLocalization()) {
-      response->success = false;
-      response->message =
-          "stop localization rejected, current state=" +
-          std::string(toString(state_machine_.mode()));
-      return;
-    }
-
-    session_id = session_id_;
-    {
-      std::lock_guard<std::mutex> result_lock(localization_result_mutex_);
-      if (localization_attempt_active_ &&
-          localization_attempt_session_id_ == session_id) {
-        localization_cancelled_session_id_ = session_id;
-      }
-    }
-    localization_result_cv_.notify_all();
-    publishMode();
-
-    localization_controller_->stop(
-        session_id, [completion](bool success, const std::string &message) {
-          completion->set_value({success, message});
-        });
-  }
-
-  // 等待Worker完成Executor退出和节点析构，再向APP确认停止成功。
-  const auto timeout =
-      std::chrono::duration<double>(localization_stop_timeout_sec_);
-  if (future.wait_for(timeout) != std::future_status::ready) {
-    state_machine_.enterError();
-    publishMode();
-    response->success = false;
-    response->message = "stop localization timed out before node destruction";
-    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
-    return;
-  }
-
-  const auto [success, message] = future.get();
-  if (!success) {
-    state_machine_.enterError();
-    publishMode();
-    response->success = false;
-    response->message = "failed to destroy localization node: " + message;
-    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
-    return;
-  }
-
-  state_machine_.localizationStopped();
-  publishMode();
-  response->success = true;
-  response->message = "localization node stopped and destroyed";
-  RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
-}
-
 void RobotRuntimeNode::relocalizationResultCallback(
     const std_msgs::msg::Bool::SharedPtr message) {
+  // 协议2.5：只有true表示最终定位成功；false表示算法仍在搜索。
   // false表示算法仍在尝试，不作为最终失败；最终失败由超时统一判定。
   if (!message->data) return;
 
   std::string result_message;
   {
     std::lock_guard<std::mutex> lock(localization_result_mutex_);
-    if (!localization_attempt_active_ || localization_result_ready_ ||
-        localization_cancelled_session_id_ ==
-            localization_attempt_session_id_) {
+    if (!localization_attempt_active_ || localization_result_ready_) {
       return;
     }
     localization_result_ready_ = true;
@@ -637,9 +627,17 @@ void RobotRuntimeNode::relocalizationResultCallback(
   localization_result_cv_.notify_all();
 }
 
+void RobotRuntimeNode::keyframeCloudCallback(
+    const MapKeyframe::SharedPtr message) {
+  // 协议2.12：PGO负责关键帧选择、ID和map坐标变换，Runtime只做转发。
+  // 回环优化后PGO会使用相同keyframe_id重发，APP应覆盖旧关键帧。
+  keyframe_cloud_pub_->publish(*message);
+}
+
 void RobotRuntimeNode::deleteMapCallback(
     const DeleteMap::Request::SharedPtr request,
     DeleteMap::Response::SharedPtr response) {
+  // 协议2.3：仅空闲状态允许删除指定map_id的整个地图目录。
   const RobotMode current_mode = state_machine_.mode();
   if (current_mode != RobotMode::kIdle) {
     response->success = false;
@@ -649,9 +647,10 @@ void RobotRuntimeNode::deleteMapCallback(
     return;
   }
 
-  response->success =
-      deleteMapDirectory(request->map_id, response->message);
+  const std::string map_id = std::to_string(request->map_id);
+  response->success = map_storage_->deleteMap(map_id, response->message);
   if (response->success) {
+    if (selected_map_id_ == map_id) selected_map_id_.clear();
     RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Delete map rejected: %s",
@@ -659,72 +658,108 @@ void RobotRuntimeNode::deleteMapCallback(
   }
 }
 
-void RobotRuntimeNode::startNavigationCallback(
-    const Trigger::Request::SharedPtr,
-    Trigger::Response::SharedPtr response) {
-  // 导航必须在定位就绪状态下启动。
-  if (!state_machine_.beginNavigation()) {
-    response->success = false;
-    response->message =
-        "start navigation rejected, localization is not ready or current "
-        "state=" +
-        std::string(toString(state_machine_.mode()));
-    return;
+rclcpp_action::GoalResponse RobotRuntimeNode::handleNavigationGoal(
+    const rclcpp_action::GoalUUID &,
+    std::shared_ptr<const StartNavigation::Goal> goal) {
+  // 协议2.6：接收前校验任务ID、节点ID、Pose以及定位Ready状态。
+  std::string message;
+  if (!navigation_task_executor_->validateGoal(*goal, message)) {
+    RCLCPP_WARN(get_logger(), "Reject navigation goal: %s", message.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
   }
-
-  ++session_id_;
-  const uint64_t session_id = session_id_;
-  publishMode();
-  navigation_controller_->start(
-      session_id,
-      [this](bool success, const std::string &message) {
-        if (success) {
-          state_machine_.navigationStarted();
-          RCLCPP_INFO(get_logger(), "%s", message.c_str());
-        } else {
-          state_machine_.enterError();
-          RCLCPP_ERROR(get_logger(), "%s", message.c_str());
-        }
-        publishMode();
-      });
-
-  response->success = true;
-  response->message = "start navigation accepted, session=" +
-                      std::to_string(session_id);
+  if (state_machine_.mode() != RobotMode::kReady) {
+    const std::string current_state(toString(state_machine_.mode()));
+    RCLCPP_WARN(get_logger(), "Reject navigation goal: current state=%s",
+                current_state.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (!navigation_task_executor_->reserveOperation(message)) {
+    RCLCPP_WARN(get_logger(), "Reject navigation goal: %s", message.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-void RobotRuntimeNode::stopNavigationCallback(
-    const Trigger::Request::SharedPtr,
-    Trigger::Response::SharedPtr response) {
-  if (!state_machine_.beginStopNavigation()) {
+rclcpp_action::CancelResponse RobotRuntimeNode::handleNavigationCancel(
+    const std::shared_ptr<NavigationGoalHandle>) {
+  navigation_task_executor_->cancel();
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void RobotRuntimeNode::handleNavigationAccepted(
+    const std::shared_ptr<NavigationGoalHandle> goal_handle) {
+  ++session_id_;
+  navigation_task_executor_->startAction(goal_handle, session_id_);
+}
+
+void RobotRuntimeNode::navigateToPoseCallback(
+    const NavigateToPose::Request::SharedPtr request,
+    NavigateToPose::Response::SharedPtr response) {
+  // 协议2.7：用“当前map位姿 + APP目标位姿”生成两点拓扑后执行导航。
+  if (state_machine_.mode() != RobotMode::kReady) {
     response->success = false;
     response->message =
-        "stop navigation rejected, current state=" +
+        "single-point navigation rejected, localization is not ready, "
+        "current state=" +
         std::string(toString(state_machine_.mode()));
     return;
   }
 
-  publishMode();
-  // 先进入停止中状态，完成后回到可再次导航的 ready 状态。
-  navigation_controller_->stop(
-      session_id_, [this](bool success, const std::string &message) {
-        if (success) {
-          state_machine_.navigationStopped();
-          RCLCPP_INFO(get_logger(), "%s", message.c_str());
-        } else {
-          state_machine_.enterError();
-          RCLCPP_ERROR(get_logger(), "%s", message.c_str());
-        }
-        publishMode();
-      });
+  std::string message;
+  if (!navigation_task_executor_->validatePose(request->pose, message)) {
+    response->success = false;
+    response->message = "invalid target pose: " + message;
+    return;
+  }
 
-  response->success = true;
-  response->message = "stop navigation accepted";
+  geometry_msgs::msg::PoseStamped current_pose;
+  {
+    std::lock_guard<std::mutex> lock(current_pose_mutex_);
+    if (!has_current_pose_) {
+      response->success = false;
+      response->message =
+          "single-point navigation rejected: current map pose is unavailable";
+      return;
+    }
+    current_pose = current_pose_;
+  }
+  if (!navigation_task_executor_->reserveOperation(message)) {
+    response->success = false;
+    response->message = message;
+    return;
+  }
+  ++session_id_;
+  response->success = navigation_task_executor_->navigateToPose(
+      current_pose, request->pose, session_id_, response->message);
+}
+
+void RobotRuntimeNode::navigationStateCallback(
+    const std_msgs::msg::Bool::SharedPtr message) {
+  // Pure Pursuit发布false表示开始跟踪，随后true表示当前目标到达。
+  navigation_task_executor_->onNavigationState(message->data);
+}
+
+void RobotRuntimeNode::currentPoseCallback(
+    const geometry_msgs::msg::PoseStamped::SharedPtr message) {
+  // 协议2.10：缓存map位姿供单点导航使用，并实时转发给APP。
+  {
+    std::lock_guard<std::mutex> lock(current_pose_mutex_);
+    current_pose_ = *message;
+    has_current_pose_ = true;
+  }
+  current_pose_pub_->publish(*message);
+}
+
+void RobotRuntimeNode::bodyCloudCallback(
+    const sensor_msgs::msg::PointCloud2::SharedPtr message) {
+  // 协议2.11：转发FAST-LIO的IMU/机体坐标系实时点云。
+  body_cloud_pub_->publish(*message);
 }
 
 void RobotRuntimeNode::pauseNavigationCallback(
     const Trigger::Request::SharedPtr,
     Trigger::Response::SharedPtr response) {
+  // 协议2.8：仅暂停Pure Pursuit控制，不销毁规划和感知Worker。
   if (state_machine_.mode() != RobotMode::kNavigating) {
     response->success = false;
     response->message = "pause navigation rejected, current state=" +
@@ -733,8 +768,7 @@ void RobotRuntimeNode::pauseNavigationCallback(
   }
 
   std::string message;
-  if (!navigation_controller_->setPaused(
-          true, navigation_control_timeout_sec_, message)) {
+  if (!navigation_task_executor_->setPaused(true, message)) {
     response->success = false;
     response->message = "pause navigation failed: " + message;
     return;
@@ -753,6 +787,7 @@ void RobotRuntimeNode::pauseNavigationCallback(
 void RobotRuntimeNode::resumeNavigationCallback(
     const Trigger::Request::SharedPtr,
     Trigger::Response::SharedPtr response) {
+  // 协议2.9：恢复Pure Pursuit控制，继续执行原导航目标。
   if (state_machine_.mode() != RobotMode::kNavigationPaused) {
     response->success = false;
     response->message = "resume navigation rejected, current state=" +
@@ -761,8 +796,7 @@ void RobotRuntimeNode::resumeNavigationCallback(
   }
 
   std::string message;
-  if (!navigation_controller_->setPaused(
-          false, navigation_control_timeout_sec_, message)) {
+  if (!navigation_task_executor_->setPaused(false, message)) {
     response->success = false;
     response->message = "resume navigation failed: " + message;
     return;
@@ -778,184 +812,67 @@ void RobotRuntimeNode::resumeNavigationCallback(
   response->message = message;
 }
 
-bool RobotRuntimeNode::validateMapId(const std::string &map_id,
-                                     std::string &message) const {
-  if (map_id.empty() || map_id.size() > 64U) {
-    message = "map_id length must be between 1 and 64";
-    return false;
-  }
-  if (!std::isalnum(static_cast<unsigned char>(map_id.front()))) {
-    message = "map_id must start with a letter or digit";
-    return false;
-  }
-  for (const char character : map_id) {
-    const auto value = static_cast<unsigned char>(character);
-    if (!std::isalnum(value) && character != '_' && character != '-') {
-      message = "map_id may only contain letters, digits, '_' and '-'";
-      return false;
-    }
-  }
-  return true;
-}
-
-std::filesystem::path RobotRuntimeNode::mapPath(
-    const std::string &map_id) const {
-  return std::filesystem::path(map_root_) / map_id;
-}
-
-bool RobotRuntimeNode::deleteMapDirectory(const std::string &map_id,
-                                          std::string &message) {
-  if (!validateMapId(map_id, message)) return false;
-
-  const auto target = mapPath(map_id);
-  std::error_code filesystem_error;
-  const bool exists = std::filesystem::exists(target, filesystem_error);
-  if (filesystem_error) {
-    message = "failed to inspect map directory: " +
-              filesystem_error.message();
-    return false;
-  }
-  if (!exists) {
-    message = "map does not exist: " + map_id;
-    return false;
-  }
-  if (!std::filesystem::is_directory(target, filesystem_error) ||
-      filesystem_error) {
-    message = "map target is not a valid directory: " + target.string();
-    return false;
-  }
-
-  const auto removed_count =
-      std::filesystem::remove_all(target, filesystem_error);
-  if (filesystem_error) {
-    message = "failed to delete map directory: " +
-              filesystem_error.message();
-    return false;
-  }
-  if (selected_map_id_ == map_id) {
-    selected_map_id_.clear();
-    selected_map_path_.clear();
-    map_publisher_->clear();
-  }
-  message = "map deleted: " + map_id + ", removed entries=" +
-            std::to_string(removed_count);
-  return true;
-}
-
-bool RobotRuntimeNode::countSavedMaps(std::size_t &count,
-                                      std::string &message) const {
-  count = 0U;
-  const std::filesystem::path root(map_root_);
-  std::error_code filesystem_error;
-  if (!std::filesystem::exists(root, filesystem_error)) {
-    if (filesystem_error) {
-      message = "failed to inspect map root: " + filesystem_error.message();
-      return false;
-    }
-    return true;
-  }
-
-  std::filesystem::directory_iterator iterator(root, filesystem_error);
-  const std::filesystem::directory_iterator end;
-  if (filesystem_error) {
-    message = "failed to list map root: " + filesystem_error.message();
-    return false;
-  }
-  while (iterator != end) {
-    const auto &entry = *iterator;
-    const std::string name = entry.path().filename().string();
-    if (!name.empty() && name.front() != '.' &&
-        entry.is_directory(filesystem_error) &&
-        std::filesystem::exists(entry.path() / "globalmap.pcd",
-                                filesystem_error)) {
-      ++count;
-    }
-    if (filesystem_error) {
-      message = "failed to inspect map entry: " + filesystem_error.message();
-      return false;
-    }
-    iterator.increment(filesystem_error);
-    if (filesystem_error) {
-      message = "failed to iterate map root: " + filesystem_error.message();
-      return false;
-    }
-  }
-  return true;
-}
-
-bool RobotRuntimeNode::finalizeActiveMap(std::string &message) {
-  if (active_map_id_.empty() || active_map_staging_path_.empty()) {
-    message = "no active map task";
-    return false;
-  }
-
-  const auto global_map = active_map_staging_path_ / "globalmap.pcd";
-  std::error_code filesystem_error;
-  if (!std::filesystem::exists(global_map, filesystem_error) ||
-      filesystem_error) {
-    message = filesystem_error
-                  ? "failed to inspect saved map: " +
-                        filesystem_error.message()
-                  : "PGO did not produce globalmap.pcd";
-    return false;
-  }
-
-  std::ofstream manifest(active_map_staging_path_ / "manifest.yaml");
-  if (!manifest.is_open()) {
-    message = "failed to create manifest.yaml";
-    return false;
-  }
-  manifest << "schema_version: 1\n"
-           << "map_id: \"" << active_map_id_ << "\"\n"
-           << "frame_id: \"map\"\n"
-           << "status: \"ready\"\n"
-           << "global_map: \"globalmap.pcd\"\n";
-  manifest.close();
-  if (!manifest) {
-    message = "failed to write manifest.yaml";
-    return false;
-  }
-
-  const auto final_path = mapPath(active_map_id_);
-  const bool final_map_exists =
-      std::filesystem::exists(final_path, filesystem_error);
-  if (filesystem_error) {
-    message = "failed to inspect existing map: " +
-              filesystem_error.message();
-    return false;
-  }
-  if (final_map_exists) {
-    message = "map appeared after mapping started; publish rejected";
-    return false;
-  }
-  std::size_t saved_map_count = 0U;
-  if (!countSavedMaps(saved_map_count, message)) return false;
-  if (saved_map_count >= max_maps_) {
-    message = "map limit reached before finalization: " +
-              std::to_string(saved_map_count) + "/" +
-              std::to_string(max_maps_);
-    return false;
-  }
-
-  std::filesystem::rename(active_map_staging_path_, final_path,
-                          filesystem_error);
-  if (filesystem_error) {
-    message = "failed to publish saved map: " + filesystem_error.message();
-    return false;
-  }
-
-  const std::string saved_map_id = active_map_id_;
-  active_map_id_.clear();
-  active_map_staging_path_.clear();
-  message = "map saved: " + saved_map_id;
-  return true;
-}
-
 void RobotRuntimeNode::publishMode() {
-  // 对外发布当前机器人运行模式。
-  std_msgs::msg::String message;
-  message.data = std::string(toString(state_machine_.mode()));
-  mode_pub_->publish(message);
+  // 协议2.13：将更细的内部过渡状态压缩成APP定义的uint8状态。
+  uint8_t protocol_state = RuntimeState::IDLE;
+  switch (state_machine_.mode()) {
+    case RobotMode::kStartingMapping:
+    case RobotMode::kMapping:
+      protocol_state = RuntimeState::MAPPING;
+      break;
+    case RobotMode::kStoppingMapping:
+      protocol_state = RuntimeState::SAVING_MAP;
+      break;
+    case RobotMode::kStartingLocalization:
+    case RobotMode::kLocalizing:
+      protocol_state = RuntimeState::RELOCALIZING;
+      break;
+    case RobotMode::kStartingNavigation:
+    case RobotMode::kNavigating:
+    case RobotMode::kStoppingNavigation:
+      protocol_state = RuntimeState::NAVIGATING;
+      break;
+    case RobotMode::kNavigationPaused:
+      protocol_state = RuntimeState::NAVIGATION_PAUSED;
+      break;
+    case RobotMode::kError: {
+      std::lock_guard<std::mutex> lock(runtime_state_mutex_);
+      publishRuntimeState(RuntimeState::ERROR, error_code_, error_message_);
+      return;
+    }
+    case RobotMode::kBoot:
+    case RobotMode::kIdle:
+    case RobotMode::kReady:
+      protocol_state = RuntimeState::IDLE;
+      break;
+  }
+  {
+    std::lock_guard<std::mutex> lock(runtime_state_mutex_);
+    error_code_ = RuntimeState::NO_ERROR;
+    error_message_.clear();
+  }
+  publishRuntimeState(protocol_state);
+}
+
+void RobotRuntimeNode::publishRuntimeState(
+    uint8_t state, int32_t error_code,
+    const std::string &error_message) {
+  RuntimeState message;
+  message.state = state;
+  message.error_code = error_code;
+  message.error_msg = error_message;
+  runtime_state_pub_->publish(message);
+}
+
+void RobotRuntimeNode::enterError(
+    int32_t error_code, const std::string &error_message) {
+  {
+    std::lock_guard<std::mutex> lock(runtime_state_mutex_);
+    error_code_ = error_code;
+    error_message_ = error_message;
+  }
+  state_machine_.enterError();
+  publishRuntimeState(RuntimeState::ERROR, error_code, error_message);
 }
 
 }  // namespace robot_runtime

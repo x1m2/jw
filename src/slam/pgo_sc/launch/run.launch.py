@@ -34,8 +34,8 @@ def generate_launch_description():
 
     data_dir_arg = DeclareLaunchArgument(
         'data_dir',
-        default_value='/robotfs/data/slam_data',
-        description='SLAM data root directory'
+        default_value='/robotfs/data/slam_data/map_0',
+        description='Current map data directory; defaults to map_0'
     )
 
     return LaunchDescription([

@@ -12,10 +12,8 @@ enum class RobotMode : uint8_t {
   kStartingMapping,
   kMapping,
   kStoppingMapping,
-  kSavingMap,
   kStartingLocalization,
   kLocalizing,
-  kStoppingLocalization,
   kReady,
   kStartingNavigation,
   kNavigating,
@@ -37,14 +35,10 @@ inline std::string_view toString(RobotMode mode) {
       return "mapping";
     case RobotMode::kStoppingMapping:
       return "stopping_mapping";
-    case RobotMode::kSavingMap:
-      return "saving_map";
     case RobotMode::kStartingLocalization:
       return "starting_localization";
     case RobotMode::kLocalizing:
       return "localizing";
-    case RobotMode::kStoppingLocalization:
-      return "stopping_localization";
     case RobotMode::kReady:
       return "ready";
     case RobotMode::kStartingNavigation:

@@ -59,20 +59,6 @@ bool RobotStateMachine::localizationFailed() {
   return true;
 }
 
-bool RobotStateMachine::beginStopLocalization() {
-  std::scoped_lock lock(mutex_);
-  if (mode_ != RobotMode::kStartingLocalization &&
-      mode_ != RobotMode::kLocalizing && mode_ != RobotMode::kReady) {
-    return false;
-  }
-  mode_ = RobotMode::kStoppingLocalization;
-  return true;
-}
-
-bool RobotStateMachine::localizationStopped() {
-  return transition(RobotMode::kStoppingLocalization, RobotMode::kIdle);
-}
-
 bool RobotStateMachine::beginNavigation() {
   return transition(RobotMode::kReady, RobotMode::kStartingNavigation);
 }
@@ -107,10 +93,6 @@ void RobotStateMachine::enterError() {
   // 任一模块发生严重错误时可从当前状态直接进入错误态。
   std::scoped_lock lock(mutex_);
   mode_ = RobotMode::kError;
-}
-
-bool RobotStateMachine::resetError() {
-  return transition(RobotMode::kError, RobotMode::kIdle);
 }
 
 bool RobotStateMachine::transition(RobotMode expected, RobotMode target) {

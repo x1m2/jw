@@ -6,7 +6,11 @@ import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -38,6 +42,16 @@ def generate_launch_description():
         description='SLAM data root directory'
     )
 
+    map_id_arg = DeclareLaunchArgument(
+        'map_id',
+        default_value='0',
+        description='Map ID; defaults to map_0'
+    )
+
+    map_directory = PythonExpression([
+        "'map_' + '", LaunchConfiguration('map_id'), "'"
+    ])
+
     target_points_visualizer_node = Node(
         package='topology_rviz_plugin',
         executable='target_points_visualizer_node',
@@ -48,6 +62,7 @@ def generate_launch_description():
                 'runtime_profile': 'test',
                 'target_points_file': PathJoinSubstitution([
                     LaunchConfiguration('data_dir'),
+                    map_directory,
                     'topology_map',
                     'generated_map_target_points.txt',
                 ]),
@@ -66,6 +81,7 @@ def generate_launch_description():
     return LaunchDescription([
         rviz_arg,
         data_dir_arg,
+        map_id_arg,
         target_points_visualizer_node,
         # rviz_node,
     ])

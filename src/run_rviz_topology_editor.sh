@@ -7,7 +7,8 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 WORKSPACE_DIR="$(dirname "${SCRIPT_DIR}")"
 
-DATA_DIR="${1:-/robotfs/data/slam_data}"
+# 优先使用位置参数，其次使用 GUI 传入的 DATA_DIR，独立启动默认 map_0。
+DATA_DIR="${1:-${DATA_DIR:-/robotfs/data/slam_data/map_0}}"
 PCD_FILE="${2:-}"
 USE_RVIZ="${3:-true}"
 TOPOLOGY_DIR="${DATA_DIR}/topology_map"

@@ -9,7 +9,17 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
-readonly DATA_DIR="/robotfs/data/slam_data"
+readonly SLAM_DATA_ROOT="/robotfs/data/slam_data"
+readonly MAP_ID_INPUT="${MAP_ID:-0}"
+if ! [[ "${MAP_ID_INPUT}" =~ ^[0-9]+$ ]] ||
+   [ "${#MAP_ID_INPUT}" -gt 10 ] ||
+   { [ "${#MAP_ID_INPUT}" -eq 10 ] && [[ "${MAP_ID_INPUT}" > "4294967295" ]]; }; then
+    err "MAP_ID 必须是 uint32：${MAP_ID_INPUT}"
+    exit 1
+fi
+readonly MAP_ID="$((10#${MAP_ID_INPUT}))"
+# GUI 会显式传入 DATA_DIR；直接执行脚本时默认保存到 map_0。
+readonly DATA_DIR="${DATA_DIR:-${SLAM_DATA_ROOT}/map_${MAP_ID}}"
 readonly BBS_BUILD_DIR="${WORKSPACE_DIR}/env/3d_bbs/test/build"
 readonly MAP_DIR="${DATA_DIR}/map"
 
@@ -31,7 +41,8 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
-mkdir -p "${DATA_DIR}"
+# 每张地图的数据均收敛到 map_<id>，并预先建立统一的子目录。
+mkdir -p "${MAP_DIR}" "${DATA_DIR}/log" "${DATA_DIR}/task"
 
 if [ -n "${WORKFLOW_LOG_DIR}" ]; then
     LOG_ROOT="${WORKFLOW_LOG_DIR}"
@@ -79,7 +90,7 @@ import tkinter as tk
 
 signal_file = "${SAVE_POPUP_SIGNAL}"
 status_file = "${SAVE_POPUP_STATUS}"
-log_dir = "${LOG_ROOT}"
+save_dir = "${DATA_DIR}"
 
 root = tk.Tk()
 root.title("地图保存")
@@ -125,7 +136,7 @@ def check_done():
         if status == "success":
             label.config(
                 text="地图、轨迹和 3d_bbs 数据已生成完成\n\n"
-                     "保存目录：\n" + log_dir + "\n\n"
+                     "保存目录：\n" + save_dir + "\n\n"
                      "请点击“完成”退出建图流程"
             )
         elif status == "bbs_failed":
@@ -336,7 +347,7 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
-    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true
+    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}"
 
 # 建图过程中按 K 保存拓扑点的旧流程已停用。
 # 建图完成后统一使用 rviz_topology_editor 在优化后的 PCD 地图上打点。

@@ -20,8 +20,6 @@ class RobotStateMachine {
   bool localizationStarted();
   bool localizationReady();
   bool localizationFailed();
-  bool beginStopLocalization();
-  bool localizationStopped();
   bool beginNavigation();
   bool navigationStarted();
   bool pauseNavigation();
@@ -29,7 +27,6 @@ class RobotStateMachine {
   bool beginStopNavigation();
   bool navigationStopped();
   void enterError();
-  bool resetError();
 
  private:
   // 仅当当前状态等于 expected 时才切换到 target。

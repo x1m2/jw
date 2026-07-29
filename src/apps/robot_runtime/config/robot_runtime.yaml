@@ -1,22 +1,26 @@
 robot_runtime:
   ros__parameters:
-    # APP只传map_id，RobotRuntime在该根目录下管理每张地图。
+    # APP只传map_id；目录结构为 <root>/map_<map_id>/{map,log,task}/。
     map_storage:
-      root_directory: "/robotfs/data/slam_data/map"
+      root_directory: "/robotfs/data/slam_data"
       max_maps: 5
+      # start_mapping等待PGO和Fast-LIO节点级Ready。
+      start_mapping_timeout_sec: 30.0
       finish_mapping_timeout_sec: 300.0
-
-    # APP加载地图时读取该PCD并发布一次，不会启动定位算法。
-    map_display:
-      pcd_filename: "globalmap.pcd"
-      topic: "/robot/map/point_cloud"
-      frame_id: "map"
 
     # 开始定位Service等待重定位成功；超时后停止定位并返回失败。
     localization:
       relocalization_timeout_sec: 60.0
       stop_timeout_sec: 10.0
+      # start_localization先运行该工具，为选中的地图生成voxelmaps_coords。
+      bbs:
+        saver_executable: "/home/jw-zkl/robotics_platform/3rdparty/3d_bbs/test/build/saver"
+        min_level_resolution: 0.5
+        max_level: 6
+        generation_timeout_sec: 120.0
 
-    # 暂停/继续导航时，等待纯跟踪速度控制接口响应的最长时间。
+    # 导航Worker启停、暂停控制和单个目标点执行超时。
     navigation:
       control_timeout_sec: 3.0
+      worker_timeout_sec: 30.0
+      goal_timeout_sec: 300.0

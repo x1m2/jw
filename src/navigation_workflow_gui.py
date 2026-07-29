@@ -19,7 +19,7 @@ import time
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import rclpy
 from geometry_msgs.msg import Pose
@@ -36,7 +36,9 @@ class NavigationWorkflowGUI:
         self.script_dir = os.path.join(self.workspace_dir, "src")
 
         self.data_dir = "/robotfs/data/slam_data"
-        self.runtime_data_dir = self.data_dir
+        # GUI 未选择地图时使用 map_0；点击“开始建图”后必须由用户明确输入 map_id。
+        self.map_id = 0
+        self.runtime_data_dir = os.path.join(self.data_dir, "map_0")
         self.robot_runtime_dir = os.path.dirname(self.data_dir)
 
         self.run_kill_node_script = os.path.join(self.script_dir, "run_kill_node.sh")
@@ -139,6 +141,73 @@ class NavigationWorkflowGUI:
         self.add_startup_kill_log_to_gui()
 
     # ------------------------- startup / cleanup -------------------------
+    def configure_map_context(self, map_id):
+        """切换 GUI 后续建图、日志、拓扑和任务所使用的地图目录。"""
+        self.map_id = map_id
+        self.runtime_data_dir = os.path.join(self.data_dir, f"map_{map_id}")
+        self.task_folder_path = os.path.join(self.runtime_data_dir, "task")
+        self.map_dir = os.path.join(self.runtime_data_dir, "map")
+        self.map_bag_dir = os.path.join(self.map_dir, "result_bag")
+        self.map_pcd_file = os.path.join(self.map_dir, "globalmap.pcd")
+
+        self.workflow_log_dir = os.path.join(
+            self.runtime_data_dir, "log", self.workflow_time
+        )
+        self.relocalization_result_dir = os.path.join(
+            self.workflow_log_dir, "relocalization"
+        )
+        self.relocalization_exit_code_file = os.path.join(
+            self.relocalization_result_dir, "relocalization_exit_code.txt"
+        )
+        self.relocalization_success_file = os.path.join(
+            self.relocalization_result_dir, "relocalization_success.txt"
+        )
+        self.navigation_confirm_file = os.path.join(
+            self.relocalization_result_dir, "navigation_confirm.txt"
+        )
+        os.makedirs(self.workflow_log_dir, exist_ok=True)
+
+        if hasattr(self, "log_dir_label"):
+            self.log_dir_label.config(text=self.workflow_log_dir)
+        if hasattr(self, "task_folder_label"):
+            self.task_folder_label.config(text=self.task_folder_path)
+
+        self.load_available_tasks()
+        if hasattr(self, "task_combobox"):
+            self.refresh_available_tasks()
+        if hasattr(self, "map_status_label"):
+            self.update_map_status_display()
+
+    def prompt_mapping_map_id(self):
+        """强制读取一个合法的 ROS 2 uint32 map_id；取消则不启动建图。"""
+        while True:
+            value = simpledialog.askstring(
+                "开始建图",
+                "请输入 map_id（0～4294967295，不能为空）：",
+                parent=self.root,
+            )
+            if value is None:
+                self.add_log("用户取消输入 map_id，未启动建图")
+                return None
+
+            value = value.strip()
+            if not value:
+                messagebox.showerror("map_id 无效", "map_id 必须输入，不能为空。")
+                continue
+            if not value.isdecimal():
+                messagebox.showerror(
+                    "map_id 无效", "map_id 必须是 0～4294967295 的非负整数。"
+                )
+                continue
+
+            map_id = int(value, 10)
+            if map_id > 4294967295:
+                messagebox.showerror(
+                    "map_id 无效", "map_id 超出 uint32 范围（最大 4294967295）。"
+                )
+                continue
+            return map_id
+
     def _kill_env(self):
         env = os.environ.copy()
         env.update({
@@ -472,10 +541,13 @@ class NavigationWorkflowGUI:
         tk.Label(task_frame, text="任务目录:", font=(self.font_family, 10, "bold")).grid(
             row=1, column=0, sticky=tk.W, padx=5
         )
-        tk.Label(
+        self.task_folder_label = tk.Label(
             task_frame, text=self.task_folder_path, font=(self.font_family, 9),
             fg="gray", wraplength=820, justify=tk.LEFT,
-        ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5)
+        )
+        self.task_folder_label.grid(
+            row=1, column=1, columnspan=2, sticky=tk.W, padx=5
+        )
 
         buttons = ttk.LabelFrame(self.nav_control_body, text="任务操作", padding="8")
         buttons.grid(row=1, column=0, sticky=(tk.W, tk.E))
@@ -934,8 +1006,23 @@ class NavigationWorkflowGUI:
         if self.slam_running:
             messagebox.showwarning("提示", "建图已经在运行")
             return
+
+        map_id = self.prompt_mapping_map_id()
+        if map_id is None:
+            return
+        self.configure_map_context(map_id)
+        self.add_log(
+            f"开始 map_id={map_id} 建图，数据目录: {self.runtime_data_dir}"
+        )
+
         self.slam_terminal_process = self.start_script_in_terminal(
-            self.run_slam_script, "SLAM 建图 - keyboard_control", keep_open=False
+            self.run_slam_script,
+            f"SLAM 建图 map_{map_id} - keyboard_control",
+            keep_open=False,
+            extra_env={
+                "MAP_ID": map_id,
+                "DATA_DIR": self.runtime_data_dir,
+            },
         )
         if self.slam_terminal_process is None:
             return
@@ -967,6 +1054,10 @@ class NavigationWorkflowGUI:
             self.run_rviz_topology_editor_script,
             "地图打点 - rviz_topology_editor",
             keep_open=True,
+            extra_env={
+                "MAP_ID": self.map_id,
+                "DATA_DIR": self.runtime_data_dir,
+            },
         )
         if self.edit_map_terminal_process is None:
             return
@@ -1026,6 +1117,10 @@ class NavigationWorkflowGUI:
             self.run_nav_script,
             "重定位与自主导航 - run_nav",
             keep_open=False,
+            extra_env={
+                "MAP_ID": self.map_id,
+                "DATA_DIR": self.runtime_data_dir,
+            },
         )
         if self.nav_terminal_process is None:
             return

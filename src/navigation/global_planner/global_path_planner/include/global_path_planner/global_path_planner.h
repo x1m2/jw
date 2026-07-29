@@ -74,7 +74,8 @@ struct PathSegment {
 
 class GlobalPathPlanner : public rclcpp::Node {
  public:
-  GlobalPathPlanner();
+  explicit GlobalPathPlanner(
+      const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
   ~GlobalPathPlanner();
 
   bool initialize();

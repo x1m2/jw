@@ -5,10 +5,13 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.substitutions import PathJoinSubstitution
 
 
 def generate_launch_description():
@@ -33,6 +36,12 @@ def generate_launch_description():
             description='SLAM data root directory'
         ),
 
+        DeclareLaunchArgument(
+            'map_id',
+            default_value='0',
+            description='Map ID; defaults to map_0'
+        ),
+
         Node(
             package='user_interface',
             executable='navigation_task_state_machine_node',
@@ -43,10 +52,20 @@ def generate_launch_description():
                     'runtime_profile': 'test',
                     'task_folder_path': PathJoinSubstitution([
                         LaunchConfiguration('data_dir'),
+                        PythonExpression([
+                            "'map_' + '",
+                            LaunchConfiguration('map_id'),
+                            "'",
+                        ]),
                         'task',
                     ]),
                     'target_points_file': PathJoinSubstitution([
                         LaunchConfiguration('data_dir'),
+                        PythonExpression([
+                            "'map_' + '",
+                            LaunchConfiguration('map_id'),
+                            "'",
+                        ]),
                         'topology_map',
                         'generated_map_target_points.txt',
                     ]),

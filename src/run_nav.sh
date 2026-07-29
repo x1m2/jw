@@ -10,7 +10,25 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
-readonly DATA_DIR="/robotfs/data/slam_data"
+# GUI 会传入 MAP_ID；独立启动脚本时统一使用 map_0。
+readonly MAP_ID_INPUT="${MAP_ID:-0}"
+if ! [[ "${MAP_ID_INPUT}" =~ ^[0-9]+$ ]] ||
+   [ "${#MAP_ID_INPUT}" -gt 10 ] ||
+   { [ "${#MAP_ID_INPUT}" -eq 10 ] && [[ "${MAP_ID_INPUT}" > "4294967295" ]]; }; then
+    err "MAP_ID 必须是 uint32：${MAP_ID_INPUT}"
+    exit 1
+fi
+readonly MAP_ID="$((10#${MAP_ID_INPUT}))"
+
+# DATA_DIR 只用于兼容 GUI 传入的 map_<id> 完整目录；所有子 launch 都继续
+# 使用 DATA_ROOT + MAP_ID 自行构造 map_<id>，避免不同节点落到不同地图。
+if [ -n "${DATA_DIR:-}" ]; then
+    DATA_ROOT="$(dirname "${DATA_DIR}")"
+else
+    DATA_ROOT="${SLAM_DATA_ROOT:-/robotfs/data/slam_data}"
+fi
+readonly DATA_ROOT
+readonly DATA_DIR="${DATA_ROOT}/map_${MAP_ID}"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
     err "找不到 src 目录: ${WORKSPACE_DIR}/src"
@@ -59,6 +77,7 @@ log_time() {
 }
 
 info "开始重定位与自主导航流程"
+info "地图ID: ${MAP_ID}"
 info "数据目录: ${DATA_DIR}"
 
 # ==================================================
@@ -187,7 +206,8 @@ start_bg LIVOX_PID "livox_ros_driver2" "/dev/null" 4 \
     ros2 launch livox_ros_driver2 msg_MID360s_launch.py
 
 start_bg PCD2PGM_RELOC_PID "pcd2pgm" "/dev/null" 2 \
-    ros2 launch pcd2pgm pcd2pgm_launch.py pgm_use_rviz:=false
+    ros2 launch pcd2pgm pcd2pgm_launch.py \
+    pgm_use_rviz:=false data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
 
 # 在 localization 启动前先订阅，避免错过 /reloc_success=true。
 cat > "${WAIT_SCRIPT}" <<'PY'
@@ -249,7 +269,8 @@ sleep 0.5
 
 start_bg LOCALIZATION_PID "fastlio_localization" \
     "${RELOCALIZATION_DIR}/fastlio_localization_$(log_time).log" 0 \
-    ros2 launch fastlio_localization run_launch.py
+    ros2 launch fastlio_localization run_launch.py \
+    data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
 
 info "等待重定位成功，超时时间 180s..."
 if wait "${WAIT_PID}"; then
@@ -296,7 +317,8 @@ start_bg COSTMAP_PID "costmap_2d" \
 
 start_bg GLOBAL_PLANNER_PID "global_path_planner" \
     "${NAV_LOG_DIR}/global_path_planner_$(log_time).log" 1 \
-    ros2 launch global_path_planner global_path_planner.launch.py
+    ros2 launch global_path_planner global_path_planner.launch.py \
+    data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
 
 start_bg PATH_SMOOTHER_PID "path_smoother" \
     "${NAV_LOG_DIR}/path_smoother_$(log_time).log" 1 \
@@ -312,11 +334,13 @@ start_bg DUAL_RADAR_EXTRACTOR_PID "dual_radar_extractor" \
 
 start_bg TARGET_POINTS_VISUALIZER_PID "target_points_visualizer" \
     "${NAV_LOG_DIR}/target_points_visualizer_$(log_time).log" 1 \
-    ros2 launch topology_rviz_plugin target_points_visualizer.launch.py
+    ros2 launch topology_rviz_plugin target_points_visualizer.launch.py \
+    data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
 
 start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
     "${NAV_LOG_DIR}/navigation_state_machine_$(log_time).log" 1 \
-    ros2 launch user_interface navigation_task_state_machine.launch.py
+    ros2 launch user_interface navigation_task_state_machine.launch.py \
+    data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
 
 # ==================================================
 # 导航保持运行：

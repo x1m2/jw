@@ -17,6 +17,7 @@ def generate_launch_description():
 
     config_file = LaunchConfiguration('config_file')
     use_dual_radar = LaunchConfiguration('use_dual_radar')
+    runtime_profile = LaunchConfiguration('runtime_profile')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -29,13 +30,18 @@ def generate_launch_description():
             default_value='false',
             description='Whether to enable dual radar mode'
         ),
+        DeclareLaunchArgument(
+            'runtime_profile',
+            default_value='test',
+            description='test autostarts; platform waits for robot_runtime'
+        ),
         Node(
             package=package_name,
             executable='dual_radar_traversable_extractor_node',
             output='screen',
             parameters=[
                 config_file,
-                {'runtime_profile': 'test'},
+                {'runtime_profile': runtime_profile},
                 {'use_dual_radar': ParameterValue(use_dual_radar, value_type=bool)},
             ],
         ),

@@ -183,6 +183,9 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   debug_fine_aligned_pub_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/fine_aligned_nano_gicp", qos_latched);
+  keyframe_cloud_pub_ =
+      this->create_publisher<robot_interfaces::msg::MapKeyframe>(
+          "/pgo/keyframe_cloud", rclcpp::QoS(100).reliable());
 
   /* subscribers */
   sub_odom_ =
@@ -362,7 +365,11 @@ void PgoSc::odomPcdCallback(
   // ==== 初始化关键帧（只执行一次） ====
   if (!is_initialized_) {
     segmentGroundForKeyframe(current_frame_);
-    keyframes_.push_back(current_frame_);
+    {
+      std::lock_guard<std::mutex> lock(keyframes_mutex_);
+      keyframes_.push_back(current_frame_);
+    }
+    publishKeyframe(current_frame_);
     updateOdomsAndPaths(current_frame_);
 
     // 添加 PriorFactor 到图
@@ -390,6 +397,7 @@ void PgoSc::odomPcdCallback(
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
       keyframes_.push_back(current_frame_);
     }
+    publishKeyframe(current_frame_);
 
     // ==== 3. 添加到图优化 ====
     auto variance_vector =
@@ -704,6 +712,27 @@ void PgoSc::optimizeGraph(bool is_loop) {
           gtsamPoseToPoseEig(new_estimate.at<gtsam::Pose3>(i));
     }
   }
+}
+
+void PgoSc::publishKeyframe(const PosePcd &keyframe) {
+  if (keyframe.idx_ < 0) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "Cannot publish keyframe with negative id: %d",
+                 keyframe.idx_);
+    return;
+  }
+
+  robot_interfaces::msg::MapKeyframe message;
+  message.keyframe_id = static_cast<uint32_t>(keyframe.idx_);
+  message.cloud = pclToPclRos(
+      transformPcd(keyframe.pcd_, keyframe.pose_corrected_eig_), map_frame_);
+  const int64_t timestamp_nanoseconds =
+      static_cast<int64_t>(keyframe.timestamp_ * 1e9);
+  message.cloud.header.stamp.sec =
+      static_cast<int32_t>(timestamp_nanoseconds / 1000000000LL);
+  message.cloud.header.stamp.nanosec =
+      static_cast<uint32_t>(timestamp_nanoseconds % 1000000000LL);
+  keyframe_cloud_pub_->publish(message);
 }
 // ====================== save callback ======================
 void PgoSc::saveFlagCallback() {
