@@ -34,7 +34,6 @@
 #include <thread>
 #include <visualization_msgs/msg/marker.hpp>
 
-#include "imu_orientation_converter.hpp"
 #include "imu_processing.hpp"
 #include "preprocess.hpp"
 #define INIT_TIME (0.1)
@@ -51,7 +50,6 @@ class LaserMappingNode : public rclcpp::Node {
   void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg);
   void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg);
   void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in);
-  void set_stairs_mode(bool is_stairs);
   void timer_callback();
   void map_publish_callback();
   void map_save_callback(std_srvs::srv::Trigger::Request::ConstSharedPtr req,
@@ -125,12 +123,6 @@ class LaserMappingNode : public rclcpp::Node {
   void initializeFiles();
   void initializeSubscribersAndPublishers();
 
-  void applyImuConstraintFusion(const state_ikfom &state_before_update,
-                                const state_ikfom &state_after_update,
-                                double update_trans_delta,
-                                double update_yaw_delta, double valid_ratio,
-                                bool bad_pos, bool bad_yaw);
-
  private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudFull_;
@@ -145,7 +137,6 @@ class LaserMappingNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
       sub_pcl_livox_;
-  std::shared_ptr<ImuOrientationConverter> imu_orientation_converter_;
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -215,12 +206,6 @@ class LaserMappingNode : public rclcpp::Node {
   double imu_to_base_R;
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
-  bool enable_z_constraint_ = true;
-  bool is_flat_terrain_ = true;
-  bool z_constraint_initialized_ = false;
-  double z_constraint_value_ = 0.0;
-  bool output_z_constraint_initialized_ = false;
-  double output_z_constraint_value_ = 0.0;
   deque<double> time_buffer;
   deque<PointCloudXYZI::Ptr> lidar_buffer;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
@@ -258,18 +243,6 @@ class LaserMappingNode : public rclcpp::Node {
 
   shared_ptr<Preprocess> p_pre = nullptr;
   shared_ptr<ImuProcess> p_imu = nullptr;
-
-  // IMU constraint config
-  bool enable_auto_constraint = false;
-  bool enable_velocity_constraint = false;
-  bool enable_rotation_constraint = false;
-
-  int feature_threshold_strong = 100;
-  int feature_threshold_medium = 200;
-
-  double strong_constraint_weight = 3.0;
-  double medium_constraint_weight = 2.0;
-  double max_rotation_correction = 0.1;
 };
 
 #endif

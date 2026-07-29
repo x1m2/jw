@@ -101,7 +101,6 @@ ament_export_dependencies(rosidl_default_runtime)
 add_executable(fastlio_mapping_node
   src/main.cpp
   src/laser_mapping.cpp
-  src/imu_orientation_converter.cpp
   include/ikd-Tree/ikd_Tree.cpp
   src/preprocess.cpp
   src/imu_processing.cpp

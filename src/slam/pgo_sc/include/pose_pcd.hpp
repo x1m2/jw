@@ -7,7 +7,6 @@
 
 struct PosePcd {
   pcl::PointCloud<PointType> pcd_;  // lidar 局部坐标系点云
-  pcl::PointCloud<PointType> pcd_ground_;  // lidar 局部坐标系地面/可行域点云
   Eigen::Matrix4d pose_eig_ =
       Eigen::Matrix4d::Identity();  // odom 坐标系下的位姿
   Eigen::Matrix4d pose_corrected_eig_ =

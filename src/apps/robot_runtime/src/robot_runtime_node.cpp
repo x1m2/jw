@@ -630,7 +630,8 @@ void RobotRuntimeNode::relocalizationResultCallback(
 void RobotRuntimeNode::keyframeCloudCallback(
     const MapKeyframe::SharedPtr message) {
   // 协议2.12：PGO负责关键帧选择、ID和map坐标变换，Runtime只做转发。
-  // 回环优化后PGO会使用相同keyframe_id重发，APP应覆盖旧关键帧。
+  // PGO仅在新增关键帧时发布一次；回环后不重发旧关键帧。
+  // APP实时拼接结果用于建图预览，最终地图以保存后的globalmap.pcd为准。
   keyframe_cloud_pub_->publish(*message);
 }
 

@@ -164,12 +164,6 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
         this->emergencyStopCallback(msg);
       });
 
-  stairs_state_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-      "/stairs_state", rclcpp::QoS(10),
-      [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
-        this->stairsStateCallback(msg);
-      });
-
   // 初始化控制定时器
   control_timer_ = node_->create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -232,27 +226,6 @@ void PurePursuitLocalPlanner::emergencyStopCallback(
   emergency_stop_active_ = msg->data;
 }
 
-void PurePursuitLocalPlanner::stairsStateCallback(
-    std_msgs::msg::Bool::ConstSharedPtr msg) {
-  if (stairs_state_active_ == msg->data) {
-    return;
-  }
-
-  stairs_state_active_ = msg->data;
-  RCLCPP_INFO(node_->get_logger(),
-              "[STAIRS_STATE] stairs=%d, effective max_linear_velocity=%.2f",
-              stairs_state_active_ ? 1 : 0, effectiveMaxLinearVelocity());
-}
-
-double PurePursuitLocalPlanner::effectiveMaxLinearVelocity() const {
-  if (!stairs_state_active_) {
-    return config_.max_linear_velocity;
-  }
-
-  return config_.max_linear_velocity +
-         std::max(0.0, config_.stairs_velocity_boost);
-}
-
 void PurePursuitLocalPlanner::loadParameters() {
   // Pure Pursuit parameters
   config_.lookahead_distance_min =
@@ -274,9 +247,6 @@ void PurePursuitLocalPlanner::loadParameters() {
       declareOrGetParameter(node_, "acceleration_limit", 0.5);
   config_.deceleration_limit =
       declareOrGetParameter(node_, "deceleration_limit", 0.8);
-  config_.stairs_velocity_boost =
-      declareOrGetParameter(node_, "stairs_velocity_boost", 0.2);
-
   // Obstacle avoidance parameters
   config_.obstacle_detection_range =
       declareOrGetParameter(node_, "obstacle_detection_range", 2.0);
@@ -960,7 +930,7 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
   double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
 
   // 计算目标线速度（基于机器人方向和前瞻点方向的点乘）
-  const double max_linear_velocity = effectiveMaxLinearVelocity();
+  const double max_linear_velocity = config_.max_linear_velocity;
   double target_velocity = max_linear_velocity;
   if (path_tracker_) {
     target_velocity = path_tracker_->computeTargetVelocity(
@@ -1124,13 +1094,12 @@ bool PurePursuitLocalPlanner::computePurePursuitCommand(
       "[PP_CMD] robot=(%.3f, %.3f, yaw=%.2f deg), "
       "lookahead=(%.3f, %.3f), dx=%.3f, dy=%.3f, "
       "target_yaw=%.2f deg, yaw_error=%.2f deg, vx=%.2f, wz=%.2f, "
-      "progress=%zu, path_idx=%d, stairs=%d, max_v=%.2f",
+      "progress=%zu, path_idx=%d, max_v=%.2f",
       robot_pose.pose.position.x, robot_pose.pose.position.y,
       robot_yaw * 180.0 / M_PI, lookahead_point.point.x,
       lookahead_point.point.y, dx, dy, target_yaw * 180.0 / M_PI,
       yaw_error * 180.0 / M_PI, cmd_vel.linear.x, cmd_vel.angular.z,
-      path_progress_index_, current_path_index_, stairs_state_active_ ? 1 : 0,
-      max_linear_velocity);
+      path_progress_index_, current_path_index_, max_linear_velocity);
   return true;
 }
 
@@ -1140,7 +1109,7 @@ void PurePursuitLocalPlanner::applyVelocityLimits(
   if (dt <= 0.0) return;
 
   // 限制X方向线速度
-  const double max_linear_velocity = effectiveMaxLinearVelocity();
+  const double max_linear_velocity = config_.max_linear_velocity;
   cmd_vel.linear.x = std::max(cmd_vel.linear.x, -max_linear_velocity);
   cmd_vel.linear.x = std::min(cmd_vel.linear.x, max_linear_velocity);
 

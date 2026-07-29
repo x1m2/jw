@@ -78,28 +78,6 @@ void LaserMappingNode::readParameters() {
   this->declare_parameter<vector<double>>("mapping.imu_to_base_T",
                                           vector<double>());
   this->declare_parameter<double>("mapping.imu_to_base_R", 0.0);
-  this->declare_parameter<bool>("z_constraint.enable", true);
-  // imu constraint
-  this->declare_parameter<bool>("imu_constraint.enable_auto_constraint", false);
-
-  this->declare_parameter<bool>("imu_constraint.enable_velocity_constraint",
-                                false);
-
-  this->declare_parameter<bool>("imu_constraint.enable_rotation_constraint",
-                                false);
-
-  this->declare_parameter<int>("imu_constraint.feature_threshold_strong", 100);
-
-  this->declare_parameter<int>("imu_constraint.feature_threshold_medium", 200);
-
-  this->declare_parameter<double>("imu_constraint.strong_constraint_weight",
-                                  3.0);
-
-  this->declare_parameter<double>("imu_constraint.medium_constraint_weight",
-                                  2.0);
-
-  this->declare_parameter<double>("imu_constraint.max_rotation_correction",
-                                  0.1);
 
   this->get_parameter_or<bool>("publish.path_en", path_en, true);
   this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -148,32 +126,6 @@ void LaserMappingNode::readParameters() {
   this->get_parameter_or<vector<double>>("mapping.imu_to_base_T", imu_to_base_T,
                                          vector<double>());
   this->get_parameter_or<double>("mapping.imu_to_base_R", imu_to_base_R, 0.0);
-  this->get_parameter_or<bool>("z_constraint.enable", enable_z_constraint_,
-                               true);
-  // imu constraint
-  this->get_parameter_or<bool>("imu_constraint.enable_auto_constraint",
-                               enable_auto_constraint, false);
-
-  this->get_parameter_or<bool>("imu_constraint.enable_velocity_constraint",
-                               enable_velocity_constraint, false);
-
-  this->get_parameter_or<bool>("imu_constraint.enable_rotation_constraint",
-                               enable_rotation_constraint, false);
-
-  this->get_parameter_or<int>("imu_constraint.feature_threshold_strong",
-                              feature_threshold_strong, 100);
-
-  this->get_parameter_or<int>("imu_constraint.feature_threshold_medium",
-                              feature_threshold_medium, 200);
-
-  this->get_parameter_or<double>("imu_constraint.strong_constraint_weight",
-                                 strong_constraint_weight, 3.0);
-
-  this->get_parameter_or<double>("imu_constraint.medium_constraint_weight",
-                                 medium_constraint_weight, 2.0);
-
-  this->get_parameter_or<double>("imu_constraint.max_rotation_correction",
-                                 max_rotation_correction, 0.1);
 
   RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 }
@@ -234,14 +186,9 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   /*** ROS subscribe initialization ***/
   // 雷达点云的订阅器sub_pcl，订阅点云的topic
   if (p_pre->lidar_type == AVIA) {
-    //可以用lambda,但是不能传uniqueptr
-    auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(100));
-    lidar_qos.best_effort();
-    lidar_qos.durability_volatile();
-
     sub_pcl_livox_ =
         this->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-            lid_topic, lidar_qos,
+            lid_topic, 20,
             std::bind(&LaserMappingNode::livox_pcl_cbk, this,
                       std::placeholders::_1));
   } else {
@@ -250,23 +197,9 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
         std::bind(&LaserMappingNode::standard_pcl_cbk, this,
                   std::placeholders::_1));
   }
-  auto imu_qos = rclcpp::QoS(rclcpp::KeepLast(2000));
-  imu_qos.best_effort();
-  imu_qos.durability_volatile();
-
   sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-      imu_topic, imu_qos,
+      imu_topic, 100,
       std::bind(&LaserMappingNode::imu_cbk, this, std::placeholders::_1));
-
-  if (enable_z_constraint_) {
-    imu_orientation_converter_ = std::make_shared<ImuOrientationConverter>(
-        this, [this](bool is_stairs) { this->set_stairs_mode(is_stairs); });
-    RCLCPP_INFO(this->get_logger(),
-                "z constraint enabled. start as flat terrain. IMU orientation "
-                "converter updates terrain state internally.");
-  } else {
-    RCLCPP_INFO(this->get_logger(), "z constraint disabled.");
-  }
 
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
   pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -429,27 +362,6 @@ void LaserMappingNode::livox_pcl_cbk(
   // sig_buffer.notify_all();
 }
 
-void LaserMappingNode::set_stairs_mode(bool is_stairs) {
-  const bool new_is_flat = !is_stairs;
-  if (new_is_flat == is_flat_terrain_) {
-    return;
-  }
-
-  is_flat_terrain_ = new_is_flat;
-  z_constraint_initialized_ = false;
-  output_z_constraint_initialized_ = false;
-
-  if (is_flat_terrain_) {
-    RCLCPP_INFO(this->get_logger(),
-                "[Z_CONSTRAINT] terrain changed to flat. imu/output z locks "
-                "will be initialized on next LIO update.");
-  } else {
-    RCLCPP_INFO(this->get_logger(),
-                "[Z_CONSTRAINT] terrain changed to stairs. imu/output z locks "
-                "released.");
-  }
-}
-
 void LaserMappingNode::imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   publish_count++;
   sensor_msgs::msg::Imu::SharedPtr msg(new sensor_msgs::msg::Imu(*msg_in));
@@ -530,8 +442,7 @@ void LaserMappingNode::timer_callback() {
   if (last_timer_begin > 0) {
     double timer_interval_ms = (timer_begin - last_timer_begin) * 1000.0;
 
-    // 正常 10ms 左右，只在明显卡顿时打印
-    if (timer_interval_ms > 50.0) {
+    if (timer_interval_ms > 100.0) {
       RCLCPP_WARN(this->get_logger(), "[TIMER_INTERVAL_WARN] interval=%.3f ms",
                   timer_interval_ms);
     }
@@ -637,25 +548,6 @@ void LaserMappingNode::timer_callback() {
     kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
     state_point = kf.get_x();
 
-    if (enable_z_constraint_) {
-      if (is_flat_terrain_) {
-        if (!z_constraint_initialized_) {
-          z_constraint_value_ = state_point.pos(2);
-          z_constraint_initialized_ = true;
-          RCLCPP_INFO(this->get_logger(),
-                      "[Z_CONSTRAINT] flat mode: lock FAST-LIO imu z at %.3f",
-                      z_constraint_value_);
-        }
-
-        state_point.pos(2) = z_constraint_value_;
-        state_point.vel(2) = 0.0;
-        kf.change_x(state_point);
-      } else if (z_constraint_initialized_) {
-        RCLCPP_INFO(this->get_logger(),
-                    "[Z_CONSTRAINT] stairs mode: release FAST-LIO imu z");
-        z_constraint_initialized_ = false;
-      }
-    }
     ////////////////////////////////////////
     euler_cur = SO3ToEuler(state_point.rot);
     pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
@@ -733,100 +625,11 @@ void LaserMappingNode::timer_callback() {
     double timer_end = omp_get_wtime();
     double process_time_ms = (timer_end - timer_begin) * 1000.0;
 
-    if (process_time_ms > 50.0) {
+    if (process_time_ms > 100.0) {
       RCLCPP_WARN(this->get_logger(), "[PROCESS_TIME_WARN] total=%.3f ms",
                   process_time_ms);
     }
   }
-}
-
-void LaserMappingNode::applyImuConstraintFusion(
-    const state_ikfom &state_before_update,
-    const state_ikfom &state_after_update, double update_trans_delta,
-    double update_yaw_delta, double valid_ratio, bool bad_pos, bool bad_yaw) {
-  // 默认先使用激光 EKF 更新后的状态
-  // 后面只对异常的部分进行融合修正
-  state_point = state_after_update;
-
-  // EKF 更新前状态，近似认为是 IMU 预测状态
-  const V3D imu_predicted_pos = state_before_update.pos;
-  const V3D imu_predicted_vel = state_before_update.vel;
-  const SO3 imu_predicted_rot = state_before_update.rot;
-
-  // EKF 更新后状态，认为是激光匹配修正后的状态
-  const V3D laser_updated_pos = state_after_update.pos;
-  const V3D laser_updated_vel = state_after_update.vel;
-  const SO3 laser_updated_rot = state_after_update.rot;
-
-  double dynamic_imu_constraint_weight = 1.0;
-
-  if (effct_feat_num < feature_threshold_strong) {
-    dynamic_imu_constraint_weight = strong_constraint_weight;
-  } else if (effct_feat_num < feature_threshold_medium) {
-    dynamic_imu_constraint_weight = medium_constraint_weight;
-  }
-
-  // 有效比例太低时，提升 IMU 权重
-  if (valid_ratio < 0.12) {
-    dynamic_imu_constraint_weight =
-        std::max(dynamic_imu_constraint_weight, medium_constraint_weight);
-  }
-
-  // yaw 被 EKF 拉得太大时，提升 IMU 权重
-  if (update_yaw_delta > 5.0 * M_PI / 180.0) {
-    dynamic_imu_constraint_weight =
-        std::max(dynamic_imu_constraint_weight, strong_constraint_weight);
-  }
-
-  const double laser_weight = 1.0 / (1.0 + dynamic_imu_constraint_weight);
-  const double imu_weight =
-      dynamic_imu_constraint_weight / (1.0 + dynamic_imu_constraint_weight);
-
-  // 只有位置异常时，才融合位置
-  if (bad_pos) {
-    state_point.pos =
-        laser_weight * laser_updated_pos + imu_weight * imu_predicted_pos;
-  }
-
-  // 速度先不建议开；即使开，也只在位置异常时融合速度
-  if (enable_velocity_constraint && bad_pos) {
-    state_point.vel =
-        laser_weight * laser_updated_vel + imu_weight * imu_predicted_vel;
-  }
-
-  // 只有 yaw 异常时，才融合姿态
-  if (enable_rotation_constraint && bad_yaw) {
-    SO3 rot_diff = laser_updated_rot.inverse() * imu_predicted_rot;
-    Eigen::Vector3d rot_diff_log = SO3::log(rot_diff);
-
-    if (rot_diff_log.norm() > max_rotation_correction) {
-      rot_diff_log = rot_diff_log.normalized() * max_rotation_correction;
-    }
-
-    state_point.rot = laser_updated_rot * SO3::exp(imu_weight * rot_diff_log);
-  }
-
-  V3D before_euler = SO3ToEuler(state_before_update.rot);
-  V3D laser_euler = SO3ToEuler(laser_updated_rot);
-  V3D fused_euler = SO3ToEuler(state_point.rot);
-
-  RCLCPP_WARN(this->get_logger(),
-              "[IMU_CONSTRAINT_FUSION] "
-              "effct_feat_num=%d, valid_ratio=%.3f, mean_residual=%.4f, "
-              "delta_pos=%.3f, delta_yaw=%.2f deg, "
-              "bad_pos=%d, bad_yaw=%d, "
-              "laser_weight=%.2f, imu_weight=%.2f, "
-              "before_yaw=%.2f deg, laser_yaw=%.2f deg, fused_yaw=%.2f deg, "
-              "laser_pos=[%.3f %.3f %.3f], "
-              "imu_pos=[%.3f %.3f %.3f], "
-              "fused_pos=[%.3f %.3f %.3f]",
-              effct_feat_num, valid_ratio, res_mean_last, update_trans_delta,
-              update_yaw_delta * 180.0 / M_PI, bad_pos, bad_yaw, laser_weight,
-              imu_weight, before_euler(2) * 180.0 / M_PI,
-              laser_euler(2) * 180.0 / M_PI, fused_euler(2) * 180.0 / M_PI,
-              laser_updated_pos(0), laser_updated_pos(1), laser_updated_pos(2),
-              imu_predicted_pos(0), imu_predicted_pos(1), imu_predicted_pos(2),
-              state_point.pos(0), state_point.pos(1), state_point.pos(2));
 }
 
 void LaserMappingNode::map_publish_callback() {
@@ -1268,23 +1071,6 @@ void LaserMappingNode::set_posestamp(T &out) {
   Eigen::Matrix4d T_output_base = get_output_base_transform();
   const Eigen::Matrix3d R_output_base = T_output_base.block<3, 3>(0, 0);
   const Eigen::Quaterniond q_base(R_output_base);
-
-  if (enable_z_constraint_) {
-    if (is_flat_terrain_) {
-      if (!output_z_constraint_initialized_) {
-        output_z_constraint_value_ = T_output_base(2, 3);
-        output_z_constraint_initialized_ = true;
-        RCLCPP_INFO(this->get_logger(),
-                    "[Z_CONSTRAINT] flat mode: lock output base_link z at %.3f",
-                    output_z_constraint_value_);
-      }
-      T_output_base(2, 3) = output_z_constraint_value_;
-    } else if (output_z_constraint_initialized_) {
-      RCLCPP_INFO(this->get_logger(),
-                  "[Z_CONSTRAINT] stairs mode: release output base_link z");
-      output_z_constraint_initialized_ = false;
-    }
-  }
 
   out.pose.position.x = T_output_base(0, 3);
   out.pose.position.y = T_output_base(1, 3);

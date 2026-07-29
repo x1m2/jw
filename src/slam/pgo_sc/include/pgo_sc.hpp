@@ -38,7 +38,6 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <visualization_msgs/msg/marker.hpp>
-#include <patchwork/pcl_ground_segmenter.hpp>
 ///// GTSAM
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/geometry/Pose3.h>
@@ -108,10 +107,6 @@ class PgoSc : public rclcpp::Node {
 
   ///// Results
   bool save_map_bag_, save_map_pcd_, save_in_kitti_format_;
-  bool enable_ground_segmentation_;
-  double ground_height_filter_threshold_;
-  double free_space_voxel_res_;
-  std::unique_ptr<patchwork::PclGroundSegmenter> ground_segmenter_;
 
   ///// ROS2 Publishers
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
@@ -160,7 +155,6 @@ class PgoSc : public rclcpp::Node {
   visualization_msgs::msg::Marker getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
   void optimizeGraph(bool is_loop);
-  void segmentGroundForKeyframe(PosePcd &pose_pcd);
   void publishKeyframe(const PosePcd &keyframe);
 
   // Callbacks
