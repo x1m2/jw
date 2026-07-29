@@ -1,13 +1,25 @@
 #include "robot_runtime/robot_runtime_node.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <future>
 #include <stdexcept>
 #include <string>
 
+#include "robot_runtime/pose_utils.hpp"
+
 namespace robot_runtime {
+
+namespace {
+
+bool finitePoseFields(double x, double y, double z, double theta) {
+  return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
+         std::isfinite(theta);
+}
+
+}  // namespace
 
 RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
   const auto map_root = declare_parameter<std::string>(
@@ -96,7 +108,7 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
       rclcpp::QoS(1).reliable().transient_local());
   keyframe_cloud_pub_ = create_publisher<MapKeyframe>(
       "/robot/keyframe_cloud", rclcpp::QoS(100).reliable());
-  current_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+  current_pose_pub_ = create_publisher<RobotPose>(
       "/robot/current_pose", rclcpp::QoS(20).reliable());
   body_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/robot/cloud_body", rclcpp::QoS(20).best_effort());
@@ -124,7 +136,7 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
       create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
           "/initialpose", rclcpp::QoS(1).reliable());
 
-  // 协议2.1～2.5、2.7～2.9：只创建协议中定义的APP Service。
+  // 协议2.1～2.5、2.8～2.9：只创建协议中定义的APP Service。
   start_mapping_service_ = create_service<StartMapping>(
       "/robot/start_mapping",
       std::bind(&RobotRuntimeNode::startMappingCallback, this,
@@ -147,12 +159,6 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default,
       localization_control_callback_group_);
-  navigate_to_pose_service_ = create_service<NavigateToPose>(
-      "/robot/navigate_to_pose",
-      std::bind(&RobotRuntimeNode::navigateToPoseCallback, this,
-                std::placeholders::_1, std::placeholders::_2),
-      rmw_qos_profile_services_default,
-      navigation_result_callback_group_);
   pause_navigation_service_ = create_service<Trigger>(
       "/robot/pause_navigation",
       std::bind(&RobotRuntimeNode::pauseNavigationCallback, this,
@@ -170,6 +176,16 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
       std::bind(&RobotRuntimeNode::handleNavigationCancel, this,
                 std::placeholders::_1),
       std::bind(&RobotRuntimeNode::handleNavigationAccepted, this,
+                std::placeholders::_1));
+
+  // 协议2.7：单点导航同样使用Action，支持状态反馈和GoalHandle取消。
+  navigate_to_pose_action_ = rclcpp_action::create_server<NavigateToPose>(
+      this, "/robot/navigate_to_pose",
+      std::bind(&RobotRuntimeNode::handleNavigateToPoseGoal, this,
+                std::placeholders::_1, std::placeholders::_2),
+      std::bind(&RobotRuntimeNode::handleNavigateToPoseCancel, this,
+                std::placeholders::_1),
+      std::bind(&RobotRuntimeNode::handleNavigateToPoseAccepted, this,
                 std::placeholders::_1));
 
   // fastlio_localization 重定位成功后自动将运行模式切换为 ready。
@@ -465,6 +481,15 @@ void RobotRuntimeNode::startLocalizationCallback(
     return;
   }
 
+  const bool use_initial_pose = request->use_initial_pose;
+  if (use_initial_pose &&
+      !finitePoseFields(request->x, request->y, request->z, request->theta)) {
+    response->success = false;
+    response->message =
+        "initial pose x/y/z/theta contain non-finite values";
+    return;
+  }
+
   // 同一时间只允许一个重定位请求执行。
   std::unique_lock<std::mutex> command_lock(localization_command_mutex_);
   if (!state_machine_.beginLocalization()) {
@@ -489,8 +514,14 @@ void RobotRuntimeNode::startLocalizationCallback(
   }
   RCLCPP_INFO(get_logger(), "%s", bbs_message.c_str());
 
-  const bool use_initial_pose = request->use_initial_pose;
-  const geometry_msgs::msg::Pose initial_pose = request->initial_pose;
+  // 协议使用x/y/z/theta；算法内部仍使用geometry_msgs/Pose四元数。
+  geometry_msgs::msg::Pose initial_pose;
+  initial_pose.orientation.w = 1.0;
+  if (use_initial_pose) {
+    initial_pose =
+        pose_utils::fromXyzTheta(request->x, request->y, request->z,
+                                request->theta);
+  }
   ++session_id_;
   const uint64_t session_id = session_id_;
   {
@@ -682,56 +713,69 @@ rclcpp_action::GoalResponse RobotRuntimeNode::handleNavigationGoal(
 }
 
 rclcpp_action::CancelResponse RobotRuntimeNode::handleNavigationCancel(
-    const std::shared_ptr<NavigationGoalHandle>) {
+    const std::shared_ptr<StartNavigationGoalHandle>) {
   navigation_task_executor_->cancel();
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
 void RobotRuntimeNode::handleNavigationAccepted(
-    const std::shared_ptr<NavigationGoalHandle> goal_handle) {
+    const std::shared_ptr<StartNavigationGoalHandle> goal_handle) {
   ++session_id_;
-  navigation_task_executor_->startAction(goal_handle, session_id_);
+  navigation_task_executor_->startPatrolAction(goal_handle, session_id_);
 }
 
-void RobotRuntimeNode::navigateToPoseCallback(
-    const NavigateToPose::Request::SharedPtr request,
-    NavigateToPose::Response::SharedPtr response) {
-  // 协议2.7：用“当前map位姿 + APP目标位姿”生成两点拓扑后执行导航。
+rclcpp_action::GoalResponse RobotRuntimeNode::handleNavigateToPoseGoal(
+    const rclcpp_action::GoalUUID &,
+    std::shared_ptr<const NavigateToPose::Goal> goal) {
+  // 协议2.7：校验目标、定位Ready状态和当前map位姿后再接受Goal。
   if (state_machine_.mode() != RobotMode::kReady) {
-    response->success = false;
-    response->message =
-        "single-point navigation rejected, localization is not ready, "
-        "current state=" +
-        std::string(toString(state_machine_.mode()));
-    return;
+    const std::string current_state(toString(state_machine_.mode()));
+    RCLCPP_WARN(get_logger(),
+                "Reject single-point goal: localization is not ready, "
+                "current state=%s",
+                current_state.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
   }
 
   std::string message;
-  if (!navigation_task_executor_->validatePose(request->pose, message)) {
-    response->success = false;
-    response->message = "invalid target pose: " + message;
-    return;
+  if (!navigation_task_executor_->validateGoal(*goal, message)) {
+    RCLCPP_WARN(get_logger(), "Reject single-point goal: %s",
+                message.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
   }
 
-  geometry_msgs::msg::PoseStamped current_pose;
   {
     std::lock_guard<std::mutex> lock(current_pose_mutex_);
     if (!has_current_pose_) {
-      response->success = false;
-      response->message =
-          "single-point navigation rejected: current map pose is unavailable";
-      return;
+      RCLCPP_WARN(get_logger(),
+                  "Reject single-point goal: current map pose is unavailable");
+      return rclcpp_action::GoalResponse::REJECT;
     }
-    current_pose = current_pose_;
   }
   if (!navigation_task_executor_->reserveOperation(message)) {
-    response->success = false;
-    response->message = message;
-    return;
+    RCLCPP_WARN(get_logger(), "Reject single-point goal: %s",
+                message.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse RobotRuntimeNode::handleNavigateToPoseCancel(
+    const std::shared_ptr<NavigateToPoseGoalHandle>) {
+  navigation_task_executor_->cancel();
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void RobotRuntimeNode::handleNavigateToPoseAccepted(
+    const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle) {
+  geometry_msgs::msg::PoseStamped current_pose;
+  {
+    std::lock_guard<std::mutex> lock(current_pose_mutex_);
+    current_pose = current_pose_;
   }
   ++session_id_;
-  response->success = navigation_task_executor_->navigateToPose(
-      current_pose, request->pose, session_id_, response->message);
+  navigation_task_executor_->startNavigateToPoseAction(
+      goal_handle, current_pose, session_id_);
 }
 
 void RobotRuntimeNode::navigationStateCallback(
@@ -742,13 +786,18 @@ void RobotRuntimeNode::navigationStateCallback(
 
 void RobotRuntimeNode::currentPoseCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr message) {
-  // 协议2.10：缓存map位姿供单点导航使用，并实时转发给APP。
+  // 协议2.10：内部保留完整Pose供导航，向APP发布x/y/z/theta。
   {
     std::lock_guard<std::mutex> lock(current_pose_mutex_);
     current_pose_ = *message;
     has_current_pose_ = true;
   }
-  current_pose_pub_->publish(*message);
+  RobotPose robot_pose;
+  robot_pose.x = message->pose.position.x;
+  robot_pose.y = message->pose.position.y;
+  robot_pose.z = message->pose.position.z;
+  robot_pose.theta = pose_utils::yaw(message->pose.orientation);
+  current_pose_pub_->publish(robot_pose);
 }
 
 void RobotRuntimeNode::bodyCloudCallback(

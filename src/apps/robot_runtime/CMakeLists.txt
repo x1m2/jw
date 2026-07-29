@@ -13,6 +13,8 @@ find_package(robot_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 add_library(${PROJECT_NAME}_core SHARED
   src/bbs_voxel_generator.cpp
@@ -40,6 +42,8 @@ ament_target_dependencies(${PROJECT_NAME}_core
   sensor_msgs
   std_msgs
   std_srvs
+  tf2
+  tf2_geometry_msgs
 )
 
 add_executable(robot_runtime_node src/main.cpp)
@@ -69,6 +73,6 @@ ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_include_directories(include)
 ament_export_dependencies(
   geometry_msgs rclcpp rclcpp_action robot_interfaces sensor_msgs std_msgs
-  std_srvs)
+  std_srvs tf2 tf2_geometry_msgs)
 
 ament_package()

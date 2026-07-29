@@ -11,6 +11,7 @@
 
 #include "robot_interfaces/msg/navigation_node.hpp"
 #include "robot_interfaces/msg/runtime_state.hpp"
+#include "robot_runtime/pose_utils.hpp"
 
 namespace robot_runtime {
 
@@ -71,9 +72,30 @@ bool NavigationTaskExecutor::validatePose(
   return true;
 }
 
+bool NavigationTaskExecutor::validatePoseFields(
+    double x, double y, double z, double theta, std::string &message) const {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+      !std::isfinite(theta)) {
+    message = "x/y/z/theta contain non-finite values";
+    return false;
+  }
+  return true;
+}
+
+robot_interfaces::msg::NavigationNode NavigationTaskExecutor::nodeFromPose(
+    uint32_t node_id, const geometry_msgs::msg::Pose &pose) {
+  robot_interfaces::msg::NavigationNode node;
+  node.node_id = node_id;
+  node.x = pose.position.x;
+  node.y = pose.position.y;
+  node.z = pose.position.z;
+  node.theta = pose_utils::yaw(pose.orientation);
+  return node;
+}
+
 bool NavigationTaskExecutor::validateGoal(
     const StartNavigation::Goal &goal, std::string &message) const {
-  // APP节点ID用于反馈，必须唯一；Pose必须能安全交给规划和控制算法。
+  // APP节点ID用于反馈，必须唯一；四自由度位姿必须都是有限值。
   if (goal.nodes.empty()) {
     message = "nodes are required";
     return false;
@@ -90,7 +112,7 @@ bool NavigationTaskExecutor::validateGoal(
       message = "duplicate node_id=" + std::to_string(node.node_id);
       return false;
     }
-    if (!validatePose(node.pose, message)) {
+    if (!validatePoseFields(node.x, node.y, node.z, node.theta, message)) {
       message = "node_id=" + std::to_string(node.node_id) + ": " + message;
       return false;
     }
@@ -98,8 +120,13 @@ bool NavigationTaskExecutor::validateGoal(
   return true;
 }
 
+bool NavigationTaskExecutor::validateGoal(
+    const NavigateToPose::Goal &goal, std::string &message) const {
+  return validatePoseFields(goal.x, goal.y, goal.z, goal.theta, message);
+}
+
 bool NavigationTaskExecutor::reserveOperation(std::string &message) {
-  // Action巡检和Service单点导航共用同一执行资源，禁止并发改写拓扑文件。
+  // 两种导航Action共用同一套Worker和拓扑文件，协议要求禁止并发执行。
   std::lock_guard<std::mutex> lock(operation_mutex_);
   if (operation_active_) {
     message = "another navigation task is active";
@@ -123,11 +150,23 @@ void NavigationTaskExecutor::configureMap(
   map_directory_ = map_directory;
 }
 
-void NavigationTaskExecutor::startAction(
-    const std::shared_ptr<GoalHandle> &goal_handle, uint64_t session_id) {
+void NavigationTaskExecutor::startPatrolAction(
+    const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
+    uint64_t session_id) {
   if (execution_thread_.joinable()) execution_thread_.join();
-  execution_thread_ = std::thread(
-      &NavigationTaskExecutor::executeAction, this, goal_handle, session_id);
+  execution_thread_ =
+      std::thread(&NavigationTaskExecutor::executePatrolAction, this,
+                  goal_handle, session_id);
+}
+
+void NavigationTaskExecutor::startNavigateToPoseAction(
+    const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
+    const geometry_msgs::msg::PoseStamped &current_pose,
+    uint64_t session_id) {
+  if (execution_thread_.joinable()) execution_thread_.join();
+  execution_thread_ =
+      std::thread(&NavigationTaskExecutor::executeNavigateToPoseAction, this,
+                  goal_handle, current_pose, session_id);
 }
 
 void NavigationTaskExecutor::cancel() {
@@ -138,8 +177,9 @@ void NavigationTaskExecutor::cancel() {
   result_cv_.notify_all();
 }
 
-void NavigationTaskExecutor::executeAction(
-    const std::shared_ptr<GoalHandle> &goal_handle, uint64_t session_id) {
+void NavigationTaskExecutor::executePatrolAction(
+    const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
+    uint64_t session_id) {
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<StartNavigation::Result>();
   uint32_t completed_count = 0U;
@@ -211,8 +251,12 @@ void NavigationTaskExecutor::executeAction(
       }
 
       // 每次只下发一个目标；到达后反馈该APP node_id，再继续下一个节点。
-      target_pose_pub_->publish(node.pose);
-      if (!waitForGoal(goal_handle, config_.goal_timeout_sec)) {
+      target_pose_pub_->publish(
+          pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta));
+      if (!waitForGoal(config_.goal_timeout_sec,
+                       [goal_handle]() {
+                         return goal_handle->is_canceling();
+                       })) {
         std::lock_guard<std::mutex> lock(result_mutex_);
         cancelled = cancel_requested_ || shutting_down_ ||
                     goal_handle->is_canceling();
@@ -272,75 +316,122 @@ void NavigationTaskExecutor::executeAction(
   releaseOperation();
 }
 
-bool NavigationTaskExecutor::navigateToPose(
-    const geometry_msgs::msg::PoseStamped &current_pose,
-    const geometry_msgs::msg::Pose &target_pose, uint64_t session_id,
-    std::string &message) {
+void NavigationTaskExecutor::executeNavigateToPoseAction(
+    const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
+    geometry_msgs::msg::PoseStamped current_pose, uint64_t session_id) {
+  const auto goal = goal_handle->get_goal();
+  auto result = std::make_shared<NavigateToPose::Result>();
+  std::string message;
+
   if (task_directory_.empty()) {
-    message = "navigation map is not configured; call load_map first";
+    result->success = false;
+    result->message =
+        "navigation map is not configured; call load_map first";
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
   if (current_pose.header.frame_id != "map") {
-    message = "current pose frame is '" + current_pose.header.frame_id +
-              "', expected 'map'";
+    result->success = false;
+    result->message =
+        "current pose frame is '" + current_pose.header.frame_id +
+        "', expected 'map'";
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
   if (!validatePose(current_pose.pose, message)) {
-    message = "invalid current pose: " + message;
+    result->success = false;
+    result->message = "invalid current pose: " + message;
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
-  if (!validatePose(target_pose, message)) {
-    message = "invalid target pose: " + message;
+  if (!validateGoal(*goal, message)) {
+    result->success = false;
+    result->message = "invalid target pose: " + message;
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
+  const auto target_pose =
+      pose_utils::fromXyzTheta(goal->x, goal->y, goal->z, goal->theta);
 
-  // 单点协议没有现成拓扑：用实时定位位姿作为起点、APP Pose作为终点。
+  // 单点协议没有现成拓扑：用实时map位姿作为起点、APP目标作为终点。
   std::vector<robot_interfaces::msg::NavigationNode> topology_nodes(2U);
-  topology_nodes[0].node_id = 0U;
-  topology_nodes[0].pose = current_pose.pose;
+  topology_nodes[0] = nodeFromPose(0U, current_pose.pose);
   topology_nodes[1].node_id = 1U;
-  topology_nodes[1].pose = target_pose;
+  topology_nodes[1].x = goal->x;
+  topology_nodes[1].y = goal->y;
+  topology_nodes[1].z = goal->z;
+  topology_nodes[1].theta = goal->theta;
+
   // 单点导航使用固定专用文件，不覆盖APP巡检任务文件。
   topology_file_ = task_directory_ / "single_point_navigation.txt";
   topology_writer_->setOutputFile(topology_file_);
   if (!topology_writer_->write(topology_nodes, message)) {
+    result->success = false;
+    result->message = message;
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
   RCLCPP_INFO(node_->get_logger(),
               "Single-point topology generated from current pose to target: %s",
               message.c_str());
+  auto feedback = std::make_shared<NavigateToPose::Feedback>();
+  feedback->message = "navigation topology generated";
+  goal_handle->publish_feedback(feedback);
+
+  bool cancelled_before_start = false;
+  {
+    std::lock_guard<std::mutex> lock(result_mutex_);
+    cancelled_before_start =
+        cancel_requested_ || shutting_down_ || goal_handle->is_canceling();
+  }
+  if (cancelled_before_start) {
+    result->success = false;
+    result->message = "navigation cancelled";
+    goal_handle->canceled(result);
+    releaseOperation();
+    return;
+  }
 
   if (!state_machine_->beginNavigation()) {
-    message = "single-point navigation rejected, localization is not ready, "
-              "current state=" +
-              std::string(toString(state_machine_->mode()));
+    result->success = false;
+    result->message =
+        "single-point navigation rejected, localization is not ready, "
+        "current state=" +
+        std::string(toString(state_machine_->mode()));
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
-  resetGoalState();
   callbacks_.publish_mode();
 
   if (!startWorkers(session_id, message)) {
     callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, message);
+    result->success = false;
+    result->message = message;
+    goal_handle->abort(result);
     releaseOperation();
-    return false;
+    return;
   }
   state_machine_->navigationStarted();
   callbacks_.publish_mode();
+  feedback = std::make_shared<NavigateToPose::Feedback>();
+  feedback->message = "navigating to target";
+  goal_handle->publish_feedback(feedback);
   target_pose_pub_->publish(target_pose);
 
-  bool reached = false;
+  const bool reached =
+      waitForGoal(config_.goal_timeout_sec,
+                  [goal_handle]() { return goal_handle->is_canceling(); });
+  bool cancelled = false;
   {
-    std::unique_lock<std::mutex> lock(result_mutex_);
-    reached = result_cv_.wait_for(
-                  lock, std::chrono::duration<double>(config_.goal_timeout_sec),
-                  [this]() { return goal_reached_ || shutting_down_; }) &&
-              goal_reached_;
+    std::lock_guard<std::mutex> lock(result_mutex_);
+    cancelled =
+        cancel_requested_ || shutting_down_ || goal_handle->is_canceling();
   }
 
   if (state_machine_->beginStopNavigation()) callbacks_.publish_mode();
@@ -348,20 +439,31 @@ bool NavigationTaskExecutor::navigateToPose(
   const bool stopped = stopWorkers(session_id, stop_message);
   if (stopped) state_machine_->navigationStopped();
 
-  if (!reached || !stopped) {
-    message = !reached ? "single-point navigation timed out"
-                       : "single-point navigation completed but " +
-                             stop_message;
-    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, message);
-    releaseOperation();
-    return false;
+  if (cancelled) {
+    result->success = false;
+    result->message = stopped ? "navigation cancelled"
+                              : "navigation cancelled; " + stop_message;
+    if (stopped) {
+      callbacks_.publish_mode();
+    } else {
+      callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    }
+    goal_handle->canceled(result);
+  } else if (!reached || !stopped) {
+    result->success = false;
+    result->message =
+        !reached ? "navigation timed out"
+                 : "navigation completed but " + stop_message;
+    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    goal_handle->abort(result);
+  } else {
+    result->success = true;
+    result->message = "navigation succeeded";
+    callbacks_.publish_runtime_state(RuntimeState::NAVIGATION_SUCCEEDED);
+    callbacks_.publish_mode();
+    goal_handle->succeed(result);
   }
-
-  message = "single-point navigation succeeded";
-  callbacks_.publish_runtime_state(RuntimeState::NAVIGATION_SUCCEEDED);
-  callbacks_.publish_mode();
   releaseOperation();
-  return true;
 }
 
 void NavigationTaskExecutor::onNavigationState(bool reached) {
@@ -422,13 +524,13 @@ bool NavigationTaskExecutor::stopWorkers(uint64_t session_id,
 }
 
 bool NavigationTaskExecutor::waitForGoal(
-    const std::shared_ptr<GoalHandle> &goal_handle, double timeout_sec) {
+    double timeout_sec, const std::function<bool()> &is_canceling) {
   std::unique_lock<std::mutex> lock(result_mutex_);
   return result_cv_.wait_for(
              lock, std::chrono::duration<double>(timeout_sec),
-             [this, &goal_handle]() {
+             [this, &is_canceling]() {
                return goal_reached_ || cancel_requested_ || shutting_down_ ||
-                      goal_handle->is_canceling();
+                      is_canceling();
              }) &&
          goal_reached_;
 }

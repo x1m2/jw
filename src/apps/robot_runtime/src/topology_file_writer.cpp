@@ -58,8 +58,7 @@ bool TopologyFileWriter::write(
     // 文件使用连续内部ID；APP node_id保留在标签中，用于识别原始节点。
     for (std::size_t index = 0; index < nodes.size(); ++index) {
       const auto &node = nodes[index];
-      output << index << " " << node.pose.position.x << " "
-             << node.pose.position.y << " " << node.pose.position.z
+      output << index << " " << node.x << " " << node.y << " " << node.z
              << " app_node_" << node.node_id << "\n";
     }
 
@@ -67,8 +66,8 @@ bool TopologyFileWriter::write(
     output << "# Topology Edges\n";
     // APP数组顺序就是巡检顺序，相邻节点按三维距离建立双向边。
     for (std::size_t index = 0; index + 1U < nodes.size(); ++index) {
-      const auto &from = nodes[index].pose.position;
-      const auto &to = nodes[index + 1U].pose.position;
+      const auto &from = nodes[index];
+      const auto &to = nodes[index + 1U];
       const double dx = to.x - from.x;
       const double dy = to.y - from.y;
       const double dz = to.z - from.z;

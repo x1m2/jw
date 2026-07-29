@@ -17,13 +17,14 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
+#include "robot_interfaces/action/navigate_to_pose.hpp"
 #include "robot_interfaces/action/start_navigation.hpp"
 #include "robot_interfaces/msg/map_keyframe.hpp"
 #include "robot_interfaces/msg/navigation_node.hpp"
+#include "robot_interfaces/msg/robot_pose.hpp"
 #include "robot_interfaces/msg/runtime_state.hpp"
 #include "robot_interfaces/srv/delete_map.hpp"
 #include "robot_interfaces/srv/load_map.hpp"
-#include "robot_interfaces/srv/navigate_to_pose.hpp"
 #include "robot_interfaces/srv/start_localization.hpp"
 #include "robot_interfaces/srv/start_mapping.hpp"
 
@@ -48,13 +49,16 @@ class RobotRuntimeNode : public rclcpp::Node {
   using DeleteMap = robot_interfaces::srv::DeleteMap;
   using LoadMap = robot_interfaces::srv::LoadMap;
   using MapKeyframe = robot_interfaces::msg::MapKeyframe;
-  using NavigateToPose = robot_interfaces::srv::NavigateToPose;
+  using NavigateToPose = robot_interfaces::action::NavigateToPose;
+  using RobotPose = robot_interfaces::msg::RobotPose;
   using RuntimeState = robot_interfaces::msg::RuntimeState;
   using StartLocalization = robot_interfaces::srv::StartLocalization;
   using StartMapping = robot_interfaces::srv::StartMapping;
   using StartNavigation = robot_interfaces::action::StartNavigation;
-  using NavigationGoalHandle =
+  using StartNavigationGoalHandle =
       rclcpp_action::ServerGoalHandle<StartNavigation>;
+  using NavigateToPoseGoalHandle =
+      rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
   // 协议2.1～2.5：地图生命周期和重定位Service入口。
   void startMappingCallback(const StartMapping::Request::SharedPtr request,
@@ -68,10 +72,7 @@ class RobotRuntimeNode : public rclcpp::Node {
   void startLocalizationCallback(
       const StartLocalization::Request::SharedPtr request,
       StartLocalization::Response::SharedPtr response);
-  // 协议2.7～2.9：单点导航、暂停和继续Service入口。
-  void navigateToPoseCallback(
-      const NavigateToPose::Request::SharedPtr request,
-      NavigateToPose::Response::SharedPtr response);
+  // 协议2.8～2.9：暂停和继续当前导航Action。
   void pauseNavigationCallback(const Trigger::Request::SharedPtr request,
                                Trigger::Response::SharedPtr response);
   void resumeNavigationCallback(const Trigger::Request::SharedPtr request,
@@ -82,9 +83,18 @@ class RobotRuntimeNode : public rclcpp::Node {
       const rclcpp_action::GoalUUID &uuid,
       std::shared_ptr<const StartNavigation::Goal> goal);
   rclcpp_action::CancelResponse handleNavigationCancel(
-      const std::shared_ptr<NavigationGoalHandle> goal_handle);
+      const std::shared_ptr<StartNavigationGoalHandle> goal_handle);
   void handleNavigationAccepted(
-      const std::shared_ptr<NavigationGoalHandle> goal_handle);
+      const std::shared_ptr<StartNavigationGoalHandle> goal_handle);
+
+  // 协议2.7：单点导航Action的接收、取消和异步执行入口。
+  rclcpp_action::GoalResponse handleNavigateToPoseGoal(
+      const rclcpp_action::GoalUUID &uuid,
+      std::shared_ptr<const NavigateToPose::Goal> goal);
+  rclcpp_action::CancelResponse handleNavigateToPoseCancel(
+      const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
+  void handleNavigateToPoseAccepted(
+      const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
 
   // 算法内部结果及协议2.10～2.12数据Topic的转发回调。
   void relocalizationResultCallback(
@@ -145,15 +155,14 @@ class RobotRuntimeNode : public rclcpp::Node {
   rclcpp::Service<LoadMap>::SharedPtr load_map_service_;
   rclcpp::Service<DeleteMap>::SharedPtr delete_map_service_;
   rclcpp::Service<StartLocalization>::SharedPtr start_localization_service_;
-  rclcpp::Service<NavigateToPose>::SharedPtr navigate_to_pose_service_;
   rclcpp::Service<Trigger>::SharedPtr pause_navigation_service_;
   rclcpp::Service<Trigger>::SharedPtr resume_navigation_service_;
   rclcpp_action::Server<StartNavigation>::SharedPtr start_navigation_action_;
+  rclcpp_action::Server<NavigateToPose>::SharedPtr navigate_to_pose_action_;
 
   rclcpp::Publisher<RuntimeState>::SharedPtr runtime_state_pub_;
   rclcpp::Publisher<MapKeyframe>::SharedPtr keyframe_cloud_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
-      current_pose_pub_;
+  rclcpp::Publisher<RobotPose>::SharedPtr current_pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr body_cloud_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       initial_pose_pub_;

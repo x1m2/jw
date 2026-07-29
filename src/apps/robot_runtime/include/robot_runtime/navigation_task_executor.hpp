@@ -14,7 +14,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
+#include "robot_interfaces/action/navigate_to_pose.hpp"
 #include "robot_interfaces/action/start_navigation.hpp"
+#include "robot_interfaces/msg/navigation_node.hpp"
 
 #include "robot_runtime/navigation_controller.hpp"
 #include "robot_runtime/robot_state_machine.hpp"
@@ -26,7 +28,11 @@ namespace robot_runtime {
 class NavigationTaskExecutor {
  public:
   using StartNavigation = robot_interfaces::action::StartNavigation;
-  using GoalHandle = rclcpp_action::ServerGoalHandle<StartNavigation>;
+  using StartNavigationGoalHandle =
+      rclcpp_action::ServerGoalHandle<StartNavigation>;
+  using NavigateToPose = robot_interfaces::action::NavigateToPose;
+  using NavigateToPoseGoalHandle =
+      rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
   struct Config {
     double control_timeout_sec{3.0};
@@ -49,31 +55,42 @@ class NavigationTaskExecutor {
 
   bool validateGoal(const StartNavigation::Goal &goal,
                     std::string &message) const;
-  bool validatePose(const geometry_msgs::msg::Pose &pose,
+  bool validateGoal(const NavigateToPose::Goal &goal,
                     std::string &message) const;
 
   bool reserveOperation(std::string &message);
   // load_map成功后配置当前map_id专属的任务目录和地图目录。
   void configureMap(const std::filesystem::path &task_directory,
                     const std::filesystem::path &map_directory);
-  void startAction(const std::shared_ptr<GoalHandle> &goal_handle,
-                   uint64_t session_id);
+  void startPatrolAction(
+      const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
+      uint64_t session_id);
+  void startNavigateToPoseAction(
+      const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
+      const geometry_msgs::msg::PoseStamped &current_pose,
+      uint64_t session_id);
   void cancel();
-
-  bool navigateToPose(const geometry_msgs::msg::PoseStamped &current_pose,
-                      const geometry_msgs::msg::Pose &target_pose,
-                      uint64_t session_id, std::string &message);
 
   void onNavigationState(bool reached);
   bool setPaused(bool paused, std::string &message);
 
  private:
-  void executeAction(const std::shared_ptr<GoalHandle> &goal_handle,
-                     uint64_t session_id);
+  void executePatrolAction(
+      const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
+      uint64_t session_id);
+  void executeNavigateToPoseAction(
+      const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
+      geometry_msgs::msg::PoseStamped current_pose, uint64_t session_id);
+  bool validatePose(const geometry_msgs::msg::Pose &pose,
+                    std::string &message) const;
+  bool validatePoseFields(double x, double y, double z, double theta,
+                          std::string &message) const;
+  static robot_interfaces::msg::NavigationNode nodeFromPose(
+      uint32_t node_id, const geometry_msgs::msg::Pose &pose);
   bool startWorkers(uint64_t session_id, std::string &message);
   bool stopWorkers(uint64_t session_id, std::string &message);
-  bool waitForGoal(const std::shared_ptr<GoalHandle> &goal_handle,
-                   double timeout_sec);
+  bool waitForGoal(double timeout_sec,
+                   const std::function<bool()> &is_canceling);
   void resetGoalState();
   void releaseOperation();
 
