@@ -36,7 +36,7 @@ def generate_launch_description():
         description='Yaml config file path'
     )
     declare_config_file_cmd = DeclareLaunchArgument(
-        'config_file', default_value='mid360_0.yaml',
+        'config_file', default_value='mid360_24deg.yaml',
         description='Config file'
     )
     declare_rviz_config_path_cmd = DeclareLaunchArgument(
