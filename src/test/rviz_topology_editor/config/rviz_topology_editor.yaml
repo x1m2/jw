@@ -15,21 +15,7 @@
     marker_topic: "/rviz_topology_editor/markers"
 
     # true时将显示点云压到z=0，适合RViz的2D Goal Pose。
-    # 原始PCD仍用于下面的高度查询。
     flatten_cloud_for_display: false
-
-    # pcd_percentile：在点击位置附近从PCD估计Z，再加target_z_offset。
-    # fixed：直接使用fixed_z，适合已经确定楼层参考高度的情况。
-    z_mode: "pcd_percentile"
-    fixed_z: 0.0
-    target_z_offset: 0.3
-    z_search_radius: 0.8
-    z_percentile: 0.1
-
-    # 当前编辑楼层的高度范围。多楼层地图必须限制该范围，
-    # 防止相同XY查询到其他楼层。
-    z_min: -2.0
-    z_max: 3.5
 
     # 大地图中拓扑点、ID文字和连线的显示尺寸，单位均为米。
     marker_arrow_length: 2.0       # 箭头的长度

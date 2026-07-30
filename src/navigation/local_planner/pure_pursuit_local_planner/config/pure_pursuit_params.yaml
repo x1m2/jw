@@ -10,7 +10,7 @@
     lookahead_distance_max: 0.7
     goal_tolerance: 0.10
 
-    max_linear_velocity: 0.5    ##最大线速度x
+    max_linear_velocity: 0.6    ##最大线速度x
     max_linear_velocity_y: 0.3
     max_angular_velocity: 0.7  ##最大角速度
     min_linear_velocity: 0.1

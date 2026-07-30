@@ -208,6 +208,51 @@ class NavigationWorkflowGUI:
                 continue
             return map_id
 
+    def prompt_existing_map_id(self, action_title):
+        """读取已有地图ID；地图PCD不存在时提示并允许重新输入。"""
+        while True:
+            value = simpledialog.askstring(
+                action_title,
+                "请输入已有地图的 map_id（0～4294967295）：",
+                initialvalue=str(self.map_id),
+                parent=self.root,
+            )
+            if value is None:
+                self.add_log(f"用户取消输入 map_id，未{action_title}")
+                return None
+
+            value = value.strip()
+            if not value:
+                messagebox.showerror("map_id 无效", "map_id 必须输入，不能为空。")
+                continue
+            if not value.isdecimal():
+                messagebox.showerror(
+                    "map_id 无效", "map_id 必须是 0～4294967295 的非负整数。"
+                )
+                continue
+
+            map_id = int(value, 10)
+            if map_id > 4294967295:
+                messagebox.showerror(
+                    "map_id 无效", "map_id 超出 uint32 范围（最大 4294967295）。"
+                )
+                continue
+
+            map_pcd_file = os.path.join(
+                self.data_dir, f"map_{map_id}", "map", "globalmap.pcd"
+            )
+            if not os.path.isfile(map_pcd_file):
+                messagebox.showerror(
+                    "地图不存在",
+                    f"没有找到 map_id={map_id} 的地图：\n{map_pcd_file}",
+                )
+                self.add_log(
+                    f"map_id={map_id} 地图不存在，未{action_title}: "
+                    f"{map_pcd_file}"
+                )
+                continue
+            return map_id
+
     def _kill_env(self):
         env = os.environ.copy()
         env.update({
@@ -1049,10 +1094,18 @@ class NavigationWorkflowGUI:
         if self.edit_map_running:
             messagebox.showwarning("提示", "地图打点已经在运行")
             return
+        map_id = self.prompt_existing_map_id("启动地图打点")
+        if map_id is None:
+            return
+        self.configure_map_context(map_id)
+        self.add_log(
+            f"为 map_id={map_id} 启动地图打点，数据目录: "
+            f"{self.runtime_data_dir}"
+        )
         self.update_map_status_display()
         self.edit_map_terminal_process = self.start_script_in_terminal(
             self.run_rviz_topology_editor_script,
-            "地图打点 - rviz_topology_editor",
+            f"地图打点 map_{map_id} - rviz_topology_editor",
             keep_open=True,
             extra_env={
                 "MAP_ID": self.map_id,
@@ -1088,10 +1141,19 @@ class NavigationWorkflowGUI:
         if self.nav_running or self.relocalization_running:
             messagebox.showwarning("提示", "自主导航或重定位流程已经在运行")
             return
+        map_id = self.prompt_existing_map_id("启动自主导航")
+        if map_id is None:
+            return
+        self.configure_map_context(map_id)
+        self.add_log(
+            f"为 map_id={map_id} 启动自主导航，数据目录: "
+            f"{self.runtime_data_dir}"
+        )
         self.update_map_status_display()
         if not messagebox.askyesno(
             "启动自主导航",
-            "清理旧节点并重定位。\n成功后需要确认位置，再启动导航。\n\n是否继续？",
+            f"使用 map_id={map_id} 清理旧节点并重定位。\n"
+            "成功后需要确认位置，再启动导航。\n\n是否继续？",
         ):
             return
         if not self.kill_old_nodes_before_relocalization():
@@ -1115,7 +1177,7 @@ class NavigationWorkflowGUI:
 
         self.nav_terminal_process = self.start_script_in_terminal(
             self.run_nav_script,
-            "重定位与自主导航 - run_nav",
+            f"重定位与自主导航 map_{map_id} - run_nav",
             keep_open=False,
             extra_env={
                 "MAP_ID": self.map_id,

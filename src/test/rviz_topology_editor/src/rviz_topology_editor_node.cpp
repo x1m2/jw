@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -8,7 +7,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/point.hpp>
@@ -139,13 +137,6 @@ private:
     declare_parameter<std::string>("marker_topic",
                                    "/rviz_topology_editor/markers");
     declare_parameter<bool>("flatten_cloud_for_display", true);
-    declare_parameter<std::string>("z_mode", "pcd_percentile");
-    declare_parameter<double>("fixed_z", 0.0);
-    declare_parameter<double>("target_z_offset", 0.3);
-    declare_parameter<double>("z_search_radius", 0.8);
-    declare_parameter<double>("z_percentile", 0.1);
-    declare_parameter<double>("z_min", -2.0);
-    declare_parameter<double>("z_max", 3.5);
     declare_parameter<double>("marker_arrow_length", 2.0);
     declare_parameter<double>("marker_arrow_width", 0.4);
     declare_parameter<double>("marker_text_scale", 1.0);
@@ -169,13 +160,6 @@ private:
     marker_topic_ = get_parameter("marker_topic").as_string();
     flatten_cloud_for_display_ =
         get_parameter("flatten_cloud_for_display").as_bool();
-    z_mode_ = get_parameter("z_mode").as_string();
-    fixed_z_ = get_parameter("fixed_z").as_double();
-    target_z_offset_ = get_parameter("target_z_offset").as_double();
-    z_search_radius_ = get_parameter("z_search_radius").as_double();
-    z_percentile_ = get_parameter("z_percentile").as_double();
-    z_min_ = get_parameter("z_min").as_double();
-    z_max_ = get_parameter("z_max").as_double();
     marker_arrow_length_ =
         get_parameter("marker_arrow_length").as_double();
     marker_arrow_width_ = get_parameter("marker_arrow_width").as_double();
@@ -194,18 +178,6 @@ private:
         frame_id_.empty()) {
       throw std::invalid_argument(
           "pcd_file, output files and frame_id must not be empty");
-    }
-    if (z_mode_ != "pcd_percentile" && z_mode_ != "fixed") {
-      throw std::invalid_argument("z_mode must be 'pcd_percentile' or 'fixed'");
-    }
-    if (z_search_radius_ <= 0.0) {
-      throw std::invalid_argument("z_search_radius must be positive");
-    }
-    if (z_percentile_ < 0.0 || z_percentile_ > 1.0) {
-      throw std::invalid_argument("z_percentile must be in [0, 1]");
-    }
-    if (z_min_ > z_max_) {
-      throw std::invalid_argument("z_min must not be greater than z_max");
     }
     if (marker_arrow_length_ <= 0.0 || marker_arrow_width_ <= 0.0 ||
         marker_text_scale_ <= 0.0 || marker_text_height_offset_ < 0.0 ||
@@ -245,42 +217,6 @@ private:
     cloud_pub_->publish(message);
   }
 
-  std::pair<bool, double> resolveZ(double x, double y) const {
-    if (z_mode_ == "fixed") {
-      return {true, fixed_z_};
-    }
-
-    const double radius_squared = z_search_radius_ * z_search_radius_;
-    std::vector<double> nearby_z;
-    nearby_z.reserve(128);
-
-    for (const auto &point : original_cloud_->points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
-          !std::isfinite(point.z)) {
-        continue;
-      }
-      if (point.z < z_min_ || point.z > z_max_) {
-        continue;
-      }
-
-      const double dx = static_cast<double>(point.x) - x;
-      const double dy = static_cast<double>(point.y) - y;
-      if (dx * dx + dy * dy <= radius_squared) {
-        nearby_z.push_back(point.z);
-      }
-    }
-
-    if (nearby_z.empty()) {
-      return {false, 0.0};
-    }
-
-    std::sort(nearby_z.begin(), nearby_z.end());
-    const auto last_index = nearby_z.size() - 1U;
-    const auto index = static_cast<std::size_t>(
-        std::floor(z_percentile_ * static_cast<double>(last_index)));
-    return {true, nearby_z[index] + target_z_offset_};
-  }
-
   void goalCallback(const geometry_msgs::msg::PoseStamped::SharedPtr message) {
     if (!message) {
       return;
@@ -292,21 +228,11 @@ private:
       return;
     }
 
-    const auto [z_found, resolved_z] =
-        resolveZ(message->pose.position.x, message->pose.position.y);
-    if (!z_found) {
-      RCLCPP_ERROR(get_logger(),
-                   "Cannot resolve Z near (%.3f, %.3f). Check z_min/z_max, "
-                   "z_search_radius or use z_mode=fixed.",
-                   message->pose.position.x, message->pose.position.y);
-      return;
-    }
-
     SavedPoint point;
     point.id = next_id_;
     point.x = message->pose.position.x;
     point.y = message->pose.position.y;
-    point.z = resolved_z;
+    point.z = 0.0;
     point.qx = message->pose.orientation.x;
     point.qy = message->pose.orientation.y;
     point.qz = message->pose.orientation.z;
@@ -649,17 +575,10 @@ private:
   std::string goal_topic_;
   std::string cloud_topic_;
   std::string marker_topic_;
-  std::string z_mode_;
 
   bool flatten_cloud_for_display_{true};
   bool auto_save_raw_points_{false};
   bool show_edges_{false};
-  double fixed_z_{0.0};
-  double target_z_offset_{0.3};
-  double z_search_radius_{0.8};
-  double z_percentile_{0.1};
-  double z_min_{-2.0};
-  double z_max_{3.5};
   double marker_arrow_length_{2.0};
   double marker_arrow_width_{0.4};
   double marker_text_scale_{1.0};

@@ -56,18 +56,10 @@ ros2 launch rviz_topology_editor rviz_topology_editor.launch.py \
 
 脚本只启动本功能包和RViz，不再启动旧的Topology Tool或Python自动连边节点。
 
-## Z参数
+## Z坐标
 
-默认在点击XY周围搜索PCD点，筛选 `z_min <= z <= z_max`，取较低分位
-高度并增加 `target_z_offset`。多楼层使用时必须通过独立参数文件为当前
-楼层设置正确的 `z_min/z_max`。
-
-如果该楼层使用固定参考高度：
-
-```yaml
-z_mode: fixed
-fixed_z: 4.2
-```
+编辑器用于单层二维导航，不解析或查询高度。RViz每次打点都统一保存
+`z=0`；输出文件继续保留z字段，以兼容现有拓扑地图和导航程序的文件格式。
 
 ## 撤销与清空
 
