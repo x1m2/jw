@@ -8,14 +8,6 @@
     livox_topic: "/livox/lidar"
     lidar_frame: "livox_frame"
 
-    # 雷达在 base_link 坐标系中的固定外参（单位：m、rad）
-    lidar_x: 0.28
-    lidar_y: 0.0
-    lidar_z: 0.70
-    lidar_roll: 0.0
-    lidar_pitch: 0.4119
-    lidar_yaw: 0.0
-
     # 在 base_link 坐标系中裁剪点云并投影为内部二维射线
     min_height: 0.2
     max_height: 1.3

@@ -7,9 +7,13 @@
       package_path: "/robotfs/data/slam_data/map"
     keyframe:
       keyframe_threshold: 1.5                     # unit [meter] every this distance, generate keyframe
+      rotation_threshold_deg: 10.0                # relative to the latest keyframe; either threshold creates a keyframe
       num_submap_keyframes: 2                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
       enable_submap_matching: false               # If it is set to be `true`, submap-level (coarse-to-)fine alignment will be performed
       # note: without Quatro, anyway scan-to-submap matching is performed, as that shows better performance
+
+    loop:
+      robust_kernel_scale: 1.0                    # Cauchy robust-kernel scale for loop factors
 
     quatro_nano_gicp_voxel_resolution: 0.3        # voxel resolution to use Quatro and Nano-GICP matching
     save_voxel_resolution: 0.3                    # voxel resolution to save map in .pcd format

@@ -1,5 +1,7 @@
 #include "laser_mapping.hpp"
 
+#include <stdexcept>
+
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
 LaserMappingNode::LaserMappingNode(const rclcpp::NodeOptions &options)
@@ -75,9 +77,8 @@ void LaserMappingNode::readParameters() {
                                           vector<double>());
   this->declare_parameter<vector<double>>("mapping.extrinsic_R",
                                           vector<double>());
-  this->declare_parameter<vector<double>>("mapping.imu_to_base_T",
-                                          vector<double>());
-  this->declare_parameter<double>("mapping.imu_to_base_R", 0.0);
+  this->declare_parameter<vector<double>>("lidar_to_base_T", vector<double>());
+  this->declare_parameter<vector<double>>("lidar_to_base_R", vector<double>());
 
   this->get_parameter_or<bool>("publish.path_en", path_en, true);
   this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -123,9 +124,10 @@ void LaserMappingNode::readParameters() {
                                          vector<double>());
   this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR,
                                          vector<double>());
-  this->get_parameter_or<vector<double>>("mapping.imu_to_base_T", imu_to_base_T,
+  this->get_parameter_or<vector<double>>("lidar_to_base_T", lidar_to_base_T,
                                          vector<double>());
-  this->get_parameter_or<double>("mapping.imu_to_base_R", imu_to_base_R, 0.0);
+  this->get_parameter_or<vector<double>>("lidar_to_base_R", lidar_to_base_R,
+                                         vector<double>());
 
   RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 }
@@ -1017,19 +1019,51 @@ void LaserMappingNode::h_share_model(
   solve_time += omp_get_wtime() - solve_start_;
 }
 
-Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() const {
+Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() {
   // FAST-LIO state: odom -> imu_link
   Eigen::Matrix4d T_odom_imu = Eigen::Matrix4d::Identity();
   T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
   T_odom_imu.block<3, 1>(0, 3) = state_point.pos;
 
-  // Static extrinsic: imu_link pose in base_link frame..
-  Eigen::Matrix4d T_base_imu = Eigen::Matrix4d::Identity();
-  T_base_imu.block<3, 3>(0, 0) =
-      Eigen::AngleAxisd(imu_to_base_R, Eigen::Vector3d::UnitY())
+  if (!gravity_aligned_lidar_tilt_initialized_) {
+    const char *tilt_source = "gravity_aligned";
+    if (align_gravity) {
+      const Eigen::Matrix3d R_odom_lidar =
+          state_point.rot.toRotationMatrix() *
+          state_point.offset_R_L_I.toRotationMatrix();
+      gravity_aligned_lidar_roll_ =
+          std::atan2(R_odom_lidar(2, 1), R_odom_lidar(2, 2));
+      gravity_aligned_lidar_pitch_ =
+          std::atan2(-R_odom_lidar(2, 0),
+                     std::hypot(R_odom_lidar(0, 0), R_odom_lidar(1, 0)));
+    } else {
+      gravity_aligned_lidar_roll_ = lidar_to_base_R[0];
+      gravity_aligned_lidar_pitch_ = lidar_to_base_R[1];
+      tilt_source = "configured_fallback";
+      RCLCPP_WARN(
+          this->get_logger(),
+          "[OUTPUT_TILT] align_gravity is disabled; fall back to configured "
+          "LiDAR roll and pitch. Mounting yaw remains zero.");
+    }
+    gravity_aligned_lidar_tilt_initialized_ = true;
+  }
+
+  // Common mount config: LiDAR pose in base_link, ^B T_L.
+  Eigen::Matrix4d T_base_lidar = Eigen::Matrix4d::Identity();
+  T_base_lidar.block<3, 3>(0, 0) =
+      (Eigen::AngleAxisd(gravity_aligned_lidar_pitch_,
+                         Eigen::Vector3d::UnitY()) *
+       Eigen::AngleAxisd(gravity_aligned_lidar_roll_, Eigen::Vector3d::UnitX()))
           .toRotationMatrix();
-  T_base_imu.block<3, 1>(0, 3) =
-      Eigen::Vector3d(imu_to_base_T[0], imu_to_base_T[1], imu_to_base_T[2]);
+  T_base_lidar.block<3, 1>(0, 3) = Eigen::Vector3d(
+      lidar_to_base_T[0], lidar_to_base_T[1], lidar_to_base_T[2]);
+
+  // FAST-LIO extrinsic: LiDAR pose in IMU, ^I T_L.
+  Eigen::Matrix4d T_imu_lidar = Eigen::Matrix4d::Identity();
+  T_imu_lidar.block<3, 3>(0, 0) = state_point.offset_R_L_I.toRotationMatrix();
+  T_imu_lidar.block<3, 1>(0, 3) = state_point.offset_T_L_I;
+
+  const Eigen::Matrix4d T_base_imu = T_base_lidar * T_imu_lidar.inverse();
 
   // Output pose: odom -> base_link.
   return T_odom_imu * T_base_imu.inverse();
@@ -1043,14 +1077,17 @@ Eigen::Matrix4d LaserMappingNode::get_output_base_transform() {
     output_origin_initialized_ = true;
 
     const Eigen::Matrix3d R_odom_base = T_odom_base.block<3, 3>(0, 0);
-    const Eigen::Vector3d euler =
-        R_odom_base.eulerAngles(2, 1, 0) * 180.0 / M_PI;
+
+    const double roll = std::atan2(R_odom_base(2, 1), R_odom_base(2, 2));
+    const double pitch = std::atan2(
+        -R_odom_base(2, 0), std::hypot(R_odom_base(0, 0), R_odom_base(1, 0)));
+    const double yaw = std::atan2(R_odom_base(1, 0), R_odom_base(0, 0));
     RCLCPP_INFO(this->get_logger(),
-                "[OUTPUT_ORIGIN] first base_link set as output origin. "
+                "[OUTPUT_ORIGIN] first base_link . "
                 "raw odom base: x=%.3f, y=%.3f, z=%.3f, "
-                "roll=%.2f deg, pitch=%.2f deg, yaw=%.2f deg",
+                "RPY(ZYX)=[roll=%.2f deg, pitch=%.2f deg, yaw=%.2f deg]",
                 T_odom_base(0, 3), T_odom_base(1, 3), T_odom_base(2, 3),
-                euler(2), euler(1), euler(0));
+                roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw * 180.0 / M_PI);
   }
 
   return T_output_origin_inv_ * T_odom_base;

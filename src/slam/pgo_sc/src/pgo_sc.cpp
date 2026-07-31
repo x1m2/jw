@@ -3,6 +3,7 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+#include <Eigen/Geometry>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -30,8 +31,11 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("quatro_nano_gicp_voxel_resolution", 0.3);
 
   this->declare_parameter<double>("keyframe.keyframe_threshold", 1.0);
+  this->declare_parameter<double>("keyframe.rotation_threshold_deg", 10.0);
   this->declare_parameter<int>("keyframe.num_submap_keyframes", 5);
   this->declare_parameter<bool>("keyframe.enable_submap_matching", false);
+
+  this->declare_parameter<double>("loop.robust_kernel_scale", 1.0);
 
   this->declare_parameter<double>("scancontext_max_correspondence_distance",
                                   35.0);
@@ -77,6 +81,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                       lc_config.voxel_res_);
 
   this->get_parameter("keyframe.keyframe_threshold", keyframe_thr_);
+  this->get_parameter("keyframe.rotation_threshold_deg",
+                      keyframe_rotation_thr_deg_);
   this->get_parameter("keyframe.num_submap_keyframes",
                       lc_config.num_submap_keyframes_);
   this->get_parameter("keyframe.enable_submap_matching",
@@ -84,6 +90,7 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
 
   this->get_parameter("scancontext_max_correspondence_distance",
                       lc_config.scancontext_max_correspondence_distance_);
+  this->get_parameter("loop.robust_kernel_scale", loop_robust_kernel_scale_);
 
   this->get_parameter("nano_gicp.thread_number", gc.nano_thread_number_);
   this->get_parameter("nano_gicp.icp_score_threshold", gc.icp_score_thr_);
@@ -410,7 +417,12 @@ void PgoSc::loopTimerFunc() {
          reg_output.score_)
             .finished();
 
-    auto loop_noise = gtsam::noiseModel::Diagonal::Variances(variance_vector);
+    auto base_loop_noise =
+        gtsam::noiseModel::Diagonal::Variances(variance_vector);
+    auto loop_noise = gtsam::noiseModel::Robust::Create(
+        gtsam::noiseModel::mEstimator::Cauchy::Create(
+            loop_robust_kernel_scale_),
+        base_loop_noise);
 
     {
       std::lock_guard<std::mutex> lock(graph_mutex_);
@@ -647,8 +659,7 @@ void PgoSc::optimizeGraph(bool is_loop) {
 void PgoSc::publishKeyframe(const PosePcd &keyframe) {
   if (keyframe.idx_ < 0) {
     RCLCPP_ERROR(this->get_logger(),
-                 "Cannot publish keyframe with negative id: %d",
-                 keyframe.idx_);
+                 "Cannot publish keyframe with negative id: %d", keyframe.idx_);
     return;
   }
 
@@ -935,8 +946,22 @@ visualization_msgs::msg::Marker PgoSc::getLoopMarkers(
 
 bool PgoSc::checkIfKeyframe(const PosePcd &pose_pcd_in,
                             const PosePcd &latest_pose_pcd) {
-  return keyframe_thr_ <
-         (latest_pose_pcd.pose_corrected_eig_.block<3, 1>(0, 3) -
-          pose_pcd_in.pose_corrected_eig_.block<3, 1>(0, 3))
-             .norm();
+  // Select keyframes from the continuous FAST-LIO odometry poses. Using
+  // corrected poses here could create a spurious keyframe after a loop update.
+  const Eigen::Matrix4d relative_pose =
+      latest_pose_pcd.pose_eig_.inverse() * pose_pcd_in.pose_eig_;
+  const double translation = relative_pose.block<3, 1>(0, 3).norm();
+  const double rotation_deg =
+      Eigen::AngleAxisd(relative_pose.block<3, 3>(0, 0)).angle() * 180.0 / M_PI;
+
+  const bool is_keyframe =
+      translation > keyframe_thr_ || rotation_deg > keyframe_rotation_thr_deg_;
+  if (is_keyframe) {
+    RCLCPP_INFO(this->get_logger(),
+                "Keyframe selected: translation=%.3f m (threshold=%.3f m), "
+                "rotation=%.2f deg (threshold=%.2f deg)",
+                translation, keyframe_thr_, rotation_deg,
+                keyframe_rotation_thr_deg_);
+  }
+  return is_keyframe;
 }

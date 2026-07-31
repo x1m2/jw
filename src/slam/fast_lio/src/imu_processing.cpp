@@ -110,14 +110,25 @@ void ImuProcess::IMU_init(
           acc_world + Eigen::Vector3d(init_state.grav[0], init_state.grav[1],
                                       init_state.grav[2]);
 
+      const Eigen::Matrix3d R_gravity_aligned =
+          init_state.rot.toRotationMatrix();
+      const double gravity_roll =
+          std::atan2(R_gravity_aligned(2, 1), R_gravity_aligned(2, 2));
+      const double gravity_pitch =
+          std::atan2(-R_gravity_aligned(2, 0),
+                     std::hypot(R_gravity_aligned(0, 0),
+                                R_gravity_aligned(1, 0)));
+
       RCLCPP_INFO(rclcpp::get_logger("ImuProcess"),
                   "[IMU_INIT_GRAV_CHECK] "
-                  "acc_g=[%.3f %.3f %.3f] | "
+                  "gravity_aligned_rp=[roll=%.2f deg, pitch=%.2f deg] | "
+                  "mean_acc_g=[%.3f %.3f %.3f] | "
                   "acc_world=[%.3f %.3f %.3f] | "
                   "residual=[%.4f %.4f %.4f], norm=%.4f",
-                  mean_acc.x(), mean_acc.y(), mean_acc.z(), acc_world.x(),
-                  acc_world.y(), acc_world.z(), residual.x(), residual.y(),
-                  residual.z(), residual.norm());
+                  gravity_roll * 180.0 / M_PI,
+                  gravity_pitch * 180.0 / M_PI, mean_acc.x(), mean_acc.y(),
+                  mean_acc.z(), acc_world.x(), acc_world.y(), acc_world.z(),
+                  residual.x(), residual.y(), residual.z(), residual.norm());
     }
   } else {
     init_state.grav = S2(-mean_acc / mean_acc.norm() * G_m_s2);

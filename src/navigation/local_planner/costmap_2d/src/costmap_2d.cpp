@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace local_planner {
@@ -70,12 +71,10 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("livox_topic", "/livox/lidar");
   node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
 
-  node_->declare_parameter<double>("lidar_x", 0.28);
-  node_->declare_parameter<double>("lidar_y", 0.0);
-  node_->declare_parameter<double>("lidar_z", 0.70);
-  node_->declare_parameter<double>("lidar_roll", 0.0);
-  node_->declare_parameter<double>("lidar_pitch", 0.4119);
-  node_->declare_parameter<double>("lidar_yaw", 0.0);
+  node_->declare_parameter<std::vector<double>>("lidar_to_base_T",
+                                                std::vector<double>());
+  node_->declare_parameter<std::vector<double>>("lidar_to_base_R",
+                                                std::vector<double>());
 
   node_->declare_parameter<double>("min_height", 0.2);
   node_->declare_parameter<double>("max_height", 1.3);
@@ -106,12 +105,16 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("livox_topic", livox_topic_);
   node_->get_parameter("lidar_frame", lidar_frame_);
 
-  node_->get_parameter("lidar_x", lidar_x_);
-  node_->get_parameter("lidar_y", lidar_y_);
-  node_->get_parameter("lidar_z", lidar_z_);
-  node_->get_parameter("lidar_roll", lidar_roll_);
-  node_->get_parameter("lidar_pitch", lidar_pitch_);
-  node_->get_parameter("lidar_yaw", lidar_yaw_);
+  std::vector<double> lidar_to_base_T;
+  std::vector<double> lidar_to_base_R;
+  node_->get_parameter("lidar_to_base_T", lidar_to_base_T);
+  node_->get_parameter("lidar_to_base_R", lidar_to_base_R);
+  lidar_x_ = lidar_to_base_T[0];
+  lidar_y_ = lidar_to_base_T[1];
+  lidar_z_ = lidar_to_base_T[2];
+  lidar_roll_ = lidar_to_base_R[0];
+  lidar_pitch_ = lidar_to_base_R[1];
+  lidar_yaw_ = lidar_to_base_R[2];
 
   node_->get_parameter("min_height", min_height_);
   node_->get_parameter("max_height", max_height_);
@@ -140,8 +143,9 @@ void CostMap2D::loadParameters() {
   const Eigen::AngleAxisd roll_angle(lidar_roll_, Eigen::Vector3d::UnitX());
   const Eigen::AngleAxisd pitch_angle(lidar_pitch_, Eigen::Vector3d::UnitY());
   const Eigen::AngleAxisd yaw_angle(lidar_yaw_, Eigen::Vector3d::UnitZ());
-  lidar_to_base_transform_ = Eigen::Translation3d(lidar_x_, lidar_y_, lidar_z_) *
-                             yaw_angle * pitch_angle * roll_angle;
+  lidar_to_base_transform_ =
+      Eigen::Translation3d(lidar_x_, lidar_y_, lidar_z_) * yaw_angle *
+      pitch_angle * roll_angle;
 }
 
 void CostMap2D::publishLidarStaticTransform() {
@@ -252,8 +256,8 @@ sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
       continue;
     }
 
-    const auto index = static_cast<std::size_t>(
-        (angle - angle_min_) / angle_increment_);
+    const auto index =
+        static_cast<std::size_t>((angle - angle_min_) / angle_increment_);
     if (index < scan->ranges.size() && range < scan->ranges[index]) {
       scan->ranges[index] = static_cast<float>(range);
     }
@@ -262,8 +266,7 @@ sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
   return scan;
 }
 
-void CostMap2D::processLaserScan(
-    const sensor_msgs::msg::LaserScan& scan_msg) {
+void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
   std::lock_guard<std::mutex> lock(costmap_mutex_);
 
   updateMapOrigin();

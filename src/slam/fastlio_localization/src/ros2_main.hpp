@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
@@ -17,9 +18,7 @@
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/transform_listener.h>
 
 #include "system/DataDef.h"
 
@@ -47,6 +46,9 @@ class FastlioLocalizationNode : public rclcpp::Node {
   void set_posestamp(T &out, const QD &rotation, const V3D &position);
   void publish_tf(const QD &rotation, const V3D &position,
                  const double &lidar_end_time);
+  void compute_baselink_pose(const state_ikfom &state,
+                             QD &baselink_rotation,
+                             V3D &baselink_position) const;
   void publish_geometry_msgs(
       rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &publisher,
       const state_ikfom &state, const double &lidar_end_time, QD &baselink_rotation,
@@ -86,6 +88,9 @@ class FastlioLocalizationNode : public rclcpp::Node {
 
   double lidar_turnover_roll{0.0};
   double lidar_turnover_pitch{0.0};
+  std::vector<double> lidar_to_base_T;
+  std::vector<double> lidar_to_base_R;
+  Eigen::Matrix4d T_base_lidar{Eigen::Matrix4d::Identity()};
   bool path_en{true};
   bool scan_pub_en{false};
   bool dense_pub_en{false};
@@ -121,7 +126,5 @@ class FastlioLocalizationNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_robot_pose;
   rclcpp::TimerBase::SharedPtr timer;
 
-  std::unique_ptr<tf2_ros::Buffer> tf_buffer;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 };

@@ -42,6 +42,7 @@
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Rot3.h>
+#include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
@@ -94,6 +95,8 @@ class PgoSc : public rclcpp::Node {
   gtsam::Values init_esti_;
   gtsam::Values corrected_esti_;
   double keyframe_thr_;
+  double keyframe_rotation_thr_deg_;
+  double loop_robust_kernel_scale_;
   double voxel_res_;
   int sub_key_num_;
   int last_loop_src_idx_ = -1;

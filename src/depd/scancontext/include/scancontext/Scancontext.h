@@ -85,9 +85,7 @@ class SCManager {
 
  public:
   // hyper parameters ()
-  // 当前点云直接使用雷达自身坐标系时，填实际雷达离地高度；
-  // 若点云已经转换到机器人基座坐标系，且地面高度已处理，可设为 0。
-  const double LIDAR_HEIGHT = 2.0;
+  const double LIDAR_HEIGHT = 0.0;
 
   const int PC_NUM_RING = 20;  // Scan Context 极坐标描述子的环数。# 20
   const int PC_NUM_SECTOR = 60;  // Scan Context 极坐标描述子的扇区数 #60
@@ -116,7 +114,7 @@ class SCManager {
   // 时，为了保证鲁棒性，建议额外使用 DCS、 或 ICP 拟合分数检查（例如 LeGO-LOAM
   // 中的做法）进行二次验证。
 
-  double SC_DIST_THRES = 0.2;
+  double SC_DIST_THRES = 0.4;
   // 当后端使用鲁棒核函数（例如 Cauchy、DCS）
   // 并且结合 ICP fitness score 阈值进行验证时，
   // 0.4~0.6 是一个较合适的选择；

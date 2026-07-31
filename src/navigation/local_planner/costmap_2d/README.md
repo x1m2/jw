@@ -70,8 +70,8 @@ rostopic echo /costmap
 - `lidar_frame`: 雷达坐标系 (默认: "livox_frame")
 
 ### 雷达外参与投影参数
-- `lidar_x/y/z`: 雷达在 `base_link` 中的位置，单位 m
-- `lidar_roll/pitch/yaw`: 雷达安装姿态，单位 rad
+- `lidar_to_base_T`: 公共雷达配置中的雷达位置 `[x, y, z]`，单位 m
+- `lidar_to_base_R`: 公共雷达配置中的 `[roll, pitch, yaw]`，单位 rad
 - `min_height/max_height`: 在 `base_link` 中保留的点云高度
 - `angle_min/angle_max/angle_increment`: 内部二维射线角度范围和分辨率
 - `range_min/range_max`: 点云有效距离范围

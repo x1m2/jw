@@ -6,7 +6,7 @@
 #include "utilities.hpp"
 
 struct PosePcd {
-  pcl::PointCloud<PointType> pcd_;  // lidar 局部坐标系点云
+  pcl::PointCloud<PointType> pcd_;  // base_link 局部坐标系点云
   Eigen::Matrix4d pose_eig_ =
       Eigen::Matrix4d::Identity();  // odom 坐标系下的位姿
   Eigen::Matrix4d pose_corrected_eig_ =
@@ -33,8 +33,9 @@ inline PosePcd::PosePcd(const nav_msgs::msg::Odometry& odom_in,
   pose_corrected_eig_ = pose_eig_;
   pcl::PointCloud<PointType> tmp_pcd;
   pcl::fromROSMsg(pcd_in, tmp_pcd);
-  // pcd_in:/cloud_registered，odom 点云
-  // pcd_:lidar局部点云
+  // pcd_in: /cloud_registered，odom 坐标系点云
+  // pose_eig_: odom -> base_link
+  // pcd_: base_link 局部坐标系点云
   pcd_ = transformPcd(tmp_pcd, pose_eig_.inverse());
   timestamp_ = rclcpp::Time(odom_in.header.stamp).seconds();
   idx_ = idx_in;

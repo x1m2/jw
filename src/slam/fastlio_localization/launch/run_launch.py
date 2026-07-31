@@ -10,9 +10,29 @@ from launch.substitutions import (
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 
+
+def find_lidar_config(package_share):
+    current_path = os.path.abspath(package_share)
+    while True:
+        candidate = os.path.join(current_path, 'src', 'config', 'lidar.yaml')
+        if os.path.isfile(candidate):
+            return candidate
+
+        parent_path = os.path.dirname(current_path)
+        if parent_path == current_path:
+            raise FileNotFoundError(
+                'Cannot find src/config/lidar.yaml from package share: '
+                + package_share
+            )
+        current_path = parent_path
+
+
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory('fastlio_localization'), 'config', 'ros2_param.yaml')
-    rviz_config = os.path.join(get_package_share_directory('fastlio_localization'), 'rviz_cfg', 'localization_ros2.rviz')
+    package_share = get_package_share_directory('fastlio_localization')
+    config = os.path.join(package_share, 'config', 'ros2_param.yaml')
+    lidar_config = find_lidar_config(package_share)
+    rviz_config = os.path.join(
+        package_share, 'rviz_cfg', 'localization_ros2.rviz')
 
     localization_use_rviz_arg = DeclareLaunchArgument(
         'localization_use_rviz',
@@ -43,6 +63,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             config,
+            lidar_config,
             {
                 'runtime_profile': 'test',
                 'map_path': PathJoinSubstitution([
@@ -52,31 +73,11 @@ def generate_launch_description():
                 ]),
             },
         ])
-    # fastlio_localization = Node(package="fastlio_localization", executable="fastlio_localization_ros2", prefix=['gdb -ex run --args'], output='screen', parameters=[config])
     rviz2 = Node(
         package='rviz2',
         executable='rviz2',
         arguments=['-d', rviz_config],
         condition=IfCondition(LaunchConfiguration('localization_use_rviz')),
-    )
-    map_publisher = Node(package='pcl_ros', executable='pointcloud_to_pcd', output='screen',
-                         parameters=[{'file_name': '/path/to/your/pcd/file.pcd', 'frame_id': 'map'}],
-                         remappings=[('/cloud_pcd', '/your/pointcloud_topic')])
-
-    static_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_publisher',
-        arguments=[
-            '--x', '-0.28',
-            '--y', '0.0',
-            '--z', '0.0',
-            '--roll', '0.0',
-            '--pitch', '0.0',
-            '--yaw', '0.0',
-            '--frame-id', 'base_link',
-            '--child-frame-id', 'lidar'
-        ]
     )
     return LaunchDescription([
         localization_use_rviz_arg,
@@ -84,5 +85,4 @@ def generate_launch_description():
         map_id_arg,
         fastlio_localization,
         rviz2,
-        static_tf,
     ])

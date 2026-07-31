@@ -56,7 +56,7 @@ class LaserMappingNode : public rclcpp::Node {
                          std_srvs::srv::Trigger::Response::SharedPtr res);
   template <typename T>
   void set_posestamp(T &out);
-  Eigen::Matrix4d get_odom_to_base_transform() const;
+  Eigen::Matrix4d get_odom_to_base_transform();
   Eigen::Matrix4d get_output_base_transform();
   Eigen::Vector3d transform_odom_point_to_output(const Eigen::Vector3d &p_odom);
 
@@ -202,8 +202,11 @@ class LaserMappingNode : public rclcpp::Node {
   vector<PointVector> Nearest_Points;
   vector<double> extrinT;
   vector<double> extrinR;
-  vector<double> imu_to_base_T;
-  double imu_to_base_R;
+  vector<double> lidar_to_base_T;
+  vector<double> lidar_to_base_R;
+  bool gravity_aligned_lidar_tilt_initialized_ = false;
+  double gravity_aligned_lidar_roll_ = 0.0;
+  double gravity_aligned_lidar_pitch_ = 0.0;
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   deque<double> time_buffer;
