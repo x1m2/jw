@@ -1,5 +1,7 @@
 #include "loop_closure.hpp"
 
+#include <pcl/kdtree/kdtree_flann.h>
+
 LoopClosure::LoopClosure(const LoopClosureConfig &config) {
   config_ = config;
   const auto &gc = config_.gicp_config_;
@@ -27,6 +29,8 @@ LoopClosure::LoopClosure(const LoopClosureConfig &config) {
 
 LoopClosure::~LoopClosure() {}
 
+// 原ScanContext候选检测实现保留，但RS模式下不参与编译。
+#if 0
 void LoopClosure::updateScancontext(pcl::PointCloud<PointType> cloud) {
   // 将当前帧点云生成并保存 ScanContext，用于后续回环检测
   sc_manager_.makeAndSaveScancontextAndKeys(cloud);
@@ -67,6 +71,150 @@ int LoopClosure::fetchCandidateKeyframeIdx(
     }
   }
   return -1;  // 未找到合法候选帧
+}
+#endif
+
+int LoopClosure::fetchRadiusSearchCandidateIdx(
+    const PosePcd &query_keyframe,
+    const std::vector<PosePcd> &keyframes) const {
+  if (keyframes.size() < 2) return -1;
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr key_positions(
+      new pcl::PointCloud<pcl::PointXYZ>);
+  key_positions->reserve(keyframes.size());
+  for (const auto &keyframe : keyframes) {
+    const Eigen::Vector3d position =
+        keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
+    key_positions->emplace_back(static_cast<float>(position.x()),
+                                static_cast<float>(position.y()), 0.0F);
+  }
+  //二维 KD-Tree 建立
+  pcl::KdTreeFLANN<pcl::PointXYZ> position_tree;
+  position_tree.setInputCloud(key_positions);
+
+  // 当前关键帧同样使用优化位姿并投影到 XY 平面，避免高度差影响水平搜索。
+  const Eigen::Vector3d query_position =
+      query_keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
+  pcl::PointXYZ query_point(static_cast<float>(query_position.x()),
+                            static_cast<float>(query_position.y()), 0.0F);
+  std::vector<int> nearby_indices;
+  std::vector<float> nearby_squared_distances;
+  position_tree.radiusSearch(query_point,
+                             config_.history_keyframe_search_xy_radius_,
+                             nearby_indices, nearby_squared_distances);
+
+  int best_candidate_idx = -1;
+  float best_squared_distance = 0.0F;
+  int best_keyframe_gap = 0;
+  int old_keyframes_within_radius = 0;
+  int nearest_z_rejected_idx = -1;
+  double nearest_z_rejected_abs_dz = std::numeric_limits<double>::max();
+  for (size_t i = 0; i < nearby_indices.size(); ++i) {
+    const int candidate_idx = nearby_indices[i];
+    if (candidate_idx < 0 ||
+        candidate_idx >= static_cast<int>(keyframes.size()) ||
+        candidate_idx == query_keyframe.idx_) {
+      continue;
+    }
+
+    const int keyframe_gap = query_keyframe.idx_ - candidate_idx;
+    if (keyframe_gap < config_.history_keyframe_min_index_diff_) continue;
+
+    ++old_keyframes_within_radius;
+    const double z_difference =
+        std::abs(query_position.z() -
+                 keyframes[candidate_idx].pose_corrected_eig_(2, 3));
+    if (z_difference <= config_.history_keyframe_search_z_tolerance_) {
+      // 取第一个同时通过关键帧间隔和高度过滤的候选，交给后续配准验证。
+      best_candidate_idx = candidate_idx;
+      best_squared_distance = nearby_squared_distances[i];
+      best_keyframe_gap = keyframe_gap;
+      break;
+    }
+
+    if (z_difference < nearest_z_rejected_abs_dz) {
+      nearest_z_rejected_idx = candidate_idx;
+      nearest_z_rejected_abs_dz = z_difference;
+    }
+  }
+
+  // 找到候选时记录各项筛选数据；该阶段只表示“位置上可能回环”，
+  // 最终是否接受仍由后续 Quatro/Nano-GICP 的配准结果决定。
+  if (best_candidate_idx >= 0) {
+    RCLCPP_INFO(
+        rclcpp::get_logger("LoopClosure"),
+        "[RS_LOOP_CANDIDATE] current=%d, history=%d, xy_distance=%.3f m "
+        "< xy_radius=%.3f m, abs_dz=%.3f m <= z_tolerance=%.3f m, "
+        "keyframe_gap=%d >= required=%d",
+        query_keyframe.idx_, best_candidate_idx,
+        std::sqrt(best_squared_distance),
+        config_.history_keyframe_search_xy_radius_,
+        std::abs(query_position.z() -
+                 keyframes[best_candidate_idx].pose_corrected_eig_(2, 3)),
+        config_.history_keyframe_search_z_tolerance_, best_keyframe_gap,
+        config_.history_keyframe_min_index_diff_);
+    return best_candidate_idx;
+  }
+
+  // 只记录接近阈值的失败，用于判断 XY/Z 阈值是否设置得过小。
+  constexpr double kXyNearMissMargin = 5.0;
+  constexpr double kZNearMissMargin = 1.0;
+
+  int nearest_same_floor_idx = -1;
+  double nearest_same_floor_xy = std::numeric_limits<double>::max();
+  for (const auto &keyframe : keyframes) {
+    const int keyframe_gap = query_keyframe.idx_ - keyframe.idx_;
+    if (keyframe_gap < config_.history_keyframe_min_index_diff_) continue;
+
+    const Eigen::Vector3d history_position =
+        keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
+    const double abs_dz = std::abs(query_position.z() - history_position.z());
+    if (abs_dz > config_.history_keyframe_search_z_tolerance_) continue;
+
+    const double xy_distance =
+        (query_position.head<2>() - history_position.head<2>()).norm();
+    if (xy_distance < nearest_same_floor_xy) {
+      nearest_same_floor_idx = keyframe.idx_;
+      nearest_same_floor_xy = xy_distance;
+    }
+  }
+
+  const double xy_radius = config_.history_keyframe_search_xy_radius_;
+  const double z_tolerance = config_.history_keyframe_search_z_tolerance_;
+  const bool xy_near_miss =
+      nearest_same_floor_idx >= 0 && nearest_same_floor_xy > xy_radius &&
+      nearest_same_floor_xy <= xy_radius + kXyNearMissMargin;
+  const bool z_near_miss =
+      old_keyframes_within_radius > 0 && nearest_z_rejected_idx >= 0 &&
+      nearest_z_rejected_abs_dz > z_tolerance &&
+      nearest_z_rejected_abs_dz <= z_tolerance + kZNearMissMargin;
+
+  if (!xy_near_miss && !z_near_miss) return -1;
+
+  const bool report_xy =
+      xy_near_miss &&
+      (!z_near_miss ||
+       (nearest_same_floor_xy - xy_radius) / kXyNearMissMargin <=
+           (nearest_z_rejected_abs_dz - z_tolerance) / kZNearMissMargin);
+  const int diagnostic_history_idx =
+      report_xy ? nearest_same_floor_idx : nearest_z_rejected_idx;
+  const Eigen::Vector3d diagnostic_history_position =
+      keyframes[diagnostic_history_idx].pose_corrected_eig_.block<3, 1>(0, 3);
+  const double diagnostic_xy_distance =
+      (query_position.head<2>() - diagnostic_history_position.head<2>()).norm();
+  const double diagnostic_abs_dz =
+      std::abs(query_position.z() - diagnostic_history_position.z());
+
+  RCLCPP_WARN(rclcpp::get_logger("LoopClosure"),
+              "[RS_LOOP_NEAR_MISS] current=%d, reason=%s, history=%d, "
+              "xy_distance=%.3f m, xy_radius=%.3f m, abs_dz=%.3f m, "
+              "z_tolerance=%.3f m",
+              query_keyframe.idx_,
+              report_xy ? "xy_distance_slightly_too_large"
+                        : "z_difference_slightly_too_large",
+              diagnostic_history_idx, diagnostic_xy_distance, xy_radius,
+              diagnostic_abs_dz, z_tolerance);
+  return -1;
 }
 
 PcdPair LoopClosure::setSrcAndDstCloud(const std::vector<PosePcd> &keyframes,
@@ -248,11 +396,11 @@ RegistrationOutput LoopClosure::performLoopClosure(
 
     if (config_.enable_quatro_) {
       RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
-                  "Execute quatro alignment: %d vs %d", src_cloud.size(),
+                  "Execute quatro alignment: %zu vs %zu", src_cloud.size(),
                   dst_cloud.size());
       return coarseToFineAlignment(src_cloud, dst_cloud);
     } else {
-      RCLCPP_INFO(rclcpp::get_logger("MapMatcher"), "Execute GICP: %d vs %d",
+      RCLCPP_INFO(rclcpp::get_logger("MapMatcher"), "Execute GICP: %zu vs %zu",
                   src_cloud.size(), dst_cloud.size());
       return icpAlignment(src_cloud, dst_cloud);
     }

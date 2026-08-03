@@ -46,11 +46,13 @@ find_package(rosbag2_storage REQUIRED)
 find_package(PCL REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(GTSAM REQUIRED)
+find_package(TBB REQUIRED)
 
 # 假设 nano_gicp 和 quatro 也是作为 ament 包安装的
 find_package(nano_gicp REQUIRED)
 find_package(quatro REQUIRED)
-find_package(scancontext REQUIRED)
+
+# find_package(scancontext REQUIRED)
 ## 3. 头文件目录
 include_directories(
   include
@@ -69,6 +71,7 @@ set(COMMON_LIBS
   ${PCL_LIBRARIES}
   ${GTSAM_LIBRARIES}
   OpenMP::OpenMP_CXX
+  TBB::tbb
   gtsam
   ${TEASER_LIBRARIES} 
 )
@@ -90,7 +93,7 @@ set(ROS_DEPENDENCIES
   ament_index_cpp
   nano_gicp
   quatro
-  scancontext
+  # scancontext
   rosbag2_cpp
   rosbag2_storage
   robot_interfaces

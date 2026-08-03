@@ -5,7 +5,11 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <quatro/quatro_module.h>
+
+// ScanContext候选检测已停用；保留源码，恢复时同时启用对应接口和实现。
+#if 0
 #include <scancontext/Scancontext.h>
+#endif
 
 #include <Eigen/Eigen>
 #include <iostream>
@@ -54,6 +58,9 @@ struct LoopClosureConfig {
   int num_submap_keyframes_ = 10;
   double voxel_res_ = 0.1;
   double scancontext_max_correspondence_distance_;
+  double history_keyframe_search_xy_radius_ = 15.0;
+  double history_keyframe_search_z_tolerance_ = 1.5;
+  int history_keyframe_min_index_diff_ = 30;
   NanoGICPConfig gicp_config_;
   QuatroConfig quatro_config_;
 };
@@ -69,11 +76,16 @@ class LoopClosure {
  public:
   explicit LoopClosure(const LoopClosureConfig& config);
   ~LoopClosure();
-  // 更新 ScanContext 用于回环候选检测
+  // 原ScanContext候选接口，当前不参与编译。
+#if 0
   void updateScancontext(pcl::PointCloud<PointType> cloud);
-  // 根据 ScanContext 获取回环候选关键帧索引
   int fetchCandidateKeyframeIdx(const PosePcd& query_keyframe,
                                 const std::vector<PosePcd>& keyframes);
+#endif
+  // 使用原始前端位姿进行三维半径搜索，并排除时间上过近的历史关键帧。
+  int fetchRadiusSearchCandidateIdx(
+      const PosePcd& query_keyframe,
+      const std::vector<PosePcd>& keyframes) const;
   // 设置源点云和目标点云
   PcdPair setSrcAndDstCloud(const std::vector<PosePcd>& keyframes,
                             const int src_idx, const int dst_idx,
@@ -99,7 +111,9 @@ class LoopClosure {
   int getClosestKeyframeidx();
 
  private:
+#if 0
   SCManager sc_manager_;
+#endif
   nano_gicp::NanoGICP<PointType, PointType> nano_gicp_;
   std::shared_ptr<quatro<PointType>> quatro_handler_ = nullptr;
   int closest_keyframe_idx_ = -1;

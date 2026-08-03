@@ -31,11 +31,15 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("quatro_nano_gicp_voxel_resolution", 0.3);
 
   this->declare_parameter<double>("keyframe.keyframe_threshold", 1.0);
-  this->declare_parameter<double>("keyframe.rotation_threshold_deg", 10.0);
   this->declare_parameter<int>("keyframe.num_submap_keyframes", 5);
   this->declare_parameter<bool>("keyframe.enable_submap_matching", false);
 
   this->declare_parameter<double>("loop.robust_kernel_scale", 1.0);
+  this->declare_parameter<double>("loop.history_keyframe_search_xy_radius",
+                                  15.0);
+  this->declare_parameter<double>("loop.history_keyframe_search_z_tolerance",
+                                  1.5);
+  this->declare_parameter<int>("loop.history_keyframe_min_index_diff", 30);
 
   this->declare_parameter<double>("scancontext_max_correspondence_distance",
                                   35.0);
@@ -81,8 +85,6 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                       lc_config.voxel_res_);
 
   this->get_parameter("keyframe.keyframe_threshold", keyframe_thr_);
-  this->get_parameter("keyframe.rotation_threshold_deg",
-                      keyframe_rotation_thr_deg_);
   this->get_parameter("keyframe.num_submap_keyframes",
                       lc_config.num_submap_keyframes_);
   this->get_parameter("keyframe.enable_submap_matching",
@@ -91,6 +93,12 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->get_parameter("scancontext_max_correspondence_distance",
                       lc_config.scancontext_max_correspondence_distance_);
   this->get_parameter("loop.robust_kernel_scale", loop_robust_kernel_scale_);
+  this->get_parameter("loop.history_keyframe_search_xy_radius",
+                      lc_config.history_keyframe_search_xy_radius_);
+  this->get_parameter("loop.history_keyframe_search_z_tolerance",
+                      lc_config.history_keyframe_search_z_tolerance_);
+  this->get_parameter("loop.history_keyframe_min_index_diff",
+                      lc_config.history_keyframe_min_index_diff_);
 
   this->get_parameter("nano_gicp.thread_number", gc.nano_thread_number_);
   this->get_parameter("nano_gicp.icp_score_threshold", gc.icp_score_thr_);
@@ -320,8 +328,8 @@ void PgoSc::odomPcdCallback(
                       poseEigToGtsamPose(current_frame_.pose_eig_));
     current_keyframe_idx_++;
 
-    // 更新 ScanContext
-    loop_closure_->updateScancontext(current_frame_.pcd_);
+    // ScanContext候选检测已停用，故不再生成描述子。
+    // loop_closure_->updateScancontext(current_frame_.pcd_);
 
     is_initialized_ = true;
     return;  // 初始化完成直接返回
@@ -355,8 +363,8 @@ void PgoSc::odomPcdCallback(
 
     current_keyframe_idx_++;
 
-    // ==== 更新 ScanContext ====
-    loop_closure_->updateScancontext(current_frame_.pcd_);
+    // ==== ScanContext候选检测已停用 ====
+    // loop_closure_->updateScancontext(current_frame_.pcd_);
 
     // ==== 4. 更新可视化 ====
     // auto t3 = std::chrono::high_resolution_clock::now();
@@ -384,18 +392,21 @@ void PgoSc::loopTimerFunc() {
   if (latest_keyframe.processed_) return;
   latest_keyframe.processed_ = true;
 
-  auto t1 = std::chrono::high_resolution_clock::now();
-  constexpr int kloop_cooldown_keyframes = 10;
+  constexpr int kLoopCooldownKeyframes = 20;
   const int latest_idx = latest_keyframe.idx_;
 
   if (last_loop_src_idx_ >= 0 &&
-      latest_idx - last_loop_src_idx_ < kloop_cooldown_keyframes) {
+      latest_idx - last_loop_src_idx_ < kLoopCooldownKeyframes) {
     return;
   }
 
-  // ==== 1. ScanContext 找到回环候选中心帧 ====
+  auto t1 = std::chrono::high_resolution_clock::now();
+
+  // ==== 1. XY半径＋高度差＋关键帧索引间隔搜索 ====
+  // int closest_keyframe_idx =
+  //     loop_closure_->fetchCandidateKeyframeIdx(latest_keyframe, keyframes_);
   int closest_keyframe_idx =
-      loop_closure_->fetchCandidateKeyframeIdx(latest_keyframe, keyframes_);
+      loop_closure_->fetchRadiusSearchCandidateIdx(latest_keyframe, keyframes_);
   if (closest_keyframe_idx < 0) return;
   RegistrationOutput reg_output = loop_closure_->performLoopClosure(
       latest_keyframe, keyframes_, closest_keyframe_idx);
@@ -946,22 +957,8 @@ visualization_msgs::msg::Marker PgoSc::getLoopMarkers(
 
 bool PgoSc::checkIfKeyframe(const PosePcd &pose_pcd_in,
                             const PosePcd &latest_pose_pcd) {
-  // Select keyframes from the continuous FAST-LIO odometry poses. Using
-  // corrected poses here could create a spurious keyframe after a loop update.
-  const Eigen::Matrix4d relative_pose =
-      latest_pose_pcd.pose_eig_.inverse() * pose_pcd_in.pose_eig_;
-  const double translation = relative_pose.block<3, 1>(0, 3).norm();
-  const double rotation_deg =
-      Eigen::AngleAxisd(relative_pose.block<3, 3>(0, 0)).angle() * 180.0 / M_PI;
-
-  const bool is_keyframe =
-      translation > keyframe_thr_ || rotation_deg > keyframe_rotation_thr_deg_;
-  if (is_keyframe) {
-    RCLCPP_INFO(this->get_logger(),
-                "Keyframe selected: translation=%.3f m (threshold=%.3f m), "
-                "rotation=%.2f deg (threshold=%.2f deg)",
-                translation, keyframe_thr_, rotation_deg,
-                keyframe_rotation_thr_deg_);
-  }
-  return is_keyframe;
+  return keyframe_thr_ <
+         (latest_pose_pcd.pose_corrected_eig_.block<3, 1>(0, 3) -
+          pose_pcd_in.pose_corrected_eig_.block<3, 1>(0, 3))
+             .norm();
 }

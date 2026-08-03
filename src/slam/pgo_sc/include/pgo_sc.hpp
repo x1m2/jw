@@ -95,7 +95,6 @@ class PgoSc : public rclcpp::Node {
   gtsam::Values init_esti_;
   gtsam::Values corrected_esti_;
   double keyframe_thr_;
-  double keyframe_rotation_thr_deg_;
   double loop_robust_kernel_scale_;
   double voxel_res_;
   int sub_key_num_;
