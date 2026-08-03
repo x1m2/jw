@@ -44,6 +44,8 @@ class System {
       std::exit(100);
     }
 
+    // 当前定位流程不依赖trajectory.pcd，先保留原逻辑但停用。
+#if 0
     pcl::io::loadPCDFile(trajectory_path, *relocalization->trajectory_poses);
     // if (relocalization->trajectory_poses->points.size() < 10)
     // {
@@ -52,6 +54,7 @@ class System {
     // }
     LOG_WARN("Load trajectory poses successfully! There are %lu poses.",
              relocalization->trajectory_poses->points.size());
+#endif
 
     if (relocalization->algorithm_type == "scan_context" &&
         !relocalization->load_keyframe_descriptor(scd_path)) {

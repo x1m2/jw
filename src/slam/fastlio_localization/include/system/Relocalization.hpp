@@ -452,6 +452,8 @@ void Relocalization::set_init_pose(const Pose &_manual_pose)
     manual_pose.pitch -= lidar_extrinsic.pitch;
     manual_pose.yaw -= lidar_extrinsic.yaw;
 
+    // 当前不使用trajectory.pcd，保留原KD-Tree高度修正逻辑但停用。
+#if 0
     {
         std::vector<int> indices;
         std::vector<float> distances;
@@ -479,6 +481,7 @@ void Relocalization::set_init_pose(const Pose &_manual_pose)
             LOG_ERROR("manual position no elevation found!");
         }
     }
+#endif
 
     LOG_WARN("*******************************************");
     LOG_WARN("set_init_pose = (%.2lf,%.2lf,%.2lf,%.2lf,%.2lf,%.2lf)", manual_pose.x, manual_pose.y, manual_pose.z,
