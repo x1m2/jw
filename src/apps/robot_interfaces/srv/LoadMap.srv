@@ -1,4 +1,4 @@
-uint32 map_id
+string map_id
 ---
 bool success
 string message

@@ -45,6 +45,10 @@ ros2 launch rviz_topology_editor rviz_topology_editor.launch.py \
 保存成功后，RViz会用蓝色线段显示按ID顺序生成的拓扑边。新增、撤销或
 清空点后会先隐藏旧边，再次保存后显示最新连边。
 
+如果 `generated_map_target_points.txt` 已存在，编辑器启动时会按文件
+顺序自动恢复历史点和连边，新点ID从已有最大ID加1开始。只加载不会
+改写文件；撤销或清空后仍需点击“保存并生成”才会覆盖磁盘内容。
+
 编辑话题固定为 `/rviz_topology_editor/goal_pose`，不会直接触发导航。
 
 也可以使用工作空间的一键脚本：
@@ -80,7 +84,6 @@ ros2 service call /rviz_topology_editor/clear std_srvs/srv/Trigger {}
 ```
 
 撤销和清空先修改内存中的编辑列表，需要再次点击“保存并生成”才会覆盖最终文件。
-每次启动编辑器都从空列表和ID 0开始，不读取已有目标点继续追加。
 
 默认 `auto_save_raw_points: false`，点击目标只修改内存列表。若改为
 `true`，每次点击会额外保存两个原始点文件，但连边拓扑和任务文件仍只在

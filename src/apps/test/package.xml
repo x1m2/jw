@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_runtime_test</name>
+  <version>0.1.0</version>
+  <description>Platform launch and APP-facing GUI for robot_runtime integration tests.</description>
+  <maintainer email="maintainer@example.com">robot</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>robot_runtime</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>pgo_sc</exec_depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>fastlio_localization</exec_depend>
+  <exec_depend>dual_radar_traversable_extractor</exec_depend>
+  <exec_depend>costmap_2d</exec_depend>
+  <exec_depend>global_path_planner</exec_depend>
+  <exec_depend>path_smoother</exec_depend>
+  <exec_depend>pure_pursuit_local_planner</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

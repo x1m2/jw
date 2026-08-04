@@ -14,7 +14,7 @@ class MapStorage {
 
   const std::filesystem::path &rootDirectory() const;
   std::size_t maxMaps() const;
-  // 每个map_id对应map_<map_id>数据目录，内部统一划分map、log和task。
+  // map_id本身就是数据目录名（例如map_0），内部划分map、log和task。
   std::filesystem::path dataPath(const std::string &map_id) const;
   std::filesystem::path mapPath(const std::string &map_id) const;
   std::filesystem::path logPath(const std::string &map_id) const;

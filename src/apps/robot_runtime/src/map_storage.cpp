@@ -25,7 +25,7 @@ const std::filesystem::path &MapStorage::rootDirectory() const {
 std::size_t MapStorage::maxMaps() const { return max_maps_; }
 
 std::filesystem::path MapStorage::dataPath(const std::string &map_id) const {
-  return root_directory_ / ("map_" + map_id);
+  return root_directory_ / map_id;
 }
 
 std::filesystem::path MapStorage::mapPath(const std::string &map_id) const {
@@ -43,7 +43,7 @@ std::filesystem::path MapStorage::taskPath(const std::string &map_id) const {
 std::filesystem::path MapStorage::stagingPath(
     const std::string &map_id, uint64_t session_id) const {
   return root_directory_ / ".staging" /
-         ("map_" + map_id + "_" + std::to_string(session_id)) / "map";
+         (map_id + "_" + std::to_string(session_id)) / "map";
 }
 
 bool MapStorage::countSavedMaps(std::size_t &count,

@@ -17,6 +17,27 @@ namespace robot_runtime {
 
 namespace {
 using RuntimeState = robot_interfaces::msg::RuntimeState;
+
+bool validTaskId(const std::string &task_id, std::string &message) {
+  constexpr std::size_t kMaximumIdLength = 64U;
+  if (task_id.empty() || task_id.size() > kMaximumIdLength) {
+    message = "task_id must contain 1 to " +
+              std::to_string(kMaximumIdLength) + " characters";
+    return false;
+  }
+  for (const char character : task_id) {
+    const bool valid =
+        (character >= 'a' && character <= 'z') ||
+        (character >= 'A' && character <= 'Z') ||
+        (character >= '0' && character <= '9') || character == '_' ||
+        character == '-';
+    if (!valid) {
+      message = "task_id may contain only letters, digits, '_' and '-'";
+      return false;
+    }
+  }
+  return true;
+}
 }
 
 NavigationTaskExecutor::NavigationTaskExecutor(
@@ -96,6 +117,9 @@ robot_interfaces::msg::NavigationNode NavigationTaskExecutor::nodeFromPose(
 bool NavigationTaskExecutor::validateGoal(
     const StartNavigation::Goal &goal, std::string &message) const {
   // APP节点ID用于反馈，必须唯一；四自由度位姿必须都是有限值。
+  if (!validTaskId(goal.task_id, message)) {
+    return false;
+  }
   if (goal.nodes.empty()) {
     message = "nodes are required";
     return false;
@@ -193,9 +217,8 @@ void NavigationTaskExecutor::executePatrolAction(
     return;
   }
 
-  // uint32 task_id使用patrol_<id>.txt命名；相同ID再次下发时原子更新。
-  topology_file_ =
-      task_directory_ / ("patrol_" + std::to_string(goal->task_id) + ".txt");
+  // 字符串task_id使用patrol_<task_id>.txt命名；相同ID再次下发时原子更新。
+  topology_file_ = task_directory_ / ("patrol_" + goal->task_id + ".txt");
   topology_writer_->setOutputFile(topology_file_);
 
   // APP的nodes替代旧的打点文件，先按数组顺序生成节点和相邻双向边。

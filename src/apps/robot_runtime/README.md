@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | `/robot/start_mapping` | `robot_interfaces/srv/StartMapping` | 按`map_id`启动建图 |
 | `/robot/finish_mapping` | `std_srvs/srv/Trigger` | 停止建图并保存地图 |
-| `/robot/delete_map` | `robot_interfaces/srv/DeleteMap` | 删除整个`map_<id>`目录 |
+| `/robot/delete_map` | `robot_interfaces/srv/DeleteMap` | 删除整个`<map_id>`目录 |
 | `/robot/load_map` | `robot_interfaces/srv/LoadMap` | 检查并记录后续重定位使用的地图 |
 | `/robot/start_localization` | `robot_interfaces/srv/StartLocalization` | 启动重定位，可选`x/y/z/theta`初始位姿 |
 | `/robot/pause_navigation` | `std_srvs/srv/Trigger` | 暂停当前导航Action |
@@ -20,6 +20,10 @@
 
 `load_map`只检查`globalmap.pcd`并记录地图，不读取或发布PCD，也不启动定位
 算法。`start_localization`使用最近一次`load_map`成功记录的地图。
+
+`map_id`和巡检`task_id`均为字符串。APP下发完整地图标识，例如
+`map_0`；Runtime不再自动补`map_`前缀。`map_id`必须以`map_`开头，
+两种ID都只允许字母、数字、下划线和短横线，最长64个字符。
 
 `StartLocalization.srv`使用四自由度初始位姿：
 
@@ -114,13 +118,14 @@ PGO只在新增关键帧时发布一次，不在回环后重发旧关键帧。AP
 └── .staging/
 ```
 
-建图时先写入`.staging`；保存成功并确认`globalmap.pcd`存在后，Runtime在
-同一文件系统内原子发布完整`map_<id>`目录。
+建图时先写入`.staging`；停止建图时先由PGO保存
+`globalmap.pcd`，再基于该地图生成`voxelmaps_coords`。两者都完整后，
+Runtime在同一文件系统内原子发布完整`<map_id>`目录。
 
 ## Worker控制
 
 建图启动顺序为PGO、FastLIO，停止时先停止FastLIO数据生产，再由PGO保存
-地图。
+地图，然后生成BBS体素地图。
 
 导航Worker按依赖顺序启动，Pure Pursuit最后启动；停止时Pure Pursuit最先
 停止并发布零速度。任一Worker启动失败时，Runtime按逆序回滚已经启动的

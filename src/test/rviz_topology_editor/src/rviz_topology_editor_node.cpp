@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -5,8 +6,11 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/point.hpp>
@@ -82,6 +86,7 @@ public:
     original_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     display_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     loadPcd();
+    loadExistingPoints();
 
     auto static_qos = rclcpp::QoS(1).transient_local().reliable();
     cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(cloud_topic_,
@@ -207,6 +212,108 @@ private:
 
     RCLCPP_INFO(get_logger(), "Loaded PCD points: %zu",
                 original_cloud_->size());
+  }
+
+  void loadExistingPoints() {
+    const std::filesystem::path target_path(target_points_file_);
+    std::error_code filesystem_error;
+    const bool exists = std::filesystem::exists(target_path, filesystem_error);
+    if (filesystem_error) {
+      throw std::runtime_error("cannot inspect existing target points: " +
+                               filesystem_error.message());
+    }
+    if (!exists) {
+      RCLCPP_INFO(get_logger(), "No existing target points, start empty: %s",
+                  target_points_file_.c_str());
+      return;
+    }
+    if (!std::filesystem::is_regular_file(target_path, filesystem_error) ||
+        filesystem_error) {
+      throw std::runtime_error("existing target points is not a regular file: " +
+                               target_points_file_);
+    }
+
+    std::ifstream input(target_path);
+    if (!input.is_open()) {
+      throw std::runtime_error("cannot open existing target points: " +
+                               target_points_file_);
+    }
+
+    std::vector<SavedPoint> loaded_points;
+    std::unordered_set<int> loaded_ids;
+    int maximum_id = -1;
+    std::string line;
+    std::size_t line_number = 0U;
+    while (std::getline(input, line)) {
+      ++line_number;
+      const auto first = line.find_first_not_of(" \t\r");
+      if (first == std::string::npos || line[first] == '#') {
+        continue;
+      }
+
+      SavedPoint point;
+      std::istringstream parser(line);
+      if (!(parser >> point.id >> point.x >> point.y >> point.z >> point.qx >>
+            point.qy >> point.qz >> point.qw)) {
+        throw std::runtime_error(
+            "invalid target point at line " + std::to_string(line_number) +
+            " in " + target_points_file_);
+      }
+      std::getline(parser, point.label);
+      const auto label_first = point.label.find_first_not_of(" \t\r");
+      const auto label_last = point.label.find_last_not_of(" \t\r");
+      if (label_first == std::string::npos) {
+        throw std::runtime_error(
+            "missing target point label at line " +
+            std::to_string(line_number) + " in " + target_points_file_);
+      }
+      point.label =
+          point.label.substr(label_first, label_last - label_first + 1U);
+
+      if (point.id < 0 || !loaded_ids.insert(point.id).second) {
+        throw std::runtime_error(
+            "negative or duplicate target point id at line " +
+            std::to_string(line_number) + " in " + target_points_file_);
+      }
+      if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+          !std::isfinite(point.z) || !std::isfinite(point.qx) ||
+          !std::isfinite(point.qy) || !std::isfinite(point.qz) ||
+          !std::isfinite(point.qw)) {
+        throw std::runtime_error(
+            "non-finite target point value at line " +
+            std::to_string(line_number) + " in " + target_points_file_);
+      }
+      const double quaternion_norm =
+          std::sqrt(point.qx * point.qx + point.qy * point.qy +
+                    point.qz * point.qz + point.qw * point.qw);
+      if (quaternion_norm < 1e-6) {
+        throw std::runtime_error(
+            "zero target point quaternion at line " +
+            std::to_string(line_number) + " in " + target_points_file_);
+      }
+      point.qx /= quaternion_norm;
+      point.qy /= quaternion_norm;
+      point.qz /= quaternion_norm;
+      point.qw /= quaternion_norm;
+
+      maximum_id = std::max(maximum_id, point.id);
+      loaded_points.push_back(std::move(point));
+    }
+    if (!input.eof()) {
+      throw std::runtime_error("failed reading existing target points: " +
+                               target_points_file_);
+    }
+    if (maximum_id == std::numeric_limits<int>::max()) {
+      throw std::runtime_error("target point id limit reached in " +
+                               target_points_file_);
+    }
+
+    points_ = std::move(loaded_points);
+    next_id_ = maximum_id + 1;
+    show_edges_ = !points_.empty();
+    RCLCPP_INFO(get_logger(), "Loaded %zu existing target points from %s; "
+                              "next id=%d",
+                points_.size(), target_points_file_.c_str(), next_id_);
   }
 
   void publishCloud() {
