@@ -44,7 +44,6 @@ EXPECTED_WORKERS = (
     'pgo_worker',
     'fast_lio_worker',
     'fastlio_localization_worker',
-    'dual_radar_worker',
     'costmap_worker',
     'global_path_planner_worker',
     'path_smoother_worker',
@@ -234,7 +233,9 @@ class RuntimeTestGui:
         self.task_id = tk.StringVar(value='task_0')
         self.patrol_loop = tk.BooleanVar(value=False)
         self.runtime_label = tk.StringVar(value='Runtime: 未连接')
-        self.worker_label = tk.StringVar(value='Workers: 0/8')
+        self.worker_label = tk.StringVar(
+            value=f'Workers: 0/{len(EXPECTED_WORKERS)}'
+        )
         self.data_label = tk.StringVar(value='Pose=0  Cloud=0  Keyframe=0')
 
         self._create_widgets()
@@ -452,7 +453,10 @@ class RuntimeTestGui:
                         message.state == WorkerStatus.RUNNING
                         for message in self.node.worker_states.values()
                     )
-                    self.worker_label.set(f'Workers: online={online}/8 running={running}')
+                    self.worker_label.set(
+                        f'Workers: online={online}/{len(EXPECTED_WORKERS)} '
+                        f'running={running}'
+                    )
                 elif kind == 'pose':
                     message, _count = payload
                     self._append_log(

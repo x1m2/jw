@@ -94,11 +94,6 @@ def generate_launch_description():
 
     platform_args = {'runtime_profile': 'platform'}
     navigation_workers = [
-        include_launch(
-            'dual_radar_traversable_extractor',
-            'dual_radar_extractor.launch.py',
-            {**platform_args, 'use_dual_radar': 'false'},
-        ),
         include_launch('costmap_2d', 'costmap_2d.launch.py', platform_args),
         include_launch(
             'global_path_planner',

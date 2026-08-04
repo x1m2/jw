@@ -25,7 +25,7 @@ ros2 run robot_runtime_test robot_runtime_test_gui.py
 
 ## 分功能检查
 
-1. **连接检查**：确认 Runtime Service/Action 和八个 Worker 状态全部可见。
+1. **连接检查**：确认 Runtime Service/Action 和七个 Worker 状态全部可见。
 2. **建图**：开始建图、观察位姿/关键帧/点云计数、完成建图并检查返回值。
 3. **地图**：加载或删除指定字符串 `map_id`（例如 `map_0`）。
 4. **定位**：加载地图后使用可选初始位姿启动重定位。

@@ -46,7 +46,6 @@ class NavigationController {
                 std::shared_ptr<std::vector<std::string>> errors,
                 Completion completion);
 
-  WorkerClient dual_radar_worker_;
   WorkerClient costmap_worker_;
   WorkerClient global_planner_worker_;
   WorkerClient path_smoother_worker_;
