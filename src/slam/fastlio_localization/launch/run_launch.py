@@ -11,17 +11,18 @@ from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 
 
-def find_lidar_config(package_share):
+def find_robot_param(package_share):
     current_path = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current_path, 'src', 'config', 'lidar.yaml')
+        candidate = os.path.join(
+            current_path, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
 
         parent_path = os.path.dirname(current_path)
         if parent_path == current_path:
             raise FileNotFoundError(
-                'Cannot find src/config/lidar.yaml from package share: '
+                'Cannot find src/config/robot_param.yaml from package share: '
                 + package_share
             )
         current_path = parent_path
@@ -30,7 +31,7 @@ def find_lidar_config(package_share):
 def generate_launch_description():
     package_share = get_package_share_directory('fastlio_localization')
     config = os.path.join(package_share, 'config', 'ros2_param.yaml')
-    lidar_config = find_lidar_config(package_share)
+    robot_param = find_robot_param(package_share)
     rviz_config = os.path.join(
         package_share, 'rviz_cfg', 'localization_ros2.rviz')
 
@@ -63,7 +64,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             config,
-            lidar_config,
+            robot_param,
             {
                 'runtime_profile': 'test',
                 'map_path': PathJoinSubstitution([

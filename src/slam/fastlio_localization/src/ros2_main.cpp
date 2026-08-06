@@ -582,8 +582,9 @@ void FastlioLocalizationNode::initialPoseCallback(
   init_pose.x = pose.position.x;
   init_pose.y = pose.position.y;
   init_pose.z = pose.position.z;
-  init_pose.roll = DEG2RAD(lidar_turnover_roll);
-  init_pose.pitch = DEG2RAD(lidar_turnover_pitch);
+  // lidar_to_base_R comes from robot_param.yaml and is already in radians.
+  init_pose.roll = lidar_to_base_R[0];
+  init_pose.pitch = lidar_to_base_R[1];
   init_pose.yaw = rpy.z();
   slam.relocalization->set_init_pose(init_pose);
 }
@@ -604,14 +605,10 @@ void FastlioLocalizationNode::initialize() {
   std::string last_pose_record_path;
   std::string location_log_save_path;
 
-  node->declare_parameter("lidar_turnover_roll", 0.);
-  node->declare_parameter("lidar_turnover_pitch", 0.);
   node->declare_parameter<std::vector<double>>("lidar_to_base_T",
                                                std::vector<double>());
   node->declare_parameter<std::vector<double>>("lidar_to_base_R",
                                                std::vector<double>());
-  node->get_parameter("lidar_turnover_roll", lidar_turnover_roll);
-  node->get_parameter("lidar_turnover_pitch", lidar_turnover_pitch);
   node->get_parameter("lidar_to_base_T", lidar_to_base_T);
   node->get_parameter("lidar_to_base_R", lidar_to_base_R);
 

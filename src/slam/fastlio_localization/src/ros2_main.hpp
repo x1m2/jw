@@ -86,8 +86,6 @@ class FastlioLocalizationNode : public rclcpp::Node {
   std::string baselink_frame;
   FILE *last_pose_record{nullptr};
 
-  double lidar_turnover_roll{0.0};
-  double lidar_turnover_pitch{0.0};
   std::vector<double> lidar_to_base_T;
   std::vector<double> lidar_to_base_R;
   Eigen::Matrix4d T_base_lidar{Eigen::Matrix4d::Identity()};
