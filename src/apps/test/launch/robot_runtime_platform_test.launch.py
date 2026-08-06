@@ -14,15 +14,15 @@ def package_file(package, *parts):
     return os.path.join(get_package_share_directory(package), *parts)
 
 
-def find_lidar_config(package_share):
+def find_robot_param(package_share):
     current = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current, 'src', 'config', 'lidar.yaml')
+        candidate = os.path.join(current, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
         parent = os.path.dirname(current)
         if parent == current:
-            raise FileNotFoundError('Cannot find src/config/lidar.yaml')
+            raise FileNotFoundError('Cannot find src/config/robot_param.yaml')
         current = parent
 
 
@@ -36,7 +36,7 @@ def include_launch(package, launch_file, arguments=None):
 def generate_launch_description():
     data_root = LaunchConfiguration('data_root')
     use_sim_time = LaunchConfiguration('use_sim_time')
-    lidar_config = find_lidar_config(get_package_share_directory('fast_lio'))
+    robot_param = find_robot_param(get_package_share_directory('fast_lio'))
 
     # 与run_slam.sh保持一致：启动MID360s驱动，为FastLIO提供点云和IMU。
     livox_driver = IncludeLaunchDescription(
@@ -76,7 +76,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             package_file('fast_lio', 'config', 'mid360.yaml'),
-            lidar_config,
+            robot_param,
             {'runtime_profile': 'platform', 'use_sim_time': use_sim_time},
         ],
     )
@@ -87,13 +87,14 @@ def generate_launch_description():
         prefix=['stdbuf -o L'],
         parameters=[
             package_file('fastlio_localization', 'config', 'ros2_param.yaml'),
-            lidar_config,
+            robot_param,
             {'runtime_profile': 'platform', 'use_sim_time': use_sim_time},
         ],
     )
 
     platform_args = {'runtime_profile': 'platform'}
     navigation_workers = [
+        include_launch('obstacle_stop', 'obstacle_stop.launch.py', platform_args),
         include_launch('costmap_2d', 'costmap_2d.launch.py', platform_args),
         include_launch(
             'global_path_planner',

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 namespace local_planner {
@@ -36,8 +35,6 @@ CostMap2D::CostMap2D(const rclcpp::Node::SharedPtr& node)
   }
 }
 
-CostMap2D::~CostMap2D() {}
-
 bool CostMap2D::initialize() {
   if (angle_increment_ <= 0.0 || angle_max_ <= angle_min_ ||
       range_max_ <= range_min_ || max_height_ < min_height_) {
@@ -55,6 +52,7 @@ bool CostMap2D::initialize() {
       "/costmap", rclcpp::QoS(1).reliable());
 
   publishLidarStaticTransform();
+  initializeLookupTables();
   initializeCostMap();
 
   RCLCPP_INFO(node_->get_logger(), "CostMap2D node initialized successfully");
@@ -199,6 +197,47 @@ void CostMap2D::initializeCostMap() {
               resolution_);
 }
 
+void CostMap2D::initializeLookupTables() {
+  const auto ray_count = static_cast<std::size_t>(
+      std::ceil((angle_max_ - angle_min_) / angle_increment_));
+  ray_cosines_.resize(ray_count);
+  ray_sines_.resize(ray_count);
+  for (std::size_t i = 0; i < ray_count; ++i) {
+    const double angle = angle_min_ + static_cast<double>(i) * angle_increment_;
+    ray_cosines_[i] = static_cast<float>(std::cos(angle));
+    ray_sines_[i] = static_cast<float>(std::sin(angle));
+  }
+
+  inflation_offsets_.clear();
+  if (inflation_radius_ <= 0.0) {
+    return;
+  }
+
+  const int inflation_cells =
+      static_cast<int>(std::ceil(inflation_radius_ / resolution_));
+  inflation_offsets_.reserve(static_cast<std::size_t>(
+      (2 * inflation_cells + 1) * (2 * inflation_cells + 1)));
+  for (int dx = -inflation_cells; dx <= inflation_cells; ++dx) {
+    for (int dy = -inflation_cells; dy <= inflation_cells; ++dy) {
+      const double dist = std::hypot(static_cast<double>(dx),
+                                     static_cast<double>(dy)) *
+                          resolution_;
+      if (dist > inflation_radius_) {
+        continue;
+      }
+
+      const double normalized_dist = dist / inflation_radius_;
+      unsigned char cost = static_cast<unsigned char>(
+          LETHAL_OBSTACLE -
+          normalized_dist * (LETHAL_OBSTACLE - FREE_SPACE));
+      cost = std::max(static_cast<unsigned char>(FREE_SPACE + 1), cost);
+      cost =
+          std::min(static_cast<unsigned char>(LETHAL_OBSTACLE - 1), cost);
+      inflation_offsets_.push_back(InflationOffset{dx, dy, cost});
+    }
+  }
+}
+
 void CostMap2D::livoxCallback(
     const livox_ros_driver2::msg::CustomMsg::SharedPtr livox_msg) {
   if (livox_msg->points.empty()) {
@@ -228,9 +267,8 @@ sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
   scan->range_min = static_cast<float>(range_min_);
   scan->range_max = static_cast<float>(range_max_);
 
-  const auto ray_count = static_cast<std::size_t>(
-      std::ceil((angle_max_ - angle_min_) / angle_increment_));
-  scan->ranges.assign(ray_count, std::numeric_limits<float>::infinity());
+  scan->ranges.assign(ray_cosines_.size(),
+                      std::numeric_limits<float>::infinity());
 
   for (const auto& livox_point : livox_msg.points) {
     if (!std::isfinite(livox_point.x) || !std::isfinite(livox_point.y) ||
@@ -269,33 +307,33 @@ sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
 void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
   std::lock_guard<std::mutex> lock(costmap_mutex_);
 
-  updateMapOrigin();
-
-  bool pitch_exceeded = isPitchAngleExceeded();
-
-  double robot_x;
-  double robot_y;
-  double robot_z;
-  double robot_yaw;
-
-  if (!getRobotPose(robot_x, robot_y, robot_z, robot_yaw)) {
+  geometry_msgs::msg::TransformStamped robot_transform;
+  try {
+    // 同一帧统一使用同一个最新位姿，避免重复查询TF以及各处理阶段位姿不一致。
+    robot_transform = tf_buffer_.lookupTransform(
+        global_frame_, robot_base_frame_, tf2::TimePointZero,
+        tf2::durationFromSec(0.1));
+  } catch (const tf2::TransformException& ex) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                         "Failed to get robot pose for scan processing");
+                         "Failed to get robot transform: %s", ex.what());
     return;
   }
+
+  updateMapOrigin(robot_transform);
+  const bool pitch_exceeded = isPitchAngleExceeded(robot_transform);
 
   if (pitch_exceeded) {
     clearCostMap();
     RCLCPP_DEBUG(node_->get_logger(), "Pitch angle exceeded, costmap cleared");
   } else {
-    raytraceFreespace(scan_msg, robot_x, robot_y);
+    raytraceFreespace(scan_msg, robot_transform);
 
     pcl::PointCloud<pcl::PointXYZ> scan_cloud;
     scanToPointCloud(scan_msg, scan_cloud);
 
     pcl::PointCloud<pcl::PointXYZ> global_cloud;
     if (transformPointCloud(scan_cloud, global_cloud, global_frame_,
-                            rclcpp::Time(scan_msg.header.stamp))) {
+                            robot_transform)) {
       markObstacles(global_cloud);
       inflateObstacles();
 
@@ -325,11 +363,16 @@ void CostMap2D::scanToPointCloud(const sensor_msgs::msg::LaserScan& scan,
       continue;
     }
 
-    float angle = scan.angle_min + static_cast<float>(i) * scan.angle_increment;
-
     pcl::PointXYZ point;
-    point.x = range * std::cos(angle);
-    point.y = range * std::sin(angle);
+    if (i < ray_cosines_.size()) {
+      point.x = range * ray_cosines_[i];
+      point.y = range * ray_sines_[i];
+    } else {
+      const float angle =
+          scan.angle_min + static_cast<float>(i) * scan.angle_increment;
+      point.x = range * std::cos(angle);
+      point.y = range * std::sin(angle);
+    }
     point.z = 0.0f;
 
     cloud.points.push_back(point);
@@ -342,17 +385,10 @@ void CostMap2D::scanToPointCloud(const sensor_msgs::msg::LaserScan& scan,
 
 bool CostMap2D::transformPointCloud(
     const pcl::PointCloud<pcl::PointXYZ>& cloud_in,
-    pcl::PointCloud<pcl::PointXYZ>& cloud_out, const std::string& target_frame,
-    const rclcpp::Time& stamp) {
-  (void)stamp;
-
+    pcl::PointCloud<pcl::PointXYZ>& cloud_out,
+    const std::string& target_frame,
+    const geometry_msgs::msg::TransformStamped& transform) {
   try {
-    // 实时局部代价地图使用最新 TF，避免 scan.header.stamp 超前导致 future
-    // extrapolation
-    geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
-        target_frame, cloud_in.header.frame_id, tf2::TimePointZero,
-        tf2::durationFromSec(0.5));
-
     cloud_out.clear();
     cloud_out.header.frame_id = target_frame;
     cloud_out.header.stamp = cloud_in.header.stamp;
@@ -412,66 +448,42 @@ void CostMap2D::markObstacles(const pcl::PointCloud<pcl::PointXYZ>& cloud) {
 }
 
 void CostMap2D::inflateObstacles() {
-  if (inflation_radius_ <= 0.0) {
+  if (inflation_offsets_.empty()) {
     return;
   }
 
-  int inflation_cells =
-      static_cast<int>(std::ceil(inflation_radius_ / resolution_));
+  // 先收集致命障碍，后续原地写入膨胀代价，不需要复制整张代价地图。
+  std::vector<std::pair<int, int>> lethal_cells;
+  for (int my = 0; my < height_; ++my) {
+    for (int mx = 0; mx < width_; ++mx) {
+      if (costmap_[my * width_ + mx] == LETHAL_OBSTACLE) {
+        lethal_cells.emplace_back(mx, my);
+      }
+    }
+  }
 
-  std::vector<unsigned char> original_costmap = costmap_;
+  for (const auto& lethal_cell : lethal_cells) {
+    for (const auto& offset : inflation_offsets_) {
+      const int nx = lethal_cell.first + offset.dx;
+      const int ny = lethal_cell.second + offset.dy;
+      if (nx < 0 || nx >= width_ || ny < 0 || ny >= height_) {
+        continue;
+      }
 
-  for (int mx = 0; mx < width_; ++mx) {
-    for (int my = 0; my < height_; ++my) {
-      if (original_costmap[my * width_ + mx] == LETHAL_OBSTACLE) {
-        for (int dx = -inflation_cells; dx <= inflation_cells; ++dx) {
-          for (int dy = -inflation_cells; dy <= inflation_cells; ++dy) {
-            int nx = mx + dx;
-            int ny = my + dy;
-
-            if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_) {
-              double dist = distance(mx, my, nx, ny) * resolution_;
-
-              if (dist <= inflation_radius_) {
-                unsigned char current_cost = getCost(nx, ny);
-
-                if (current_cost != LETHAL_OBSTACLE) {
-                  double normalized_dist = dist / inflation_radius_;
-
-                  unsigned char gradient_cost = static_cast<unsigned char>(
-                      LETHAL_OBSTACLE -
-                      normalized_dist * (LETHAL_OBSTACLE - FREE_SPACE));
-
-                  gradient_cost =
-                      std::max(static_cast<unsigned char>(FREE_SPACE + 1),
-                               gradient_cost);
-
-                  gradient_cost =
-                      std::min(static_cast<unsigned char>(LETHAL_OBSTACLE - 1),
-                               gradient_cost);
-
-                  if (gradient_cost > current_cost) {
-                    setCost(nx, ny, gradient_cost);
-                  }
-                }
-              }
-            }
-          }
-        }
+      const auto index = static_cast<std::size_t>(ny * width_ + nx);
+      if (costmap_[index] != LETHAL_OBSTACLE &&
+          offset.cost > costmap_[index]) {
+        costmap_[index] = offset.cost;
       }
     }
   }
 }
 
-void CostMap2D::updateMapOrigin() {
-  double robot_x;
-  double robot_y;
-  double robot_z;
-  double robot_yaw;
-
-  if (!getRobotPose(robot_x, robot_y, robot_z, robot_yaw)) {
-    return;
-  }
+void CostMap2D::updateMapOrigin(
+    const geometry_msgs::msg::TransformStamped& robot_transform) {
+  const double robot_x = robot_transform.transform.translation.x;
+  const double robot_y = robot_transform.transform.translation.y;
+  const double robot_z = robot_transform.transform.translation.z;
 
   double new_origin_x = robot_x - (width_ * resolution_) / 2.0;
   double new_origin_y = robot_y - (height_ * resolution_) / 2.0;
@@ -501,42 +513,11 @@ void CostMap2D::updateMapOrigin() {
   costmap_msg_.info.origin.position.z = origin_z_;
 }
 
-bool CostMap2D::getRobotPose(double& x, double& y, double& z, double& yaw) {
-  try {
-    geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
-        global_frame_, robot_base_frame_, tf2::TimePointZero,
-        tf2::durationFromSec(0.1));
-
-    x = transform.transform.translation.x;
-    y = transform.transform.translation.y;
-    z = transform.transform.translation.z;
-
-    tf2::Quaternion q;
-    tf2::fromMsg(transform.transform.rotation, q);
-
-    tf2::Matrix3x3 m(q);
-    double roll;
-    double pitch;
-    m.getRPY(roll, pitch, yaw);
-
-    return true;
-  } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                         "Failed to get robot pose: %s", ex.what());
-    return false;
-  }
-}
-
 bool CostMap2D::worldToMap(double wx, double wy, int& mx, int& my) {
   mx = static_cast<int>((wx - origin_x_) / resolution_);
   my = static_cast<int>((wy - origin_y_) / resolution_);
 
   return mx >= 0 && mx < width_ && my >= 0 && my < height_;
-}
-
-void CostMap2D::mapToWorld(int mx, int my, double& wx, double& wy) {
-  wx = origin_x_ + (static_cast<double>(mx) + 0.5) * resolution_;
-  wy = origin_y_ + (static_cast<double>(my) + 0.5) * resolution_;
 }
 
 void CostMap2D::setCost(int mx, int my, unsigned char cost) {
@@ -553,11 +534,8 @@ unsigned char CostMap2D::getCost(int mx, int my) {
   return NO_INFORMATION;
 }
 
-double CostMap2D::distance(double x1, double y1, double x2, double y2) {
-  return std::sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
-}
-
-bool CostMap2D::isPitchAngleExceeded() {
+bool CostMap2D::isPitchAngleExceeded(
+    const geometry_msgs::msg::TransformStamped& robot_transform) {
   if (!enable_pitch_detection_) {
     return false;
   }
@@ -565,12 +543,8 @@ bool CostMap2D::isPitchAngleExceeded() {
   bool current_pitch_exceeded = false;
 
   try {
-    geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
-        global_frame_, robot_base_frame_, tf2::TimePointZero,
-        tf2::durationFromSec(0.1));
-
     tf2::Quaternion q;
-    tf2::fromMsg(transform.transform.rotation, q);
+    tf2::fromMsg(robot_transform.transform.rotation, q);
 
     tf2::Matrix3x3 m(q);
     double roll;
@@ -652,10 +626,6 @@ bool CostMap2D::isPitchAngleExceeded() {
   }
 }
 
-void CostMap2D::updateCostMap() {
-  // 这个函数可以用于周期性更新，目前主要通过 Livox 点云回调更新
-}
-
 void CostMap2D::decayObstacles() {
   rclcpp::Time current_time = node_->now();
 
@@ -690,28 +660,18 @@ void CostMap2D::decayObstacles() {
 }
 
 void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
-                                  double robot_x, double robot_y) {
+                                  const geometry_msgs::msg::TransformStamped&
+                                      robot_transform) {
+  const rclcpp::Time frame_time = node_->now();
   int robot_mx;
   int robot_my;
 
-  if (!worldToMap(robot_x, robot_y, robot_mx, robot_my)) {
+  if (!worldToMap(robot_transform.transform.translation.x,
+                  robot_transform.transform.translation.y, robot_mx,
+                  robot_my)) {
     RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 5000,
         "Robot position outside costmap bounds for raytracing");
-    return;
-  }
-
-  // 每帧 scan 只查一次最新 TF，避免每个点重复查 TF，也避免 scan 时间戳超前
-  geometry_msgs::msg::TransformStamped transform;
-
-  try {
-    transform = tf_buffer_.lookupTransform(global_frame_, scan.header.frame_id,
-                                           tf2::TimePointZero,
-                                           tf2::durationFromSec(0.5));
-  } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                         "Failed to get sensor transform for raytracing: %s",
-                         ex.what());
     return;
   }
 
@@ -719,12 +679,13 @@ void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
   geometry_msgs::msg::PointStamped sensor_origin_global;
 
   sensor_origin_local.header.frame_id = scan.header.frame_id;
-  sensor_origin_local.header.stamp = transform.header.stamp;
+  sensor_origin_local.header.stamp = robot_transform.header.stamp;
   sensor_origin_local.point.x = 0.0;
   sensor_origin_local.point.y = 0.0;
   sensor_origin_local.point.z = 0.0;
 
-  tf2::doTransform(sensor_origin_local, sensor_origin_global, transform);
+  tf2::doTransform(sensor_origin_local, sensor_origin_global,
+                   robot_transform);
 
   int sensor_mx;
   int sensor_my;
@@ -738,7 +699,6 @@ void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
 
   for (size_t i = 0; i < scan.ranges.size(); ++i) {
     float range = scan.ranges[i];
-    float angle = scan.angle_min + static_cast<float>(i) * scan.angle_increment;
 
     bool valid_range = range >= scan.range_min && range <= scan.range_max;
     bool inf_range = std::isinf(range) || range > scan.range_max;
@@ -760,33 +720,37 @@ void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
     geometry_msgs::msg::PointStamped ray_end_global;
 
     ray_end_local.header.frame_id = scan.header.frame_id;
-    ray_end_local.header.stamp = transform.header.stamp;
-    ray_end_local.point.x = effective_range * std::cos(angle);
-    ray_end_local.point.y = effective_range * std::sin(angle);
+    ray_end_local.header.stamp = robot_transform.header.stamp;
+    if (i < ray_cosines_.size()) {
+      ray_end_local.point.x = effective_range * ray_cosines_[i];
+      ray_end_local.point.y = effective_range * ray_sines_[i];
+    } else {
+      const float angle =
+          scan.angle_min + static_cast<float>(i) * scan.angle_increment;
+      ray_end_local.point.x = effective_range * std::cos(angle);
+      ray_end_local.point.y = effective_range * std::sin(angle);
+    }
     ray_end_local.point.z = 0.0;
 
-    tf2::doTransform(ray_end_local, ray_end_global, transform);
+    tf2::doTransform(ray_end_local, ray_end_global, robot_transform);
 
     int end_mx;
     int end_my;
 
     if (worldToMap(ray_end_global.point.x, ray_end_global.point.y, end_mx,
                    end_my)) {
-      std::vector<std::pair<int, int>> ray_cells;
-      bresenhamLine(sensor_mx, sensor_my, end_mx, end_my, ray_cells);
-
       bool obstacle_hit = valid_range && range <= max_obstacle_range_ &&
                           range >= min_obstacle_range_;
 
-      clearRayPath(ray_cells, obstacle_hit);
+      clearRayPath(sensor_mx, sensor_my, end_mx, end_my, obstacle_hit,
+                   frame_time);
     }
   }
 }
 
-void CostMap2D::bresenhamLine(int x0, int y0, int x1, int y1,
-                              std::vector<std::pair<int, int>>& cells) {
-  cells.clear();
-
+void CostMap2D::clearRayPath(int x0, int y0, int x1, int y1,
+                             bool obstacle_detected,
+                             const rclcpp::Time& frame_time) {
   int dx = std::abs(x1 - x0);
   int dy = std::abs(y1 - y0);
   int sx = x0 < x1 ? 1 : -1;
@@ -795,11 +759,19 @@ void CostMap2D::bresenhamLine(int x0, int y0, int x1, int y1,
 
   int x = x0;
   int y = y0;
+  bool first_cell = true;
 
   while (true) {
-    cells.push_back(std::make_pair(x, y));
+    const bool last_cell = x == x1 && y == y1;
+    if (!first_cell && !(last_cell && obstacle_detected) && x >= 0 &&
+        x < width_ && y >= 0 && y < height_) {
+      const auto index = static_cast<std::size_t>(y * width_ + x);
+      costmap_[index] = FREE_SPACE;
+      obstacle_timestamps_[index] = frame_time;
+    }
+    first_cell = false;
 
-    if (x == x1 && y == y1) {
+    if (last_cell) {
       break;
     }
 
@@ -813,30 +785,6 @@ void CostMap2D::bresenhamLine(int x0, int y0, int x1, int y1,
     if (e2 < dx) {
       err += dx;
       y += sy;
-    }
-  }
-}
-
-void CostMap2D::clearRayPath(const std::vector<std::pair<int, int>>& ray_cells,
-                             bool obstacle_detected) {
-  size_t clear_end = ray_cells.size();
-
-  if (obstacle_detected && ray_cells.size() > 1) {
-    clear_end = ray_cells.size() - 1;
-  }
-
-  for (size_t i = 1; i < clear_end; ++i) {
-    int mx = ray_cells[i].first;
-    int my = ray_cells[i].second;
-
-    if (mx >= 0 && mx < width_ && my >= 0 && my < height_) {
-      int index = my * width_ + mx;
-
-      costmap_[index] = FREE_SPACE;
-
-      if (index >= 0 && index < static_cast<int>(obstacle_timestamps_.size())) {
-        obstacle_timestamps_[index] = node_->now();
-      }
     }
   }
 }

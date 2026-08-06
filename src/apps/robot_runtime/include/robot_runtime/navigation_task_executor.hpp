@@ -44,6 +44,7 @@ class NavigationTaskExecutor {
     std::function<void()> publish_mode;
     std::function<void(uint8_t)> publish_runtime_state;
     std::function<void(int32_t, const std::string &)> enter_error;
+    std::function<bool(geometry_msgs::msg::PoseStamped &)> get_current_pose;
   };
 
   NavigationTaskExecutor(rclcpp::Node *node,
@@ -91,6 +92,7 @@ class NavigationTaskExecutor {
   bool stopWorkers(uint64_t session_id, std::string &message);
   bool waitForGoal(double timeout_sec,
                    const std::function<bool()> &is_canceling);
+  void fillCurrentPoseFeedback(StartNavigation::Feedback &feedback) const;
   void resetGoalState();
   void releaseOperation();
 

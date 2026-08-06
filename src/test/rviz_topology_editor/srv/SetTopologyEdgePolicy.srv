@@ -1,0 +1,6 @@
+int32 edge_id
+bool obstacle_stop_enabled
+bool obstacle_avoidance_enabled
+---
+bool success
+string message

@@ -12,7 +12,6 @@
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/point_stamped.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
@@ -22,7 +21,6 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <utility>
 #include <vector>
 
 namespace local_planner {
@@ -41,10 +39,7 @@ class CostMap2D {
    */
   explicit CostMap2D(const rclcpp::Node::SharedPtr& node);
 
-  /**
-   * @brief 析构函数
-   */
-  ~CostMap2D();
+  ~CostMap2D() = default;
 
   /**
    * @brief 初始化代价地图
@@ -53,16 +48,17 @@ class CostMap2D {
   bool initialize();
 
   /**
-   * @brief 更新代价地图
-   */
-  void updateCostMap();
-
-  /**
    * @brief 发布代价地图
    */
   void publishCostMap();
 
  private:
+  struct InflationOffset {
+    int dx;
+    int dy;
+    unsigned char cost;
+  };
+
   // ROS2相关
   rclcpp::Node::SharedPtr node_;
 
@@ -139,6 +135,9 @@ class CostMap2D {
   std::vector<unsigned char> costmap_;
   std::vector<rclcpp::Time> obstacle_timestamps_;
   nav_msgs::msg::OccupancyGrid costmap_msg_;
+  std::vector<float> ray_cosines_;
+  std::vector<float> ray_sines_;
+  std::vector<InflationOffset> inflation_offsets_;
 
   // 互斥锁
   std::mutex costmap_mutex_;
@@ -147,6 +146,11 @@ class CostMap2D {
    * @brief 初始化代价地图数据
    */
   void initializeCostMap();
+
+  /**
+   * @brief 预计算固定射线方向和膨胀模板
+   */
+  void initializeLookupTables();
 
   /**
    * @brief 将激光数据转换为点云
@@ -166,7 +170,8 @@ class CostMap2D {
   bool transformPointCloud(const pcl::PointCloud<pcl::PointXYZ>& cloud_in,
                            pcl::PointCloud<pcl::PointXYZ>& cloud_out,
                            const std::string& target_frame,
-                           const rclcpp::Time& stamp);
+                           const geometry_msgs::msg::TransformStamped&
+                               transform);
 
   /**
    * @brief 清除代价地图
@@ -182,19 +187,15 @@ class CostMap2D {
    * @brief 射线追踪清理自由空间
    */
   void raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
-                         double robot_x, double robot_y);
+                         const geometry_msgs::msg::TransformStamped&
+                             robot_transform);
 
   /**
    * @brief 清理射线路径上的障碍物
    */
-  void clearRayPath(const std::vector<std::pair<int, int>>& ray_cells,
-                    bool obstacle_detected);
-
-  /**
-   * @brief Bresenham直线算法
-   */
-  void bresenhamLine(int x0, int y0, int x1, int y1,
-                     std::vector<std::pair<int, int>>& cells);
+  void clearRayPath(int x0, int y0, int x1, int y1,
+                    bool obstacle_detected,
+                    const rclcpp::Time& frame_time);
 
   /**
    * @brief 在代价地图上标记障碍物
@@ -212,11 +213,6 @@ class CostMap2D {
   bool worldToMap(double wx, double wy, int& mx, int& my);
 
   /**
-   * @brief 地图坐标转换为世界坐标
-   */
-  void mapToWorld(int mx, int my, double& wx, double& wy);
-
-  /**
    * @brief 设置代价值
    */
   void setCost(int mx, int my, unsigned char cost);
@@ -227,14 +223,10 @@ class CostMap2D {
   unsigned char getCost(int mx, int my);
 
   /**
-   * @brief 获取机器人当前位置
-   */
-  bool getRobotPose(double& x, double& y, double& z, double& yaw);
-
-  /**
    * @brief 更新代价地图原点位置
    */
-  void updateMapOrigin();
+  void updateMapOrigin(
+      const geometry_msgs::msg::TransformStamped& robot_transform);
 
   /**
    * @brief 滚动地图数据
@@ -242,14 +234,10 @@ class CostMap2D {
   void rollMap(int offset_x, int offset_y);
 
   /**
-   * @brief 计算两点间的距离
-   */
-  double distance(double x1, double y1, double x2, double y2);
-
-  /**
    * @brief 检查机器人俯仰角是否超过阈值
    */
-  bool isPitchAngleExceeded();
+  bool isPitchAngleExceeded(
+      const geometry_msgs::msg::TransformStamped& robot_transform);
 
   /**
    * @brief 加载参数

@@ -8,17 +8,17 @@ from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def find_lidar_config(package_share):
+def find_robot_param(package_share):
     current_path = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current_path, 'src', 'config', 'lidar.yaml')
+        candidate = os.path.join(current_path, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
 
         parent_path = os.path.dirname(current_path)
         if parent_path == current_path:
             raise FileNotFoundError(
-                'Cannot find src/config/lidar.yaml from package share: '
+                'Cannot find src/config/robot_param.yaml from package share: '
                 + package_share
             )
         current_path = parent_path
@@ -27,7 +27,7 @@ def find_lidar_config(package_share):
 def generate_launch_description():
 
     config_file = LaunchConfiguration('config_file')
-    lidar_config_file = LaunchConfiguration('lidar_config_file')
+    robot_param_file = LaunchConfiguration('robot_param_file')
     runtime_profile = LaunchConfiguration('runtime_profile')
 
     package_share = get_package_share_directory('costmap_2d')
@@ -36,7 +36,7 @@ def generate_launch_description():
         'config',
         'costmap_2d.yaml'
     )
-    default_lidar_config_file = find_lidar_config(package_share)
+    default_robot_param_file = find_robot_param(package_share)
 
     return LaunchDescription([
 
@@ -46,9 +46,9 @@ def generate_launch_description():
             description='costmap_2d_node 参数配置文件'
         ),
         DeclareLaunchArgument(
-            'lidar_config_file',
-            default_value=default_lidar_config_file,
-            description='雷达到 base_link 的公共外参配置文件'
+            'robot_param_file',
+            default_value=default_robot_param_file,
+            description='机器人尺寸和雷达外参公共配置文件'
         ),
         DeclareLaunchArgument(
             'runtime_profile',
@@ -62,7 +62,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 config_file,
-                lidar_config_file,
+                robot_param_file,
                 {'runtime_profile': runtime_profile}
             ],
             remappings=[

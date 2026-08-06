@@ -55,9 +55,9 @@ bool LocalPathPlanner::initialize(rclcpp::Node::SharedPtr node,
     avoidance_search_step_distance_ = declareOrGetParameter(node_, "avoidance_search_step_distance", 0.3);
     avoidance_goal_tolerance_ = declareOrGetParameter(node_, "avoidance_goal_tolerance", 0.35);
     const double robot_width =
-        declareOrGetParameter(node_, "front_obstacle_detector.robot_width", 0.55);
+        declareOrGetParameter(node_, "robot_width", 0.80);
     const double robot_length =
-        declareOrGetParameter(node_, "front_obstacle_detector.robot_length", 0.75);
+        declareOrGetParameter(node_, "robot_length", 1.10);
     const double robot_safety_margin =
         declareOrGetParameter(node_, "front_obstacle_detector.safety_margin", 0.10);
     const double default_return_goal_clearance =

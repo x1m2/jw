@@ -87,7 +87,6 @@ declare -a PIDS=()
 
 # 重定位阶段节点 PID
 LIVOX_PID=""
-PCD2PGM_RELOC_PID=""
 LOCALIZATION_PID=""
 WAIT_PID=""
 
@@ -96,7 +95,8 @@ COSTMAP_PID=""
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
 PURE_PURSUIT_PID=""
-DUAL_RADAR_EXTRACTOR_PID=""
+OBSTACLE_STOP_PID=""
+# DUAL_RADAR_EXTRACTOR_PID=""
 TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
 
@@ -205,10 +205,6 @@ info "启动重定位依赖节点..."
 start_bg LIVOX_PID "livox_ros_driver2" "/dev/null" 4 \
     ros2 launch livox_ros_driver2 msg_MID360s_launch.py
 
-start_bg PCD2PGM_RELOC_PID "pcd2pgm" "/dev/null" 2 \
-    ros2 launch pcd2pgm pcd2pgm_launch.py \
-    pgm_use_rviz:=false data_dir:="${DATA_ROOT}" map_id:="${MAP_ID}"
-
 # 在 localization 启动前先订阅，避免错过 /reloc_success=true。
 cat > "${WAIT_SCRIPT}" <<'PY'
 #!/usr/bin/env python3
@@ -311,6 +307,10 @@ info "用户已确认重定位结果，开始启动导航节点"
 # 启动导航节点
 # ==================================================
 
+start_bg OBSTACLE_STOP_PID "obstacle_stop" \
+    "${NAV_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
+    ros2 launch obstacle_stop obstacle_stop.launch.py
+
 start_bg COSTMAP_PID "costmap_2d" \
     "${NAV_LOG_DIR}/costmap_2d_$(log_time).log" 1 \
     ros2 launch costmap_2d costmap_2d.launch.py
@@ -328,9 +328,9 @@ start_bg PURE_PURSUIT_PID "pure_pursuit" \
     "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
     ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
 
-start_bg DUAL_RADAR_EXTRACTOR_PID "dual_radar_extractor" \
-    "${NAV_LOG_DIR}/dual_radar_extractor_$(log_time).log" 3 \
-    ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py
+# start_bg DUAL_RADAR_EXTRACTOR_PID "dual_radar_extractor" \
+#     "${NAV_LOG_DIR}/dual_radar_extractor_$(log_time).log" 3 \
+#     ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py
 
 start_bg TARGET_POINTS_VISUALIZER_PID "target_points_visualizer" \
     "${NAV_LOG_DIR}/target_points_visualizer_$(log_time).log" 1 \

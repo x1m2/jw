@@ -109,6 +109,14 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
           [this](uint8_t state) { publishRuntimeState(state); },
           [this](int32_t code, const std::string &message) {
             enterError(code, message);
+          },
+          [this](geometry_msgs::msg::PoseStamped &pose) {
+            std::lock_guard<std::mutex> lock(current_pose_mutex_);
+            if (!has_current_pose_) {
+              return false;
+            }
+            pose = current_pose_;
+            return true;
           }});
 
   // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。

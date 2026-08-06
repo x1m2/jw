@@ -44,6 +44,7 @@ EXPECTED_WORKERS = (
     'pgo_worker',
     'fast_lio_worker',
     'fastlio_localization_worker',
+    'obstacle_stop_worker',
     'costmap_worker',
     'global_path_planner_worker',
     'path_smoother_worker',

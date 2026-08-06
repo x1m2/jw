@@ -1,6 +1,6 @@
 # pure_pursuit_local_planner
 
-ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路径和局部 costmap，输出 `/cmd_vel`，并通过 `/nav_state` 告诉状态机当前目标点是否完成。
+ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路径和局部 costmap，输出 `/cmd_vel_planned`，并通过 `/nav_state` 告诉状态机当前目标点是否完成。最终 `/cmd_vel` 由 `obstacle_stop` 做安全检查后发布。
 
 ## 当前流程
 
@@ -16,7 +16,7 @@ pure_pursuit_local_planner
   <- /smoothed_global_path
   <- /local_costmap/costmap
   <- /target_points
-  -> /cmd_vel
+  -> /cmd_vel_planned -> obstacle_stop -> /cmd_vel
   -> /nav_state
 ```
 
@@ -46,16 +46,15 @@ ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
 订阅：
 
 ```text
-/global_path      nav_msgs/msg/Path
+/smoothed_global_path_with_policy navigation_interfaces/msg/PathWithPolicy
 /local_costmap    nav_msgs/msg/OccupancyGrid
 /target_points    geometry_msgs/msg/Pose
-/emergency_stop   std_msgs/msg/Bool
 ```
 
 发布：
 
 ```text
-/cmd_vel          geometry_msgs/msg/Twist
+/cmd_vel_planned  geometry_msgs/msg/Twist
 /nav_state        std_msgs/msg/Bool
 local_path        nav_msgs/msg/Path
 local_path_astar  nav_msgs/msg/Path
@@ -70,9 +69,6 @@ local_goal_marker visualization_msgs/msg/Marker
 
 大角度偏航：
   先原地转向对准路径
-
-前方硬停区有障碍：
-  立即停车
 
 前方障碍可绕：
   生成侧方临时点 -> 局部 A* 绕障 -> 找回归点 -> 回到全局路径

@@ -15,16 +15,14 @@
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
-#include <map>
 #include <memory>
+#include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <vector>
-#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace global_path_planner {
 
@@ -45,31 +43,25 @@ struct TopologyEdge {
   int to_id;
   double weight;
   bool bidirectional;
+  bool disable_obstacle_stop;
+  bool disable_obstacle_avoidance;
 
   TopologyEdge()
-      : id(0), from_id(0), to_id(0), weight(0.0), bidirectional(false) {}
+      : id(0),
+        from_id(0),
+        to_id(0),
+        weight(0.0),
+        bidirectional(false),
+        disable_obstacle_stop(false),
+        disable_obstacle_avoidance(true) {}
   TopologyEdge(int _id, int _from, int _to, double _weight, bool _bi)
       : id(_id),
         from_id(_from),
         to_id(_to),
         weight(_weight),
-        bidirectional(_bi) {}
-};
-
-struct PathSegment {
-  geometry_msgs::msg::Point start;
-  geometry_msgs::msg::Point end;
-  double length;
-
-  PathSegment() : length(0.0) {}
-  PathSegment(const geometry_msgs::msg::Point& s,
-              const geometry_msgs::msg::Point& e)
-      : start(s), end(e) {
-    double dx = e.x - s.x;
-    double dy = e.y - s.y;
-    double dz = e.z - s.z;
-    length = std::sqrt(dx * dx + dy * dy + dz * dz);
-  }
+        bidirectional(_bi),
+        disable_obstacle_stop(false),
+        disable_obstacle_avoidance(true) {}
 };
 
 class GlobalPathPlanner : public rclcpp::Node {
@@ -79,13 +71,12 @@ class GlobalPathPlanner : public rclcpp::Node {
   ~GlobalPathPlanner();
 
   bool initialize();
-  void spin();
 
  private:
   // ROS2组件
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr global_path_pub_;
-  // rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
-  // visualization_pub_;  // 已禁用可视化以避免RViz崩溃
+  rclcpp::Publisher<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
+      global_path_with_policy_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
@@ -102,11 +93,6 @@ class GlobalPathPlanner : public rclcpp::Node {
   double connection_distance_threshold_;
   int interpolation_points_;
 
-  // 可行性检查参数
-  double free_space_radius_;
-  double edge_proximity_threshold_;
-  double line_of_sight_resolution_;
-  bool enable_feasibility_check_;
   bool enable_direct_connection_;
   double direct_connection_threshold_;
   double direct_connection_cost_ratio_;
@@ -127,14 +113,12 @@ class GlobalPathPlanner : public rclcpp::Node {
   // 数据
   std::vector<TopologyNode> nodes_;
   std::vector<TopologyEdge> edges_;
-  std::map<int, TopologyNode> node_map_;
   geometry_msgs::msg::Point current_position_;
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
   bool has_goal_;
-
-  // 可视化状态 (已禁用)
-  // size_t last_published_marker_count_;
+  std::vector<bool> last_path_obstacle_stop_policy_;
+  std::vector<bool> last_path_obstacle_avoidance_policy_;
 
   // 方法
   bool loadTopologyMap();
@@ -145,21 +129,7 @@ class GlobalPathPlanner : public rclcpp::Node {
 
   // 路径规划核心方法
   nav_msgs::msg::Path planGlobalPath();
-  std::vector<int> findTopologyPath(int start_node_id, int goal_node_id);
-
-  // 几何计算方法
-  geometry_msgs::msg::Point findNearestPointOnEdge(
-      const geometry_msgs::msg::Point& point, const TopologyEdge& edge);
-  double pointToSegmentDistance(const geometry_msgs::msg::Point& point,
-                                const geometry_msgs::msg::Point& seg_start,
-                                const geometry_msgs::msg::Point& seg_end);
-  int findNearestNode(const geometry_msgs::msg::Point& point);
-  TopologyEdge findNearestEdge(const geometry_msgs::msg::Point& point);
-
   // 路径构建方法
-  nav_msgs::msg::Path buildCompletePath(const geometry_msgs::msg::Point& start,
-                                        const geometry_msgs::msg::Point& goal,
-                                        const std::vector<int>& topology_path);
   std::vector<geometry_msgs::msg::Point> interpolatePath(
       const geometry_msgs::msg::Point& start,
       const geometry_msgs::msg::Point& end, int num_points);
@@ -170,11 +140,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   geometry_msgs::msg::Quaternion calculateOrientation(
       const geometry_msgs::msg::Point& from,
       const geometry_msgs::msg::Point& to);
-  void publishVisualization(const nav_msgs::msg::Path& path);
   bool loadFreeSpaceCloudFromPcd();
-
-  // Dijkstra算法
-  std::vector<int> dijkstraSearch(int start_id, int goal_id);
 
   // 临时拓扑图相关方法
   void addTemporaryConnections(std::vector<TopologyNode>& temp_nodes,
@@ -190,14 +156,15 @@ class GlobalPathPlanner : public rclcpp::Node {
       const std::vector<TopologyEdge>& temp_edges, int start_id, int goal_id);
   nav_msgs::msg::Path buildCompletePathFromTempGraph(
       const std::vector<TopologyNode>& temp_nodes,
+      const std::vector<TopologyEdge>& temp_edges,
       const std::vector<int>& topology_path);
+  const TopologyEdge* findTopologyEdge(int first_node_id,
+                                       int second_node_id) const;
+  const TopologyEdge* findNearestTopologyEdge(
+      const geometry_msgs::msg::Point& position) const;
+  static void inheritEdgePolicy(const TopologyEdge* source,
+                                TopologyEdge& destination);
 
-  // 可行性检查方法
-  bool isConnectionFeasible(const geometry_msgs::msg::Point& from,
-                            const geometry_msgs::msg::Point& to);
-  bool checkLineOfSight(const geometry_msgs::msg::Point& from,
-                        const geometry_msgs::msg::Point& to);
-  bool isPointInFreeSpace(const geometry_msgs::msg::Point& point);
   double calculateConnectionCost(const geometry_msgs::msg::Point& from,
                                  const geometry_msgs::msg::Point& to);
 

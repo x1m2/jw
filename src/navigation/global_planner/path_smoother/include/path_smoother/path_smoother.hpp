@@ -2,6 +2,7 @@
 #define PATH_SMOOTHER_PATH_SMOOTHER_HPP
 
 #include <rclcpp/rclcpp.hpp>
+#include <navigation_interfaces/msg/path_with_policy.hpp>
 
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
@@ -25,20 +26,21 @@ public:
   ~PathSmoother();
 
   bool initialize();
-  void spin();
 
 private:
   // ROS2组件
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr raw_path_sub_;
+  rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
+      raw_path_with_policy_sub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr smoothed_path_pub_;
+  rclcpp::Publisher<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
+      smoothed_path_with_policy_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr visualization_pub_;
 
   // 参数
   std::string global_frame_;
   double smoothing_factor_;          // 平滑强度因子 (0.0-1.0)
   int smoothing_iterations_;         // 平滑迭代次数
-  double neighbor_radius_;           // 邻域半径
   double min_point_distance_;        // 最小点间距（用于路径点过滤）
   double max_deviation_;             // 最大允许偏差
   bool enable_visualization_;
@@ -50,18 +52,17 @@ private:
   bool has_path_;
 
   // 回调函数
-  void pathCallback(const nav_msgs::msg::Path::SharedPtr msg);
+  void pathWithPolicyCallback(
+    const navigation_interfaces::msg::PathWithPolicy::SharedPtr msg);
+  std::vector<bool> remapPolicyToSmoothedPath(
+    const nav_msgs::msg::Path & raw_path,
+    const std::vector<bool> & raw_policy,
+    const nav_msgs::msg::Path & smoothed_path);
 
   // 路径平滑核心方法
   nav_msgs::msg::Path smoothPath(const nav_msgs::msg::Path & raw_path);
   nav_msgs::msg::Path weightedNeighborhoodSmooth(const nav_msgs::msg::Path & path);
   nav_msgs::msg::Path filterPathPoints(const nav_msgs::msg::Path & path);
-
-  // 权重计算
-  double calculateWeight(double distance, double radius);
-  std::vector<double> getNeighborWeights(
-    int center_idx,
-    const std::vector<geometry_msgs::msg::Point> & points);
 
   // 工具方法
   double calculateDistance(

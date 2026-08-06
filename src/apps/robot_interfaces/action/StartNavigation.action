@@ -7,4 +7,8 @@ uint32 completed_count
 string message
 ---
 uint32 current_node_id
+float64 x
+float64 y
+float64 z
+float64 theta
 string message

@@ -27,7 +27,6 @@ ros2 launch path_smoother path_smoother.launch.py
 - `global_frame`: 默认 `map`
 - `smoothing_factor`: 默认 `1.0`
 - `smoothing_iterations`: 默认 `3`
-- `neighbor_radius`: 默认 `1.0`
 - `min_point_distance`: 默认 `0.5`
 - `max_deviation`: 默认 `1.5`
 - `enable_visualization`: 默认 `true`

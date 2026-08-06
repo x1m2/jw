@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(robot_runtime REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -20,6 +21,7 @@ add_library(${PROJECT_NAME}
 
 ament_target_dependencies(${PROJECT_NAME}
   rclcpp
+  navigation_interfaces
   nav_msgs
   geometry_msgs
   visualization_msgs
@@ -39,6 +41,7 @@ ament_target_dependencies(${PROJECT_NAME}_node
   geometry_msgs
   visualization_msgs
   robot_runtime
+  navigation_interfaces
 )
 
 install(TARGETS
@@ -66,6 +69,7 @@ ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(
   rclcpp
+  navigation_interfaces
   nav_msgs
   geometry_msgs
   visualization_msgs

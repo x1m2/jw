@@ -12,7 +12,24 @@
 
 ## 主要发布
 
-- `/global_path` (`nav_msgs/msg/Path`)：给 pure_pursuit_local_planner 跟踪的全局路径。
+- `/global_path` (`nav_msgs/msg/Path`)：标准全局路径，用于平滑和可视化。
+- `/global_path_with_policy` (`navigation_interfaces/msg/PathWithPolicy`)：路径以及与路径点对齐的停障策略。
+
+## 拓扑边停障属性
+
+边格式支持两个可选策略字段：
+
+```text
+edge_id from_id to_id weight type bidirectional disable_obstacle_stop disable_obstacle_avoidance
+0 0 1 5.0 auto 1 0 1
+1 1 2 6.0 auto 1 1 1
+```
+
+- `disable_obstacle_stop=1`：该拓扑边关闭雷达停障。
+- `disable_obstacle_avoidance=1`：该拓扑边关闭PurePursuit主动绕障。
+- `disable_obstacle_stop`默认`0`，即启用停障。
+- `disable_obstacle_avoidance`默认`1`，即不启用主动绕障。
+- 旧文件缺少两个字段时按上述默认策略处理。
 
 ## 编译
 

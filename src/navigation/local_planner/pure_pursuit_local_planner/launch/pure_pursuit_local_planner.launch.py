@@ -1,3 +1,6 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -6,10 +9,24 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
+def find_robot_param(package_share):
+    current = os.path.abspath(package_share)
+    while True:
+        candidate = os.path.join(current, 'src', 'config', 'robot_param.yaml')
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            raise FileNotFoundError('Cannot find src/config/robot_param.yaml')
+        current = parent
+
+
 def generate_launch_description():
     pkg_share = FindPackageShare('pure_pursuit_local_planner')
+    package_share = get_package_share_directory('pure_pursuit_local_planner')
 
     config_file = LaunchConfiguration('config_file')
+    robot_param_file = LaunchConfiguration('robot_param_file')
     rviz_config = LaunchConfiguration('rviz_config')
     launch_rviz = LaunchConfiguration('launch_rviz')
     runtime_profile = LaunchConfiguration('runtime_profile')
@@ -24,6 +41,11 @@ def generate_launch_description():
                 'pure_pursuit_params.yaml'
             ]),
             description='Pure pursuit and path smoother parameter yaml file'
+        ),
+        DeclareLaunchArgument(
+            'robot_param_file',
+            default_value=find_robot_param(package_share),
+            description='机器人尺寸和雷达外参公共配置文件'
         ),
 
         DeclareLaunchArgument(
@@ -51,9 +73,12 @@ def generate_launch_description():
             package='pure_pursuit_local_planner',
             executable='pure_pursuit_local_planner_node',
             output='screen',
-            parameters=[config_file, {'runtime_profile': runtime_profile}],
+            parameters=[
+                config_file,
+                robot_param_file,
+                {'runtime_profile': runtime_profile}
+            ],
             remappings=[
-                ('/global_path', '/smoothed_global_path'),
                 ('/local_costmap', '/local_costmap/costmap'),
 
             ],

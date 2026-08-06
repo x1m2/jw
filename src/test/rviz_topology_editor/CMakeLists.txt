@@ -11,7 +11,6 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_AUTOMOC ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -20,10 +19,20 @@ find_package(PCL REQUIRED COMPONENTS io)
 find_package(pluginlib REQUIRED)
 find_package(Qt5 REQUIRED COMPONENTS Widgets)
 find_package(rclcpp REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/TopologyEdgePolicy.msg"
+  "msg/TopologyEdgePolicyArray.msg"
+  "srv/SetTopologyEdgePolicy.srv"
+)
+
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME} rosidl_typesupport_cpp)
 
 add_executable(rviz_topology_editor_node
   src/rviz_topology_editor_node.cpp
@@ -37,6 +46,7 @@ target_include_directories(rviz_topology_editor_node PRIVATE
 
 target_link_libraries(rviz_topology_editor_node
   ${PCL_LIBRARIES}
+  "${cpp_typesupport_target}"
 )
 
 ament_target_dependencies(rviz_topology_editor_node
@@ -53,6 +63,8 @@ add_library(rviz_topology_editor_save_panel SHARED
   src/save_panel.cpp
 )
 
+set_target_properties(rviz_topology_editor_save_panel PROPERTIES AUTOMOC ON)
+
 target_include_directories(rviz_topology_editor_save_panel PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
@@ -60,6 +72,7 @@ target_include_directories(rviz_topology_editor_save_panel PUBLIC
 
 target_link_libraries(rviz_topology_editor_save_panel
   Qt5::Widgets
+  "${cpp_typesupport_target}"
 )
 
 ament_target_dependencies(rviz_topology_editor_save_panel
@@ -86,9 +99,11 @@ install(
 )
 
 install(
-  DIRECTORY config launch rviz
+  DIRECTORY config launch msg rviz srv
   DESTINATION share/${PROJECT_NAME}
 )
+
+ament_export_dependencies(rosidl_default_runtime)
 
 install(
   FILES plugin_description.xml

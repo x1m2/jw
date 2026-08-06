@@ -1,0 +1,40 @@
+/**:
+  ros__parameters:
+    lidar_topic: "/livox/lidar"
+    planned_cmd_topic: "/cmd_vel_planned"
+    safe_cmd_topic: "/cmd_vel"
+    base_frame: "base_link"
+
+    # 在base_link中裁剪MID360点云，并使用XY坐标直接构建障碍栅格。
+    min_height: 0.2
+    max_height: 1.0
+    angle_min: -3.1415926
+    angle_max: 3.1415926
+    range_min: 0.4
+    range_max: 3.0
+
+    # 内部栅格只用于复用原停障区域占比语义，不发布为导航costmap。
+    grid_resolution: 0.05
+    grid_width: 80
+    grid_height: 50
+    inflation_radius: 0.1
+
+    safety_margin: 0.10
+    # 近矩形：从车体前缘开始，检测到障碍后强制停车。
+    hard_stop_distance: 0.40
+    # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
+    slowdown_distance: 0.60
+    obstacle_ratio_threshold: 0.10
+
+    linear_velocity_factor: 0.40
+    angular_velocity_factor: 1.0
+    # 障碍消失后延迟解除，避免点云波动导致速度状态频繁切换。
+    hard_stop_clear_delay: 0.30
+    slowdown_clear_delay: 0.50
+
+    lidar_timeout_sec: 0.30
+    command_timeout_sec: 0.30
+    control_frequency: 30.0
+    # 经过外参、高度、距离和角度过滤后的最少有效点数。
+    minimum_filtered_points: 10
+    publish_visualization: true

@@ -15,7 +15,6 @@ bool PathSmoother::initialize() {
   node_->declare_parameter<std::string>("global_frame", "map");
   node_->declare_parameter<double>("smoothing_factor", 0.3);
   node_->declare_parameter<int>("smoothing_iterations", 3);
-  node_->declare_parameter<double>("neighbor_radius", 1.0);
   node_->declare_parameter<double>("min_point_distance", 0.1);
   node_->declare_parameter<double>("max_deviation", 0.5);
   node_->declare_parameter<bool>("enable_visualization", true);
@@ -24,7 +23,6 @@ bool PathSmoother::initialize() {
   node_->get_parameter("global_frame", global_frame_);
   node_->get_parameter("smoothing_factor", smoothing_factor_);
   node_->get_parameter("smoothing_iterations", smoothing_iterations_);
-  node_->get_parameter("neighbor_radius", neighbor_radius_);
   node_->get_parameter("min_point_distance", min_point_distance_);
   node_->get_parameter("max_deviation", max_deviation_);
   node_->get_parameter("enable_visualization", enable_visualization_);
@@ -33,17 +31,22 @@ bool PathSmoother::initialize() {
   // 参数验证
   smoothing_factor_ = std::max(0.0, std::min(1.0, smoothing_factor_));
   smoothing_iterations_ = std::max(1, smoothing_iterations_);
-  neighbor_radius_ = std::max(0.1, neighbor_radius_);
   min_point_distance_ = std::max(0.01, min_point_distance_);
   max_deviation_ = std::max(0.01, max_deviation_);
 
   // 初始化发布者和订阅者
-  raw_path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
-      "global_path", rclcpp::QoS(1),
-      std::bind(&PathSmoother::pathCallback, this, std::placeholders::_1));
+  raw_path_with_policy_sub_ =
+      node_->create_subscription<navigation_interfaces::msg::PathWithPolicy>(
+          "global_path_with_policy", rclcpp::QoS(1),
+          std::bind(&PathSmoother::pathWithPolicyCallback, this,
+                    std::placeholders::_1));
 
   smoothed_path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(
       "smoothed_global_path", rclcpp::QoS(1).transient_local());
+  smoothed_path_with_policy_pub_ =
+      node_->create_publisher<navigation_interfaces::msg::PathWithPolicy>(
+          "smoothed_global_path_with_policy",
+          rclcpp::QoS(1).transient_local());
 
   if (enable_visualization_) {
     visualization_pub_ =
@@ -58,8 +61,6 @@ bool PathSmoother::initialize() {
               smoothing_factor_);
   RCLCPP_INFO(node_->get_logger(), "  - Smoothing iterations: %d",
               smoothing_iterations_);
-  RCLCPP_INFO(node_->get_logger(), "  - Neighbor radius: %.3f m",
-              neighbor_radius_);
   RCLCPP_INFO(node_->get_logger(), "  - Min point distance: %.3f m",
               min_point_distance_);
   RCLCPP_INFO(node_->get_logger(), "  - Max deviation: %.3f m", max_deviation_);
@@ -71,22 +72,50 @@ bool PathSmoother::initialize() {
   return true;
 }
 
-void PathSmoother::spin() { rclcpp::spin(node_); }
-
-void PathSmoother::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
-  if (msg->poses.empty()) {
+void PathSmoother::pathWithPolicyCallback(
+    const navigation_interfaces::msg::PathWithPolicy::SharedPtr msg) {
+  if (msg->path.poses.empty()) {
     RCLCPP_WARN(node_->get_logger(), "Received empty path, skipping smoothing");
     return;
+  }
+
+  std::vector<bool> raw_policy = msg->disable_obstacle_stop;
+  if (raw_policy.size() != msg->path.poses.size()) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Path policy size mismatch: poses=%zu, policies=%zu; "
+                 "falling back to obstacle stop enabled",
+                 msg->path.poses.size(), raw_policy.size());
+    raw_policy.assign(msg->path.poses.size(), false);
+  }
+  std::vector<bool> raw_avoidance_policy = msg->disable_obstacle_avoidance;
+  if (raw_avoidance_policy.size() != msg->path.poses.size()) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Avoidance policy size mismatch: poses=%zu, policies=%zu; "
+                 "falling back to obstacle avoidance disabled",
+                 msg->path.poses.size(), raw_avoidance_policy.size());
+    raw_avoidance_policy.assign(msg->path.poses.size(), true);
   }
 
   rclcpp::Time start_time = node_->now();
 
   // 保存原始路径
-  last_raw_path_ = *msg;
+  last_raw_path_ = msg->path;
 
   // 设置全局坐标系
-  nav_msgs::msg::Path path_to_smooth = *msg;
+  nav_msgs::msg::Path path_to_smooth = msg->path;
   path_to_smooth.header.frame_id = global_frame_;
+  const auto publish_path =
+      [this, &path_to_smooth, &raw_policy, &raw_avoidance_policy](
+          const nav_msgs::msg::Path &path) {
+    smoothed_path_pub_->publish(path);
+    navigation_interfaces::msg::PathWithPolicy path_with_policy;
+    path_with_policy.path = path;
+    path_with_policy.disable_obstacle_stop =
+        remapPolicyToSmoothedPath(path_to_smooth, raw_policy, path);
+    path_with_policy.disable_obstacle_avoidance = remapPolicyToSmoothedPath(
+        path_to_smooth, raw_avoidance_policy, path);
+    smoothed_path_with_policy_pub_->publish(path_with_policy);
+  };
   {
     RCLCPP_INFO(node_->get_logger(),
                 "========== PATH_SMOOTHER INPUT /global_path frame=%s size=%zu "
@@ -125,7 +154,7 @@ void PathSmoother::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
       has_path_ = true;
 
       // 发布平滑后的路径
-      smoothed_path_pub_->publish(smoothed_path);
+      publish_path(smoothed_path);
 
       // 计算处理时间和质量指标
       double processing_time = (node_->now() - start_time).seconds() * 1000.0;
@@ -149,12 +178,40 @@ void PathSmoother::pathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
     } else {
       RCLCPP_WARN(node_->get_logger(),
                   "Smoothed path validation failed, publishing original path");
-      smoothed_path_pub_->publish(path_to_smooth);
+      publish_path(path_to_smooth);
     }
   } catch (const std::exception &e) {
     RCLCPP_ERROR(node_->get_logger(), "Path smoothing failed: %s", e.what());
-    smoothed_path_pub_->publish(path_to_smooth);
+    publish_path(path_to_smooth);
   }
+}
+
+std::vector<bool> PathSmoother::remapPolicyToSmoothedPath(
+    const nav_msgs::msg::Path &raw_path, const std::vector<bool> &raw_policy,
+    const nav_msgs::msg::Path &smoothed_path) {
+  std::vector<bool> result;
+  result.reserve(smoothed_path.poses.size());
+  if (raw_path.poses.empty() || raw_policy.size() != raw_path.poses.size()) {
+    result.assign(smoothed_path.poses.size(), false);
+    return result;
+  }
+
+  std::size_t search_start = 0U;
+  for (const auto &smoothed_pose : smoothed_path.poses) {
+    std::size_t nearest_index = search_start;
+    double nearest_distance = std::numeric_limits<double>::max();
+    for (std::size_t i = search_start; i < raw_path.poses.size(); ++i) {
+      const double distance = calculateDistance(
+          smoothed_pose.pose.position, raw_path.poses[i].pose.position);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        nearest_index = i;
+      }
+    }
+    search_start = nearest_index;
+    result.push_back(raw_policy[nearest_index]);
+  }
+  return result;
 }
 
 nav_msgs::msg::Path PathSmoother::smoothPath(
@@ -254,27 +311,6 @@ nav_msgs::msg::Path PathSmoother::filterPathPoints(
                path.poses.size(), filtered_path.poses.size());
 
   return filtered_path;
-}
-
-double PathSmoother::calculateWeight(double distance, double radius) {
-  if (distance >= radius) {
-    return 0.0;
-  }
-
-  // 简单的线性权重函数
-  return 1.0 - (distance / radius);
-}
-
-std::vector<double> PathSmoother::getNeighborWeights(
-    int center_idx, const std::vector<geometry_msgs::msg::Point> &points) {
-  std::vector<double> weights(points.size(), 0.0);
-
-  for (size_t i = 0; i < points.size(); ++i) {
-    double distance = calculateDistance(points[center_idx], points[i]);
-    weights[i] = calculateWeight(distance, neighbor_radius_);
-  }
-
-  return weights;
 }
 
 double PathSmoother::calculateDistance(const geometry_msgs::msg::Point &p1,

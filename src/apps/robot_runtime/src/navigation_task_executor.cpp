@@ -55,7 +55,8 @@ NavigationTaskExecutor::NavigationTaskExecutor(
       config_.control_timeout_sec <= 0.0 ||
       config_.worker_timeout_sec <= 0.0 ||
       config_.goal_timeout_sec <= 0.0 || !callbacks_.publish_mode ||
-      !callbacks_.publish_runtime_state || !callbacks_.enter_error) {
+      !callbacks_.publish_runtime_state || !callbacks_.enter_error ||
+      !callbacks_.get_current_pose) {
     throw std::invalid_argument("invalid navigation task executor config");
   }
   target_pose_pub_ = node_->create_publisher<geometry_msgs::msg::Pose>(
@@ -70,6 +71,18 @@ NavigationTaskExecutor::~NavigationTaskExecutor() {
   }
   result_cv_.notify_all();
   if (execution_thread_.joinable()) execution_thread_.join();
+}
+
+void NavigationTaskExecutor::fillCurrentPoseFeedback(
+    StartNavigation::Feedback &feedback) const {
+  geometry_msgs::msg::PoseStamped current_pose;
+  if (!callbacks_.get_current_pose(current_pose)) {
+    return;
+  }
+  feedback.x = current_pose.pose.position.x;
+  feedback.y = current_pose.pose.position.y;
+  feedback.z = current_pose.pose.position.z;
+  feedback.theta = pose_utils::yaw(current_pose.pose.orientation);
 }
 
 bool NavigationTaskExecutor::validatePose(
@@ -297,6 +310,7 @@ void NavigationTaskExecutor::executePatrolAction(
       }
       auto feedback = std::make_shared<StartNavigation::Feedback>();
       feedback->current_node_id = node.node_id;
+      fillCurrentPoseFeedback(*feedback);
       feedback->message =
           "node completed: " + std::to_string(node.node_id);
       goal_handle->publish_feedback(feedback);

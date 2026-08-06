@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(robot_runtime REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -17,7 +18,6 @@ find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(visualization_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common search io)
 
 include_directories(
@@ -33,11 +33,11 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   rclcpp
   geometry_msgs
   nav_msgs
+  navigation_interfaces
   std_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
-  visualization_msgs
 )
 
 target_link_libraries(${PROJECT_NAME}_lib

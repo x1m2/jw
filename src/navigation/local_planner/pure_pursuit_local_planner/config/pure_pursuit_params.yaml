@@ -13,7 +13,6 @@
     max_linear_velocity: 0.6    ##最大线速度x
     max_linear_velocity_y: 0.3
     max_angular_velocity: 0.7  ##最大角速度
-    min_linear_velocity: 0.1
     acceleration_limit: 0.5
     deceleration_limit: 0.8
 
@@ -69,13 +68,7 @@
       obstacle_threshold: 50
       obstacle_ratio_threshold: 0.1
 
-      # 硬停障参数：车体用长方形近似，坐标以 base_link 为中心，x 正方向为车头。
-      robot_width: 0.80
-      robot_length: 1.10
       safety_margin: 0.10
-      # 强制停车区域从车体前缘开始，而不是从 base_link 开始。
-      # 例如 robot_length=1.10, hard_stop_distance=0.40 时，检测 base_link 前方 x=[0.55, 0.95] 区域。
-      hard_stop_distance: 0.4
       # 1.0m~1.5m 前方扇形区域检测到障碍时，进入左右通道判断。
       avoid_min_distance: 1.0
       avoid_max_distance: 1.7
@@ -87,9 +80,6 @@
       path_obstacle_margin: 0.0  
       path_check_distance: 2.0 #全局路径前方约 2.0m 范围内的路径走廊
 
-      # 检测到前方障碍物后，对速度的缩放系数。
-      linear_velocity_factor: 0.0  # 0.0：线速度变为 0，即停止前进。
-      angular_velocity_factor: 0.0
       debug_mode: true
       enable_visualization: true
 

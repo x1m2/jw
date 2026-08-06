@@ -1,0 +1,5 @@
+int32 edge_id
+int32 from_id
+int32 to_id
+bool obstacle_stop_enabled
+bool obstacle_avoidance_enabled

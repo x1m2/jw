@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(robot_runtime REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -25,6 +26,7 @@ include_directories(include)
 
 set(dependencies
   rclcpp
+  navigation_interfaces
   std_msgs
   std_srvs
   geometry_msgs

@@ -21,17 +21,12 @@ FrontObstacleDetector::FrontObstacleDetector()
       ,
       obstacle_threshold_(50)  // 代价值阈值
       ,
-      linear_velocity_factor_(0.4)  // 线速度乘以0.4
-      ,
-      angular_velocity_factor_(2.0)  // 角速度乘以2
-      ,
       detection_shape_("rectangle")  // 默认使用矩形
       ,
       obstacle_ratio_threshold_(0.1),
-      robot_width_(0.55),
-      robot_length_(0.75),
+      robot_width_(0.80),
+      robot_length_(1.10),
       safety_margin_(0.1),
-      hard_stop_distance_(1.0),
       avoid_min_distance_(1.0),
       avoid_max_distance_(1.5),
       avoid_sector_angle_(60.0),
@@ -60,23 +55,17 @@ bool FrontObstacleDetector::initialize(
       node_, "front_obstacle_detector.sector_angle", 60.0);
   obstacle_threshold_ = declareOrGetParameter(
       node_, "front_obstacle_detector.obstacle_threshold", 50);
-  linear_velocity_factor_ = declareOrGetParameter(
-      node_, "front_obstacle_detector.linear_velocity_factor", 0.4);
-  angular_velocity_factor_ = declareOrGetParameter(
-      node_, "front_obstacle_detector.angular_velocity_factor", 2.0);
   detection_shape_ =
       declareOrGetParameter(node_, "front_obstacle_detector.detection_shape",
                             std::string("rectangle"));
   obstacle_ratio_threshold_ = declareOrGetParameter(
       node_, "front_obstacle_detector.obstacle_ratio_threshold", 0.1);
   robot_width_ = declareOrGetParameter(
-      node_, "front_obstacle_detector.robot_width", 0.55);
+      node_, "robot_width", 0.80);
   robot_length_ = declareOrGetParameter(
-      node_, "front_obstacle_detector.robot_length", 0.75);
+      node_, "robot_length", 1.10);
   safety_margin_ = declareOrGetParameter(
       node_, "front_obstacle_detector.safety_margin", 0.1);
-  hard_stop_distance_ = declareOrGetParameter(
-      node_, "front_obstacle_detector.hard_stop_distance", 1.0);
   avoid_min_distance_ = declareOrGetParameter(
       node_, "front_obstacle_detector.avoid_min_distance", 1.0);
   avoid_max_distance_ = declareOrGetParameter(
@@ -116,13 +105,6 @@ bool FrontObstacleDetector::initialize(
   }
   RCLCPP_INFO(node_->get_logger(), "  - Obstacle threshold: %d",
               obstacle_threshold_);
-  RCLCPP_INFO(node_->get_logger(), "  - Linear velocity factor: %.2f",
-              linear_velocity_factor_);
-  RCLCPP_INFO(node_->get_logger(), "  - Angular velocity factor: %.2f",
-              angular_velocity_factor_);
-  RCLCPP_INFO(node_->get_logger(),
-              "  - Hard stop: robot %.2fm x %.2fm, margin %.2fm, front+%.2fm",
-              robot_length_, robot_width_, safety_margin_, hard_stop_distance_);
   RCLCPP_INFO(node_->get_logger(),
               "  - Avoidance sector: r=[%.2f, %.2f], angle=%.1f, side passage=%.2f",
               avoid_min_distance_, avoid_max_distance_, avoid_sector_angle_,
@@ -155,77 +137,6 @@ void FrontObstacleDetector::setGlobalPath(
       global_path_.poses.size(), has_global_path_ ? "true" : "false");
 }
 
-geometry_msgs::msg::Twist FrontObstacleDetector::adjustVelocityForObstacles(
-    const geometry_msgs::msg::Twist& cmd_vel,
-    const geometry_msgs::msg::PoseStamped& robot_pose) {
-  geometry_msgs::msg::Twist adjusted_cmd_vel = cmd_vel;
-
-  // 如果没有代价地图，直接返回原始速度
-  if (!has_costmap_) {
-    if (debug_mode_) {
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
-                           "No costmap available for obstacle detection");
-    }
-    return adjusted_cmd_vel;
-  }
-
-  const double half_width = robot_width_ * 0.5 + safety_margin_;
-  const double front_edge = robot_length_ * 0.5;
-  const double stop_x_min = std::max(0.0, front_edge);
-  const double stop_x_max = stop_x_min + std::max(0.0, hard_stop_distance_);
-  const bool hard_stop = detectObstacleInRectLocal(
-      robot_pose, stop_x_min, stop_x_max, -half_width, half_width);
-  if (hard_stop) {
-    adjusted_cmd_vel = geometry_msgs::msg::Twist();
-    if (enable_visualization_) {
-      publishVisualization(robot_pose, true);
-    }
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                         "[FRONT_STOP] hard stop obstacle in base_link x=[%.2f, %.2f], y=[%.2f, %.2f], cmd_vel=0",
-                         stop_x_min, stop_x_max, -half_width, half_width);
-    return adjusted_cmd_vel;
-  }
-
-  // 检测前方区域是否有障碍物
-  bool obstacle_detected = false;
-  if (detection_shape_ == "sector") {
-    obstacle_detected = detectObstacleInSectorArea(robot_pose);
-  } else  // 默认使用矩形
-  {
-    obstacle_detected = detectObstacleInFrontArea(robot_pose);
-  }
-
-  // 发布可视化
-  if (enable_visualization_) {
-    publishVisualization(robot_pose, obstacle_detected);
-  }
-
-  if (obstacle_detected) {
-    // 调整速度：线速度乘以0.4，角速度乘以2
-    adjusted_cmd_vel.linear.x *= linear_velocity_factor_;
-    adjusted_cmd_vel.linear.y *= linear_velocity_factor_;
-    adjusted_cmd_vel.angular.z *= angular_velocity_factor_;
-
-    if (debug_mode_) {
-      RCLCPP_WARN_THROTTLE(
-          node_->get_logger(), *node_->get_clock(), 500,
-          "Obstacle detected in front area! Adjusting velocity:");
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                           "  Original: linear_x=%.3f, angular_z=%.3f",
-                           cmd_vel.linear.x, cmd_vel.angular.z);
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                           "  Adjusted: linear_x=%.3f, angular_z=%.3f",
-                           adjusted_cmd_vel.linear.x,
-                           adjusted_cmd_vel.angular.z);
-    }
-  } else if (debug_mode_) {
-    RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                          "No obstacles detected in front area");
-  }
-
-  return adjusted_cmd_vel;
-}
-
 FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
     const geometry_msgs::msg::PoseStamped& robot_pose) {
   AvoidanceInfo info;
@@ -237,23 +148,6 @@ FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
       RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
                            "No costmap available for avoidance analysis");
     }
-    return info;
-  }
-
-  const double half_width = robot_width_ * 0.5 + safety_margin_;
-  const double front_edge = robot_length_ * 0.5;
-  const double stop_x_min = std::max(0.0, front_edge);
-  const double stop_x_max = stop_x_min + std::max(0.0, hard_stop_distance_);
-
-  if (detectObstacleInRectLocal(robot_pose, stop_x_min, stop_x_max,
-                                -half_width, half_width)) {
-    info.decision = ObstacleDecision::HARD_STOP;
-    if (enable_visualization_) {
-      publishVisualization(robot_pose, true);
-    }
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
-                         "[AVOID_ANALYZE] HARD_STOP in x=[%.2f, %.2f], y=[%.2f, %.2f]",
-                         stop_x_min, stop_x_max, -half_width, half_width);
     return info;
   }
 
@@ -500,41 +394,6 @@ void FrontObstacleDetector::publishVisualization(
   marker.lifetime.nanosec = 200000000;  // 0.2s = 200ms
 
   detection_area_pub_->publish(marker);
-
-  visualization_msgs::msg::Marker hard_stop_marker;
-  hard_stop_marker.header.frame_id = robot_pose.header.frame_id;
-  hard_stop_marker.header.stamp = marker.header.stamp;
-  hard_stop_marker.ns = "front_hard_stop_area";
-  hard_stop_marker.id = 1;
-  hard_stop_marker.type = visualization_msgs::msg::Marker::CUBE;
-  hard_stop_marker.action = obstacle_detected
-                                ? visualization_msgs::msg::Marker::ADD
-                                : visualization_msgs::msg::Marker::DELETE;
-
-  const double half_width = robot_width_ * 0.5 + safety_margin_;
-  const double front_edge = robot_length_ * 0.5;
-  const double stop_x_min = std::max(0.0, front_edge);
-  const double stop_x_max = stop_x_min + std::max(0.0, hard_stop_distance_);
-  const double stop_length = std::max(0.01, stop_x_max - stop_x_min);
-  const double center_offset = stop_x_min + stop_length * 0.5;
-
-  hard_stop_marker.pose.position.x =
-      robot_x + center_offset * std::cos(robot_yaw);
-  hard_stop_marker.pose.position.y =
-      robot_y + center_offset * std::sin(robot_yaw);
-  hard_stop_marker.pose.position.z = robot_pose.pose.position.z + 0.16;
-  hard_stop_marker.pose.orientation = robot_pose.pose.orientation;
-  hard_stop_marker.scale.x = stop_length;
-  hard_stop_marker.scale.y = 2.0 * half_width;
-  hard_stop_marker.scale.z = 0.04;
-  hard_stop_marker.color.a = 0.75;
-  hard_stop_marker.color.r = 1.0;
-  hard_stop_marker.color.g = 0.0;
-  hard_stop_marker.color.b = 0.0;
-  hard_stop_marker.lifetime.sec = 0;
-  hard_stop_marker.lifetime.nanosec = 200000000;
-
-  detection_area_pub_->publish(hard_stop_marker);
 
   if (debug_mode_) {
     RCLCPP_DEBUG_THROTTLE(
@@ -1043,8 +902,6 @@ const char* FrontObstacleDetector::decisionToString(
       return "AVOIDABLE";
     case ObstacleDecision::BLOCKED:
       return "BLOCKED";
-    case ObstacleDecision::HARD_STOP:
-      return "HARD_STOP";
     default:
       return "CLEAR";
   }

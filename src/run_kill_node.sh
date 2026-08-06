@@ -132,15 +132,15 @@ kill_known_launches() {
     kill_by_pattern "ros2 launch rviz_topology_editor rviz_topology_editor.launch.py" "rviz_topology_editor launch"
 
     # run_nav.sh 重定位阶段
-    kill_by_pattern "ros2 launch pcd2pgm pcd2pgm_launch.py" "pcd2pgm launch"
     kill_by_pattern "ros2 launch fastlio_localization run_launch.py" "fastlio_localization launch"
 
     # run_nav.sh 导航阶段
+    kill_by_pattern "ros2 launch obstacle_stop obstacle_stop.launch.py" "obstacle_stop launch"
     kill_by_pattern "ros2 launch costmap_2d costmap_2d.launch.py" "costmap_2d launch"
     kill_by_pattern "ros2 launch global_path_planner global_path_planner.launch.py" "global_path_planner launch"
     kill_by_pattern "ros2 launch path_smoother path_smoother.launch.py" "path_smoother launch"
     kill_by_pattern "ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py" "pure_pursuit launch"
-    kill_by_pattern "ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py" "dual_radar_extractor launch"
+    # kill_by_pattern "ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py" "dual_radar_extractor launch"
     kill_by_pattern "ros2 launch topology_rviz_plugin target_points_visualizer.launch.py" "target_points_visualizer launch"
     kill_by_pattern "ros2 launch user_interface navigation_task_state_machine.launch.py" "navigation_state_machine launch"
 }
@@ -152,9 +152,10 @@ kill_known_python_scripts() {
     kill_by_pattern "wait_reloc_success_" "wait_reloc_success"
 
     if [ "$KILL_NAV_GUI" = "1" ]; then
-        kill_by_pattern "navigation_control_gui.py" "navigation_control_gui.py"
+        kill_by_pattern "navigation_workflow_gui.py" "navigation workflow GUI"
+        kill_by_pattern "robot_runtime_test_gui.py" "robot runtime test GUI"
     else
-        echo "[INFO] skip navigation_control_gui.py; set KILL_NAV_GUI=1 to kill it"
+        echo "[INFO] skip test GUIs; set KILL_NAV_GUI=1 to kill them"
     fi
 }
 
@@ -170,13 +171,13 @@ kill_node_executables() {
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"
     kill_by_pattern "rviz_topology_editor_node" "rviz_topology_editor executable"
-    kill_by_pattern "pcd2pgm" "pcd2pgm executable"
     kill_by_pattern "fastlio_localization_ros2" "fastlio_localization executable"
+    kill_by_pattern "obstacle_stop_node" "obstacle_stop executable"
     kill_by_pattern "costmap_2d" "costmap_2d executable"
     kill_by_pattern "global_path_planner" "global_path_planner executable"
     kill_by_pattern "path_smoother" "path_smoother executable"
     kill_by_pattern "pure_pursuit" "pure_pursuit executable"
-    kill_by_pattern "dual_radar" "dual_radar executable"
+    # kill_by_pattern "dual_radar" "dual_radar executable"
     kill_by_pattern "target_points_visualizer" "target_points_visualizer executable"
     kill_by_pattern "navigation_task_state_machine" "navigation_task_state_machine executable"
 

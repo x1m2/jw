@@ -10,17 +10,17 @@ from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
 
-def find_lidar_config(package_share):
+def find_robot_param(package_share):
     current_path = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current_path, 'src', 'config', 'lidar.yaml')
+        candidate = os.path.join(current_path, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
 
         parent_path = os.path.dirname(current_path)
         if parent_path == current_path:
             raise FileNotFoundError(
-                'Cannot find src/config/lidar.yaml from package share: '
+                'Cannot find src/config/robot_param.yaml from package share: '
                 + package_share
             )
         current_path = parent_path
@@ -28,7 +28,7 @@ def find_lidar_config(package_share):
 
 def generate_launch_description():
     package_path = get_package_share_directory('fast_lio')
-    default_lidar_config_path = find_lidar_config(package_path)
+    default_robot_param_path = find_robot_param(package_path)
     default_config_path = os.path.join(package_path, 'config')
     default_rviz_config_path = os.path.join(
         package_path, 'rviz', 'fastlio.rviz')
@@ -36,7 +36,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     config_path = LaunchConfiguration('config_path')
     config_file = LaunchConfiguration('config_file')
-    lidar_config_file = LaunchConfiguration('lidar_config_file')
+    robot_param_file = LaunchConfiguration('robot_param_file')
     rviz_cfg = LaunchConfiguration('rviz_cfg')
 
     use_rviz_arg = DeclareLaunchArgument(
@@ -57,10 +57,10 @@ def generate_launch_description():
         'config_file', default_value='mid360.yaml',
         description='Config file'
     )
-    declare_lidar_config_file_cmd = DeclareLaunchArgument(
-        'lidar_config_file',
-        default_value=default_lidar_config_path,
-        description='LiDAR pose in base_link shared with costmap'
+    declare_robot_param_file_cmd = DeclareLaunchArgument(
+        'robot_param_file',
+        default_value=default_robot_param_path,
+        description='Robot dimensions and LiDAR pose shared by navigation'
     )
     declare_rviz_config_path_cmd = DeclareLaunchArgument(
         'rviz_cfg', default_value=default_rviz_config_path,
@@ -70,7 +70,7 @@ def generate_launch_description():
         package='fast_lio',
         executable='fastlio_mapping_node',
         parameters=[PathJoinSubstitution([config_path, config_file]),
-                    lidar_config_file,
+                    robot_param_file,
                     {
                         'use_sim_time': use_sim_time,
                         'runtime_profile': 'test',
@@ -89,7 +89,7 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_config_path_cmd)
     ld.add_action(declare_config_file_cmd)
-    ld.add_action(declare_lidar_config_file_cmd)
+    ld.add_action(declare_robot_param_file_cmd)
     ld.add_action(declare_rviz_config_path_cmd)
 
     ld.add_action(fast_lio_node)

@@ -2,8 +2,10 @@
 #define PURE_PURSUIT_LOCAL_PLANNER_HPP
 
 #include <tf2/time.h>
+#include <tf2/LinearMath/Scalar.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -18,7 +20,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/laser_scan.hpp>
+#include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <tf2/utils.hpp>
@@ -31,7 +33,6 @@
 
 #include "pure_pursuit_local_planner/front_obstacle_detector.hpp"
 #include "pure_pursuit_local_planner/local_path_planner.hpp"
-#include "pure_pursuit_local_planner/obstacle_avoidance.hpp"
 #include "pure_pursuit_local_planner/path_tracker.hpp"
 
 namespace pure_pursuit_local_planner {
@@ -46,16 +47,10 @@ struct PlannerConfig {
   double max_linear_velocity;    // 最大线速度 (X方向)
   double max_linear_velocity_y;  // Y方向最大线速度 (全向机器人)
   double max_angular_velocity;   // 最大角速度
-  double min_linear_velocity;    // 最小线速度
   double acceleration_limit;     // 加速度限制
   double deceleration_limit;     // 减速度限制
 
   // Obstacle avoidance parameters
-  double obstacle_detection_range;  // 障碍物检测范围
-  double safety_distance;           // 安全距离
-  double avoidance_weight;          // 避障权重
-  double path_following_weight;     // 路径跟踪权重
-
   // Control parameters
   double control_frequency;    // 控制频率
   double transform_tolerance;  // TF变换容忍时间
@@ -113,7 +108,7 @@ class PurePursuitLocalPlanner {
    * @brief 判断是否到达目标点
    * @return 是否到达目标点
    */
-  bool isGoalReached();
+  bool isGoalReached(const geometry_msgs::msg::PoseStamped& robot_pose) const;
 
   /**
    * @brief 获取机器人在全局坐标系下的位姿
@@ -123,23 +118,22 @@ class PurePursuitLocalPlanner {
   bool getRobotPose(geometry_msgs::msg::PoseStamped& robot_pose);
 
  private:
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
-  bool emergency_stop_active_ = false;
   // ROS相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr lookahead_pub_;
-  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr
       local_trajectory_pub_;  // 局部轨迹发布器
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
       velocity_arrow_pub_;  // 速度箭头发布器
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
       nav_state_pub_;  // 导航状态发布器
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
+      obstacle_stop_disable_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
-  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr global_path_sub_;
+  rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
+      global_path_with_policy_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr
       smoothed_local_path_sub_;  // 新增：平滑后局部路径订阅器
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
@@ -160,13 +154,14 @@ class PurePursuitLocalPlanner {
   bool path_received_;
   bool goal_reached_;
   bool goal_position_reached_;            // 新增：目标位置到达锁存
-  bool yaw_adjusting_;                    // 新增：是否正在调整朝向
   geometry_msgs::msg::Pose target_pose_;  // 新增：目标位姿
   bool target_pose_received_;             // 新增：目标位姿接收标志
   int current_path_index_;
   size_t path_progress_index_;  // 路径进度索引，防止回头
-  geometry_msgs::msg::PointStamped last_lookahead_point_;  // 上一次的前瞻点
-  bool has_valid_lookahead_;  // 是否有有效的前瞻点
+  std::vector<bool> disable_obstacle_stop_policy_;
+  std::vector<bool> disable_obstacle_avoidance_policy_;
+  bool published_disable_obstacle_stop_{false};
+  bool has_published_obstacle_stop_policy_{false};
   bool pp_aligning_;
   bool pp_correcting_;
   bool local_replanning_active_;  // 是否正在跟踪局部绕障路径
@@ -176,7 +171,6 @@ class PurePursuitLocalPlanner {
   bool latest_costmap_received_;
   nav_msgs::msg::OccupancyGrid latest_costmap_;
   // 组件
-  std::unique_ptr<ObstacleAvoidance> obstacle_avoidance_;
   std::unique_ptr<PathTracker> path_tracker_;
   std::unique_ptr<LocalPathPlanner>
       local_path_planner_;  // 新增：局部路径规划器
@@ -205,22 +199,15 @@ class PurePursuitLocalPlanner {
   /**
    * @brief 全局路径回调函数
    */
-  void globalPathCallback(nav_msgs::msg::Path::ConstSharedPtr msg);
+  void globalPathWithPolicyCallback(
+      navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg);
+  void publishCurrentObstacleStopPolicy();
+  bool isObstacleAvoidanceDisabled() const;
 
   /**
    * @brief 代价地图回调函数
    */
   void costmapCallback(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
-
-  /**
-   * @brief 激光雷达回调函数
-   */
-  void scanCallback(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
-
-  /**
-   * @brief emergency_stop回调函数
-   */
-  void emergencyStopCallback(std_msgs::msg::Bool::ConstSharedPtr msg);
 
   /**
    * @brief 平滑后局部路径回调函数
@@ -289,13 +276,8 @@ class PurePursuitLocalPlanner {
   /**
    * @brief 计算两点间距离
    */
-  double calculateDistance(const geometry_msgs::msg::Point& p1,
-                           const geometry_msgs::msg::Point& p2);
-
-  /**
-   * @brief 标准化角度到[-π, π]
-   */
-  double normalizeAngle(double angle);
+  static double calculateDistance(const geometry_msgs::msg::Point& p1,
+                                  const geometry_msgs::msg::Point& p2);
 
   /**
    * @brief 计算圆与线段的交点
@@ -304,21 +286,14 @@ class PurePursuitLocalPlanner {
    * @param radius 圆半径
    * @param line_start 线段起点
    * @param line_end 线段终点
-   * @return 交点列表
+   * @param intersections 输出交点，最多两个
+   * @return 交点数量
    */
-  std::vector<geometry_msgs::msg::Point> computeCircleLineIntersection(
+  static size_t computeCircleLineIntersection(
       double circle_x, double circle_y, double radius,
       const geometry_msgs::msg::Point& line_start,
-      const geometry_msgs::msg::Point& line_end);
-
-  /**
-   * @brief 计算点在路径上的进度
-   * @param segment_index 线段索引
-   * @param point 点坐标
-   * @return 累积路径长度
-   */
-  double calculatePathProgress(int segment_index,
-                               const geometry_msgs::msg::Point& point);
+      const geometry_msgs::msg::Point& line_end,
+      std::array<geometry_msgs::msg::Point, 2>& intersections);
 
   /**
    * @brief 更新路径进度索引（防止回头）

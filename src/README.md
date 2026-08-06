@@ -18,9 +18,10 @@ src
 ├── navigation/            # 导航规划
 │   ├── global_planner      # 拓扑地图、全局路径规划、路径平滑、RViz 工具
 │   └── local_planner       # 局部代价地图、Pure Pursuit、避障、点云转激光
-├── tools/                 # 工具与用户界面
-│   ├── pcd2pgm             # PCD 点云地图转 PGM 栅格地图
-│   └── user_interface      # 导航任务状态机与控制界面
+├── test/                  # 独立测试节点与工具
+│   ├── rviz_topology_editor
+│   └── user_interface      # 独立导航任务状态机
+├── tools/                 # 通用工具
 └── scripts/               # 辅助脚本
 ```
 
@@ -184,17 +185,10 @@ ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
 
 将 3D 点云转换为 2D LaserScan，方便接入基于 `/scan` 的代价地图或导航模块。
 
-### 9. 地图转换工具
+### 9. 导航任务状态机
 
-`tools/pcd2pgm` 用于将 `.pcd` 点云地图转换为 `.pgm` 栅格地图，便于导航模块使用。
-
-```bash
-ros2 launch pcd2pgm pcd2pgm_launch.py
-```
-
-### 10. 导航任务状态机
-
-`tools/user_interface` 提供导航任务状态机和控制界面。
+`test/user_interface` 提供独立导航测试状态机；测试控制界面统一使用
+`apps/test/navigation_workflow_gui.py`。
 
 主要功能：
 
@@ -202,7 +196,7 @@ ros2 launch pcd2pgm pcd2pgm_launch.py
 - 监听导航完成状态
 - 支持开始、停止、继续、回家、急停
 - 发布任务动作信号
-- 提供 GUI 控制脚本
+- 可配合统一测试 GUI 使用
 
 主要订阅：
 
@@ -213,7 +207,8 @@ ros2 launch pcd2pgm pcd2pgm_launch.py
 
 - `/task_action`：到点后发布的任务动作
 - `/target_points`：当前目标点
-- `/emergency_stop`：急停信号
+
+统一测试 GUI 另外发布 `/emergency_stop` 急停信号。
 
 启动状态机：
 
@@ -221,10 +216,10 @@ ros2 launch pcd2pgm pcd2pgm_launch.py
 ros2 launch user_interface navigation_task_state_machine.launch.py
 ```
 
-GUI 控制：
+GUI 控制（从工作空间根目录运行）：
 
 ```bash
-ros2 run user_interface navigation_control_gui.py
+python3 src/apps/test/navigation_workflow_gui.py
 ```
 
 ## 推荐运行流程

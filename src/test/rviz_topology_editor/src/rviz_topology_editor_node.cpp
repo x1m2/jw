@@ -20,6 +20,9 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <rclcpp/rclcpp.hpp>
+#include <rviz_topology_editor/msg/topology_edge_policy.hpp>
+#include <rviz_topology_editor/msg/topology_edge_policy_array.hpp>
+#include <rviz_topology_editor/srv/set_topology_edge_policy.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -40,6 +43,16 @@ struct SavedPoint {
   double qz{0.0};
   double qw{1.0};
   std::string label;
+};
+
+struct EditableEdge {
+  int id{0};
+  int from_id{0};
+  int to_id{0};
+  double weight{0.0};
+  bool bidirectional{true};
+  bool obstacle_stop_enabled{true};
+  bool obstacle_avoidance_enabled{false};
 };
 
 std::string makeTargetPointsPath(const std::string &output_file) {
@@ -87,12 +100,17 @@ public:
     display_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     loadPcd();
     loadExistingPoints();
+    rebuildSequentialEdges();
+    loadExistingEdgePolicies();
 
     auto static_qos = rclcpp::QoS(1).transient_local().reliable();
     cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(cloud_topic_,
                                                                  static_qos);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         marker_topic_, static_qos);
+    edge_policy_pub_ =
+        create_publisher<msg::TopologyEdgePolicyArray>(
+            "~/edge_policies", static_qos);
 
     goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         goal_topic_, rclcpp::QoS(10),
@@ -108,9 +126,15 @@ public:
     save_service_ = create_service<std_srvs::srv::Trigger>(
         "~/save", std::bind(&RvizTopologyEditor::saveAll, this,
                             std::placeholders::_1, std::placeholders::_2));
+    set_edge_policy_service_ =
+        create_service<srv::SetTopologyEdgePolicy>(
+            "~/set_edge_policy",
+            std::bind(&RvizTopologyEditor::setEdgePolicy, this,
+                      std::placeholders::_1, std::placeholders::_2));
 
     publishCloud();
     publishMarkers();
+    publishEdgePolicies();
 
     RCLCPP_INFO(get_logger(), "RViz topology editor ready");
     RCLCPP_INFO(get_logger(), "PCD: %s", pcd_file_.c_str());
@@ -316,6 +340,110 @@ private:
                 points_.size(), target_points_file_.c_str(), next_id_);
   }
 
+  void rebuildSequentialEdges() {
+    const auto previous_edges = edges_;
+    edges_.clear();
+    edges_.reserve(points_.empty() ? 0U : points_.size() - 1U);
+    for (std::size_t index = 0; index + 1U < points_.size(); ++index) {
+      const auto &from = points_[index];
+      const auto &to = points_[index + 1U];
+      const double dx = to.x - from.x;
+      const double dy = to.y - from.y;
+      const double dz = to.z - from.z;
+
+      EditableEdge edge;
+      edge.id = static_cast<int>(index);
+      edge.from_id = from.id;
+      edge.to_id = to.id;
+      edge.weight = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+      const auto previous = std::find_if(
+          previous_edges.begin(), previous_edges.end(),
+          [&edge](const EditableEdge &candidate) {
+            return candidate.from_id == edge.from_id &&
+                   candidate.to_id == edge.to_id;
+          });
+      if (previous != previous_edges.end()) {
+        edge.bidirectional = previous->bidirectional;
+        edge.obstacle_stop_enabled = previous->obstacle_stop_enabled;
+        edge.obstacle_avoidance_enabled =
+            previous->obstacle_avoidance_enabled;
+      }
+      edges_.push_back(edge);
+    }
+  }
+
+  void loadExistingEdgePolicies() {
+    std::ifstream input(connected_topology_file_);
+    if (!input.is_open()) {
+      RCLCPP_INFO(get_logger(),
+                  "No existing connected topology, use default edge policy: "
+                  "stop=enabled avoidance=disabled");
+      return;
+    }
+
+    bool reading_edges = false;
+    std::string line;
+    while (std::getline(input, line)) {
+      if (line.find("# Topology Edges") != std::string::npos) {
+        reading_edges = true;
+        continue;
+      }
+      const auto first = line.find_first_not_of(" \t\r");
+      if (!reading_edges || first == std::string::npos || line[first] == '#') {
+        continue;
+      }
+
+      int edge_id = 0;
+      int from_id = 0;
+      int to_id = 0;
+      double weight = 0.0;
+      std::string type;
+      int bidirectional = 1;
+      int disable_obstacle_stop = 0;
+      int disable_obstacle_avoidance = 1;
+      std::istringstream parser(line);
+      if (!(parser >> edge_id >> from_id >> to_id >> weight >> type >>
+            bidirectional)) {
+        RCLCPP_WARN(get_logger(), "Ignore malformed topology edge: %s",
+                    line.c_str());
+        continue;
+      }
+      parser >> disable_obstacle_stop;
+      parser >> disable_obstacle_avoidance;
+
+      const auto edge = std::find_if(
+          edges_.begin(), edges_.end(),
+          [from_id, to_id](const EditableEdge &candidate) {
+            return candidate.from_id == from_id && candidate.to_id == to_id;
+          });
+      if (edge == edges_.end()) {
+        continue;
+      }
+      edge->bidirectional = bidirectional == 1;
+      edge->obstacle_stop_enabled = disable_obstacle_stop != 1;
+      edge->obstacle_avoidance_enabled = disable_obstacle_avoidance != 1;
+    }
+  }
+
+  void publishEdgePolicies() {
+    if (!edge_policy_pub_) {
+      return;
+    }
+    msg::TopologyEdgePolicyArray message;
+    message.edges.reserve(edges_.size());
+    for (const auto &edge : edges_) {
+      msg::TopologyEdgePolicy policy;
+      policy.edge_id = edge.id;
+      policy.from_id = edge.from_id;
+      policy.to_id = edge.to_id;
+      policy.obstacle_stop_enabled = edge.obstacle_stop_enabled;
+      policy.obstacle_avoidance_enabled = edge.obstacle_avoidance_enabled;
+      message.edges.push_back(policy);
+    }
+    edge_policy_pub_->publish(message);
+  }
+
   void publishCloud() {
     sensor_msgs::msg::PointCloud2 message;
     pcl::toROSMsg(*display_cloud_, message);
@@ -363,6 +491,7 @@ private:
 
     points_.push_back(point);
     ++next_id_;
+    rebuildSequentialEdges();
     show_edges_ = false;
 
     if (auto_save_raw_points_) {
@@ -378,6 +507,7 @@ private:
     }
 
     publishMarkers();
+    publishEdgePolicies();
     RCLCPP_INFO(get_logger(),
                 "Added point id=%d label=%s xyz=(%.3f, %.3f, %.3f), "
                 "pending save=%s",
@@ -440,20 +570,17 @@ private:
              << " " << point.y << " " << point.z << " " << point.label << '\n';
     }
 
-    output << "# 格式: 边ID 起始节点ID 结束节点ID 权重 类型 双向\n";
+    output << "# 格式: 边ID 起始节点ID 结束节点ID 权重 类型 双向 "
+              "关闭停障 关闭绕障\n";
     output << "# Topology Edges\n";
     output << "# 新增连接 (按节点 ID 顺序自动生成)\n";
 
-    for (std::size_t index = 0; index + 1U < points_.size(); ++index) {
-      const auto &from = points_[index];
-      const auto &to = points_[index + 1U];
-      const double dx = to.x - from.x;
-      const double dy = to.y - from.y;
-      const double dz = to.z - from.z;
-      const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-      output << index << " " << from.id << " " << to.id << " " << std::fixed
-             << std::setprecision(6) << distance << " auto 1\n";
+    for (const auto &edge : edges_) {
+      output << edge.id << " " << edge.from_id << " " << edge.to_id << " "
+             << std::fixed << std::setprecision(6) << edge.weight << " auto "
+             << (edge.bidirectional ? 1 : 0) << " "
+             << (edge.obstacle_stop_enabled ? 0 : 1) << " "
+             << (edge.obstacle_avoidance_enabled ? 0 : 1) << "\n";
     }
 
     output.flush();
@@ -524,36 +651,86 @@ private:
     clear.action = visualization_msgs::msg::Marker::DELETEALL;
     markers.markers.push_back(clear);
 
-    if (show_edges_ && points_.size() >= 2U) {
-      visualization_msgs::msg::Marker edges;
-      edges.header.frame_id = frame_id_;
-      edges.header.stamp = now();
-      edges.ns = "rviz_topology_edges";
-      edges.id = 0;
-      edges.type = visualization_msgs::msg::Marker::LINE_LIST;
-      edges.action = visualization_msgs::msg::Marker::ADD;
-      edges.pose.orientation.w = 1.0;
-      edges.scale.x = edge_width_;
-      edges.color.r = 0.0F;
-      edges.color.g = 0.7F;
-      edges.color.b = 1.0F;
-      edges.color.a = 1.0F;
+    if (show_edges_ && !edges_.empty()) {
+      for (const auto &edge : edges_) {
+        const auto from = std::find_if(
+            points_.begin(), points_.end(), [&edge](const SavedPoint &point) {
+              return point.id == edge.from_id;
+            });
+        const auto to = std::find_if(
+            points_.begin(), points_.end(), [&edge](const SavedPoint &point) {
+              return point.id == edge.to_id;
+            });
+        if (from == points_.end() || to == points_.end()) {
+          continue;
+        }
 
-      for (std::size_t index = 0; index + 1U < points_.size(); ++index) {
-        geometry_msgs::msg::Point from;
-        from.x = points_[index].x;
-        from.y = points_[index].y;
-        from.z = flatten_cloud_for_display_ ? 0.05 : points_[index].z + 0.05;
+        visualization_msgs::msg::Marker line;
+        line.header.frame_id = frame_id_;
+        line.header.stamp = now();
+        line.ns = "rviz_topology_edges";
+        line.id = edge.id;
+        line.type = visualization_msgs::msg::Marker::LINE_LIST;
+        line.action = visualization_msgs::msg::Marker::ADD;
+        line.pose.orientation.w = 1.0;
+        line.scale.x = edge_width_;
+        line.color.a = 1.0F;
+        if (edge.obstacle_stop_enabled &&
+            !edge.obstacle_avoidance_enabled) {
+          line.color.r = 0.0F;
+          line.color.g = 0.7F;
+          line.color.b = 1.0F;
+        } else if (edge.obstacle_stop_enabled &&
+                   edge.obstacle_avoidance_enabled) {
+          line.color.r = 0.0F;
+          line.color.g = 1.0F;
+          line.color.b = 0.0F;
+        } else if (edge.obstacle_avoidance_enabled) {
+          line.color.r = 1.0F;
+          line.color.g = 0.55F;
+          line.color.b = 0.0F;
+        } else {
+          line.color.r = 0.5F;
+          line.color.g = 0.5F;
+          line.color.b = 0.5F;
+        }
 
-        geometry_msgs::msg::Point to;
-        to.x = points_[index + 1U].x;
-        to.y = points_[index + 1U].y;
-        to.z = flatten_cloud_for_display_ ? 0.05 : points_[index + 1U].z + 0.05;
+        geometry_msgs::msg::Point from_point;
+        from_point.x = from->x;
+        from_point.y = from->y;
+        from_point.z =
+            flatten_cloud_for_display_ ? 0.05 : from->z + 0.05;
+        geometry_msgs::msg::Point to_point;
+        to_point.x = to->x;
+        to_point.y = to->y;
+        to_point.z = flatten_cloud_for_display_ ? 0.05 : to->z + 0.05;
+        line.points.push_back(from_point);
+        line.points.push_back(to_point);
+        markers.markers.push_back(line);
 
-        edges.points.push_back(from);
-        edges.points.push_back(to);
+        visualization_msgs::msg::Marker label;
+        label.header = line.header;
+        label.ns = "rviz_topology_edge_policies";
+        label.id = edge.id;
+        label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+        label.action = visualization_msgs::msg::Marker::ADD;
+        label.pose.position.x = (from->x + to->x) * 0.5;
+        label.pose.position.y = (from->y + to->y) * 0.5;
+        label.pose.position.z =
+            (flatten_cloud_for_display_ ? 0.05 : (from->z + to->z) * 0.5) +
+            0.3;
+        label.pose.orientation.w = 1.0;
+        label.scale.z = marker_text_scale_ * 0.55;
+        label.color.r = 1.0F;
+        label.color.g = 1.0F;
+        label.color.b = 1.0F;
+        label.color.a = 1.0F;
+        label.text = "edge" + std::to_string(edge.id) + " STOP:" +
+                     (edge.obstacle_stop_enabled ? "ON" : "OFF") +
+                     " AVOID:" +
+                     (edge.obstacle_avoidance_enabled ? "ON" : "OFF");
+        markers.markers.push_back(label);
       }
-      markers.markers.push_back(edges);
     }
 
     for (const auto &point : points_) {
@@ -610,19 +787,23 @@ private:
       return;
     }
 
+    const auto previous_edges = edges_;
     const auto removed_id = points_.back().id;
     points_.pop_back();
     next_id_ = points_.empty() ? 0 : points_.back().id + 1;
+    rebuildSequentialEdges();
     show_edges_ = false;
     try {
       if (auto_save_raw_points_) {
         saveRawPointFiles();
       }
       publishMarkers();
+      publishEdgePolicies();
       response->success = true;
       response->message = "removed point id=" + std::to_string(removed_id) +
                           "; click Save to finalize";
     } catch (const std::exception &error) {
+      edges_ = previous_edges;
       response->success = false;
       response->message = error.what();
     }
@@ -631,8 +812,10 @@ private:
   void clearPoints(const std_srvs::srv::Trigger::Request::SharedPtr,
                    std_srvs::srv::Trigger::Response::SharedPtr response) {
     const auto previous_points = points_;
+    const auto previous_edges = edges_;
     const auto previous_next_id = next_id_;
     points_.clear();
+    edges_.clear();
     next_id_ = 0;
     show_edges_ = false;
     try {
@@ -640,22 +823,49 @@ private:
         saveRawPointFiles();
       }
       publishMarkers();
+      publishEdgePolicies();
       response->success = true;
       response->message =
           "all current points cleared; save to overwrite output files";
     } catch (const std::exception &error) {
       points_ = previous_points;
+      edges_ = previous_edges;
       next_id_ = previous_next_id;
       response->success = false;
       response->message = error.what();
     }
   }
 
+  void setEdgePolicy(
+      const srv::SetTopologyEdgePolicy::Request::SharedPtr request,
+      srv::SetTopologyEdgePolicy::Response::SharedPtr response) {
+    const auto edge =
+        std::find_if(edges_.begin(), edges_.end(), [request](const auto &item) {
+          return item.id == request->edge_id;
+        });
+    if (edge == edges_.end()) {
+      response->success = false;
+      response->message = "edge not found: " +
+                          std::to_string(request->edge_id);
+      return;
+    }
+
+    edge->obstacle_stop_enabled = request->obstacle_stop_enabled;
+    edge->obstacle_avoidance_enabled = request->obstacle_avoidance_enabled;
+    show_edges_ = true;
+    publishMarkers();
+    publishEdgePolicies();
+    response->success = true;
+    response->message =
+        "edge " + std::to_string(edge->id) + " policy applied; click Save "
+        "to write connected_topology_map.txt";
+  }
+
   void saveAll(const std_srvs::srv::Trigger::Request::SharedPtr,
                std_srvs::srv::Trigger::Response::SharedPtr response) {
     try {
       saveAllOutputs();
-      const auto edge_count = points_.empty() ? 0U : points_.size() - 1U;
+      const auto edge_count = edges_.size();
       response->success = true;
       response->message = "points=" + std::to_string(points_.size()) +
                           ", edges=" + std::to_string(edge_count) +
@@ -696,16 +906,21 @@ private:
 
   int next_id_{0};
   std::vector<SavedPoint> points_;
+  std::vector<EditableEdge> edges_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr original_cloud_;
   pcl::PointCloud<pcl::PointXYZ>::Ptr display_cloud_;
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_pub_;
+  rclcpp::Publisher<msg::TopologyEdgePolicyArray>::SharedPtr
+      edge_policy_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr undo_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_service_;
+  rclcpp::Service<srv::SetTopologyEdgePolicy>::SharedPtr
+      set_edge_policy_service_;
 };
 
 rclcpp::Node::SharedPtr makeRvizTopologyEditorNode() {
