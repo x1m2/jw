@@ -542,6 +542,7 @@ void RobotRuntimeNode::startLocalizationCallback(
   // 将map_id和地图目录传给纯定位Worker，算法对象在收到START后创建。
   localization_controller_->start(
       session_id, selected_map_id_, selected_map_path.string(),
+      use_initial_pose,
       [this, session_id, use_initial_pose, initial_pose](
           bool success, const std::string &message) {
         {

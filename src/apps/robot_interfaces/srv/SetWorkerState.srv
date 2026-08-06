@@ -4,6 +4,7 @@ uint8 command
 uint64 session_id
 string resource_id
 string resource_path
+bool use_initial_pose
 ---
 bool success
 uint8 actual_state

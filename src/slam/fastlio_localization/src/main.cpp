@@ -17,6 +17,10 @@ int main(int argc, char **argv) {
         if (!context.resource_path.empty()) {
           options.append_parameter_override("map_path", context.resource_path);
         }
+        if (context.use_initial_pose) {
+          options.append_parameter_override("algorithm_type",
+                                            "manually_set");
+        }
         auto localization =
             std::make_shared<FastlioLocalizationNode>(options);
         localization->initialize();

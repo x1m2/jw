@@ -31,6 +31,7 @@ class ManagedWorker : public rclcpp::Node {
   struct StartContext {
     std::string resource_id;
     std::string resource_path;
+    bool use_initial_pose{false};
   };
 
   using AlgorithmFactory =
@@ -98,7 +99,8 @@ class ManagedWorker : public rclcpp::Node {
                      SetWorkerState::Response::SharedPtr response) {
     std::string message;
     if (request->command == SetWorkerState::Request::START) {
-      const StartContext context{request->resource_id, request->resource_path};
+      const StartContext context{request->resource_id, request->resource_path,
+                                 request->use_initial_pose};
       response->success =
           startAlgorithm(request->session_id, context, message);
     } else if (request->command == SetWorkerState::Request::STOP) {
