@@ -658,18 +658,18 @@ void FastlioLocalizationNode::initialize() {
   /*** ROS subscribe initialization ***/
   if (lidar_type == AVIA)
     sub_pcl1 = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-        lidar_topic, 1000,
+        lidar_topic, 10000,
         [this](livox_ros_driver2::msg::CustomMsg::SharedPtr message) {
           livox_pcl_cbk(std::move(message));
         });
   else
     sub_pcl2 = node->create_subscription<sensor_msgs::msg::PointCloud2>(
-        lidar_topic, 1000,
+        lidar_topic, 10000,
         [this](sensor_msgs::msg::PointCloud2::SharedPtr message) {
           standard_pcl_cbk(std::move(message));
         });
   sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(
-      imu_topic, 1000, [this](sensor_msgs::msg::Imu::SharedPtr message) {
+      imu_topic, 200000, [this](sensor_msgs::msg::Imu::SharedPtr message) {
         imu_cbk(std::move(message));
       });
   sub_gnss = node->create_subscription<sensor_msgs::msg::NavSatFix>(
