@@ -12,7 +12,7 @@
 /livox/lidar       livox_ros_driver2/msg/CustomMsg
 /cmd_vel_planned   geometry_msgs/msg/Twist
 /emergency_stop    std_msgs/msg/Bool
-/obstacle_stop/disable std_msgs/msg/Bool
+/obstacle_stop/enabled std_msgs/msg/Bool
 ```
 
 发布：
@@ -25,8 +25,8 @@
 
 点云或计划速度超时、过滤后有效点不足以及外部急停时，节点默认发布零速度。
 
-`/obstacle_stop/disable=true`时透传规划速度并跳过雷达停障；外部急停和
-规划速度超时保护仍然有效。默认值为`false`。
+`/obstacle_stop/enabled=false`时透传规划速度并跳过雷达停障；外部急停和
+规划速度超时保护仍然有效。默认值为`true`。
 
 前方采用两个连续矩形检测区：远矩形触发时线速度降为40%，进入近矩形
 硬停区后强制发布零速度。障碍出现时立即触发，障碍消失后延迟解除；硬停

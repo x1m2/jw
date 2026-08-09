@@ -1,3 +1,3 @@
 nav_msgs/Path path
-bool[] disable_obstacle_stop
-bool[] disable_obstacle_avoidance
+bool[] obstacle_stop_enabled
+bool[] obstacle_avoidance_enabled

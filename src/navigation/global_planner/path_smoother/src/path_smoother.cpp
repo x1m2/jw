@@ -79,21 +79,21 @@ void PathSmoother::pathWithPolicyCallback(
     return;
   }
 
-  std::vector<bool> raw_policy = msg->disable_obstacle_stop;
+  std::vector<bool> raw_policy = msg->obstacle_stop_enabled;
   if (raw_policy.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Path policy size mismatch: poses=%zu, policies=%zu; "
                  "falling back to obstacle stop enabled",
                  msg->path.poses.size(), raw_policy.size());
-    raw_policy.assign(msg->path.poses.size(), false);
+    raw_policy.assign(msg->path.poses.size(), true);
   }
-  std::vector<bool> raw_avoidance_policy = msg->disable_obstacle_avoidance;
+  std::vector<bool> raw_avoidance_policy = msg->obstacle_avoidance_enabled;
   if (raw_avoidance_policy.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Avoidance policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle avoidance disabled",
+                 "falling back to obstacle_avoidance_enabled=false",
                  msg->path.poses.size(), raw_avoidance_policy.size());
-    raw_avoidance_policy.assign(msg->path.poses.size(), true);
+    raw_avoidance_policy.assign(msg->path.poses.size(), false);
   }
 
   rclcpp::Time start_time = node_->now();
@@ -110,9 +110,9 @@ void PathSmoother::pathWithPolicyCallback(
     smoothed_path_pub_->publish(path);
     navigation_interfaces::msg::PathWithPolicy path_with_policy;
     path_with_policy.path = path;
-    path_with_policy.disable_obstacle_stop =
+    path_with_policy.obstacle_stop_enabled =
         remapPolicyToSmoothedPath(path_to_smooth, raw_policy, path);
-    path_with_policy.disable_obstacle_avoidance = remapPolicyToSmoothedPath(
+    path_with_policy.obstacle_avoidance_enabled = remapPolicyToSmoothedPath(
         path_to_smooth, raw_avoidance_policy, path);
     smoothed_path_with_policy_pub_->publish(path_with_policy);
   };

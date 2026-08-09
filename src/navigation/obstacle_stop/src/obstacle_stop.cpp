@@ -37,9 +37,9 @@ bool ObstacleStop::initialize() {
       "/emergency_stop", 10,
       std::bind(&ObstacleStop::emergencyStopCallback, this,
                 std::placeholders::_1));
-  disable_obstacle_stop_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-      "/obstacle_stop/disable", rclcpp::QoS(1).transient_local(),
-      std::bind(&ObstacleStop::disableObstacleStopCallback, this,
+  obstacle_stop_enabled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/obstacle_stop/enabled", rclcpp::QoS(1).transient_local(),
+      std::bind(&ObstacleStop::obstacleStopEnabledCallback, this,
                 std::placeholders::_1));
 
   safe_cmd_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>(
@@ -214,10 +214,10 @@ void ObstacleStop::emergencyStopCallback(
   emergency_stop_active_ = message->data;
 }
 
-void ObstacleStop::disableObstacleStopCallback(
+void ObstacleStop::obstacleStopEnabledCallback(
     const std_msgs::msg::Bool::ConstSharedPtr message) {
   std::lock_guard<std::mutex> lock(mutex_);
-  obstacle_stop_disabled_ = message->data;
+  obstacle_stop_enabled_ = message->data;
 }
 
 std::size_t ObstacleStop::buildObstacleGrid(
@@ -347,7 +347,7 @@ void ObstacleStop::controlCallback() {
   bool hard_stop = false;
   bool slowdown = false;
   bool emergency_stop = false;
-  bool obstacle_stop_disabled = false;
+  bool obstacle_stop_enabled = true;
   rclcpp::Time lidar_time(0, 0, node_->get_clock()->get_clock_type());
   rclcpp::Time command_time(0, 0, node_->get_clock()->get_clock_type());
   {
@@ -359,7 +359,7 @@ void ObstacleStop::controlCallback() {
     hard_stop = hard_stop_active_;
     slowdown = slowdown_active_;
     emergency_stop = emergency_stop_active_;
-    obstacle_stop_disabled = obstacle_stop_disabled_;
+    obstacle_stop_enabled = obstacle_stop_enabled_;
     lidar_time = last_lidar_time_;
     command_time = last_command_time_;
   }
@@ -385,8 +385,8 @@ void ObstacleStop::controlCallback() {
     state = State::kWaitingForCommand;
     reason = has_command ? "planned velocity timed out"
                          : "waiting for planned velocity";
-  } else if (obstacle_stop_disabled) {
-    // 关闭停障仅绕过雷达停车和减速，外部急停与指令超时仍然有效。
+  } else if (!obstacle_stop_enabled) {
+    // 停障未启用时仅绕过雷达停车和减速，外部急停与指令超时仍然有效。
     safe_command = planned;
   } else if (!lidar_fresh) {
     state = State::kWaitingForLidar;

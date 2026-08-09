@@ -87,29 +87,21 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
     return false;
   }
 
-  // 只有在启用局部重规划时才初始化局部路径规划器
-  if (config_.enable_local_replanning) {
-    local_path_planner_ = std::make_unique<LocalPathPlanner>();
-    if (!local_path_planner_->initialize(node_, tf_buffer_)) {
-      RCLCPP_ERROR(node_->get_logger(),
-                   "Failed to initialize local path planner");
-      return false;
-    }
-    RCLCPP_INFO(node_->get_logger(),
-                "Local path planner (A* replanning) enabled");
-  } else {
-    RCLCPP_INFO(node_->get_logger(),
-                "Local path planner (A* replanning) disabled");
+  // 绕障组件始终初始化，运行时由当前拓扑边策略决定是否使用。
+  local_path_planner_ = std::make_unique<LocalPathPlanner>();
+  if (!local_path_planner_->initialize(node_, tf_buffer_)) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Failed to initialize local path planner");
+    return false;
   }
+  RCLCPP_INFO(node_->get_logger(),
+              "Local path planner (A* replanning) initialized");
 
-  // 仅在启用主动绕障时初始化前方障碍物检测器。
-  if (config_.enable_obstacle_replanning) {
-    front_obstacle_detector_ = std::make_unique<FrontObstacleDetector>();
-    if (!front_obstacle_detector_->initialize(node_, tf_buffer_)) {
-      RCLCPP_ERROR(node_->get_logger(),
-                   "Failed to initialize front obstacle detector");
-      return false;
-    }
+  front_obstacle_detector_ = std::make_unique<FrontObstacleDetector>();
+  if (!front_obstacle_detector_->initialize(node_, tf_buffer_)) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Failed to initialize front obstacle detector");
+    return false;
   }
 
   // 初始化发布器
@@ -124,8 +116,8 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
                                                                1);
   nav_state_pub_ =
       node_->create_publisher<std_msgs::msg::Bool>("/nav_state", 1);
-  obstacle_stop_disable_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
-      "/obstacle_stop/disable",
+  obstacle_stop_enabled_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
+      "/obstacle_stop/enabled",
       rclcpp::QoS(1).reliable().transient_local());
 
   // RobotRuntime内部控制接口，不作为APP直接调用的业务API。
@@ -146,16 +138,13 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
             this->globalPathWithPolicyCallback(msg);
           });
 
-  if (config_.enable_local_replanning ||
-      config_.enable_obstacle_replanning) {
-    costmap_sub_ = node_->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/local_costmap", rclcpp::QoS(10),
-        [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
-          this->costmapCallback(msg);
-        });
-  }
+  costmap_sub_ = node_->create_subscription<nav_msgs::msg::OccupancyGrid>(
+      "/local_costmap", rclcpp::QoS(10),
+      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
+        this->costmapCallback(msg);
+      });
 
-  if (config_.enable_local_replanning && config_.use_smoothed_path) {
+  if (config_.use_smoothed_path) {
     smoothed_local_path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
         "/pure_pursuit_local_planner/smoothed_local_path", rclcpp::QoS(10),
         [this](nav_msgs::msg::Path::ConstSharedPtr msg) {
@@ -182,7 +171,7 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
 }
 
 bool PurePursuitLocalPlanner::isLocalReplanningEnabled() const {
-  return config_.enable_local_replanning && local_path_planner_ != nullptr;
+  return local_path_planner_ != nullptr;
 }
 
 void PurePursuitLocalPlanner::setLocalReplanningActive(bool active) {
@@ -257,19 +246,10 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.final_yaw_min_angular_velocity =
       declareOrGetParameter(node_, "final_yaw_min_angular_velocity", 0.28);
   // Local planning parameters
-  config_.enable_obstacle_replanning =
-      declareOrGetParameter(node_, "enable_obstacle_replanning", false);
-  config_.enable_local_replanning =
-      declareOrGetParameter(node_, "enable_local_replanning", false);
   config_.use_smoothed_path =
       declareOrGetParameter(node_, "use_smoothed_path", false);
   config_.avoidance_reentry_cooldown =
       declareOrGetParameter(node_, "avoidance_reentry_cooldown", 2.0);
-
-  if (config_.enable_obstacle_replanning && !config_.enable_local_replanning) {
-    RCLCPP_WARN(node_->get_logger(),
-                "enable_obstacle_replanning=true but enable_local_replanning=false; obstacle avoidance will fall back to stop.");
-  }
 
   // Frame IDs
   config_.global_frame =
@@ -315,14 +295,10 @@ bool PurePursuitLocalPlanner::setGlobalPath(
                 "[AVOID_PATH_FILTER] front detector is null, cannot pass global path");
   }
 
-  // 只有在启用局部重规划时才将路径传递给局部路径规划器
-  if (config_.enable_local_replanning && local_path_planner_) {
+  if (local_path_planner_) {
     local_path_planner_->setGlobalPath(global_path_);
     RCLCPP_INFO(node_->get_logger(),
                 "Global path passed to local planner for A* replanning");
-  } else {
-    RCLCPP_INFO(node_->get_logger(),
-                "Local replanning disabled, using global path directly");
   }
 
   RCLCPP_INFO(node_->get_logger(), "Global path set with %zu poses",
@@ -360,7 +336,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
 
   // 执行避障决策前先更新当前拓扑段策略。
   updatePathProgress(robot_pose);
-  if (isObstacleAvoidanceDisabled() && local_replanning_active_) {
+  if (!isObstacleAvoidanceEnabled() && local_replanning_active_) {
     setLocalReplanningActive(false);
   }
 
@@ -405,8 +381,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return true;
   }
 
-  if (config_.enable_obstacle_replanning &&
-      !isObstacleAvoidanceDisabled() && front_obstacle_detector_) {
+  if (isObstacleAvoidanceEnabled() && front_obstacle_detector_) {
     const auto avoidance_info =
         front_obstacle_detector_->analyzeAvoidance(robot_pose);
 
@@ -637,56 +612,55 @@ void PurePursuitLocalPlanner::controlCallback() {
 
 void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
     navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg) {
-  if (msg->disable_obstacle_stop.size() != msg->path.poses.size()) {
+  if (msg->obstacle_stop_enabled.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Path policy size mismatch: poses=%zu, policies=%zu; "
                  "falling back to obstacle stop enabled",
-                 msg->path.poses.size(), msg->disable_obstacle_stop.size());
-    disable_obstacle_stop_policy_.assign(msg->path.poses.size(), false);
+                 msg->path.poses.size(), msg->obstacle_stop_enabled.size());
+    obstacle_stop_enabled_policy_.assign(msg->path.poses.size(), true);
   } else {
-    disable_obstacle_stop_policy_ = msg->disable_obstacle_stop;
+    obstacle_stop_enabled_policy_ = msg->obstacle_stop_enabled;
   }
-  if (msg->disable_obstacle_avoidance.size() != msg->path.poses.size()) {
+  if (msg->obstacle_avoidance_enabled.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Avoidance policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle avoidance disabled",
+                 "falling back to obstacle_avoidance_enabled=false",
                  msg->path.poses.size(),
-                 msg->disable_obstacle_avoidance.size());
-    disable_obstacle_avoidance_policy_.assign(msg->path.poses.size(), true);
+                 msg->obstacle_avoidance_enabled.size());
+    obstacle_avoidance_enabled_policy_.assign(msg->path.poses.size(), false);
   } else {
-    disable_obstacle_avoidance_policy_ = msg->disable_obstacle_avoidance;
+    obstacle_avoidance_enabled_policy_ = msg->obstacle_avoidance_enabled;
   }
   setGlobalPath(msg->path);
   publishCurrentObstacleStopPolicy();
 }
 
-bool PurePursuitLocalPlanner::isObstacleAvoidanceDisabled() const {
-  return path_progress_index_ < disable_obstacle_avoidance_policy_.size() &&
-         disable_obstacle_avoidance_policy_[path_progress_index_];
+bool PurePursuitLocalPlanner::isObstacleAvoidanceEnabled() const {
+  return path_progress_index_ < obstacle_avoidance_enabled_policy_.size() &&
+         obstacle_avoidance_enabled_policy_[path_progress_index_];
 }
 
 void PurePursuitLocalPlanner::publishCurrentObstacleStopPolicy() {
-  bool disabled = false;
-  if (path_progress_index_ < disable_obstacle_stop_policy_.size()) {
-    disabled = disable_obstacle_stop_policy_[path_progress_index_];
+  bool enabled = true;
+  if (path_progress_index_ < obstacle_stop_enabled_policy_.size()) {
+    enabled = obstacle_stop_enabled_policy_[path_progress_index_];
   }
   if (has_published_obstacle_stop_policy_ &&
-      disabled == published_disable_obstacle_stop_) {
+      enabled == published_obstacle_stop_enabled_) {
     return;
   }
   std_msgs::msg::Bool message;
-  message.data = disabled;
-  obstacle_stop_disable_pub_->publish(message);
-  published_disable_obstacle_stop_ = disabled;
+  message.data = enabled;
+  obstacle_stop_enabled_pub_->publish(message);
+  published_obstacle_stop_enabled_ = enabled;
   has_published_obstacle_stop_policy_ = true;
   RCLCPP_INFO(node_->get_logger(), "Obstacle stop policy: %s at path index %zu",
-              disabled ? "disabled" : "enabled", path_progress_index_);
+              enabled ? "enabled" : "disabled", path_progress_index_);
 }
 
 void PurePursuitLocalPlanner::costmapCallback(
     nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
-  // 只有在启用局部重规划时才更新局部路径规划器的代价地图
-  if (config_.enable_local_replanning && local_path_planner_) {
+  if (local_path_planner_) {
     latest_costmap_ = *msg;
     latest_costmap_received_ = true;
     local_path_planner_->updateCostmap(*msg);
@@ -739,7 +713,7 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
   bool use_local_path = false;
   std::string path_type;
 
-  if (config_.enable_local_replanning && local_replanning_active_) {
+  if (local_replanning_active_) {
     // 启用局部重规划时的优先级：平滑后局部路径 > 原始局部路径 > 全局路径
     if (config_.use_smoothed_path && smoothed_local_path_received_ &&
         !smoothed_local_path_.poses.empty()) {

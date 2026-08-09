@@ -56,10 +56,13 @@ ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
 ```text
 /cmd_vel_planned  geometry_msgs/msg/Twist
 /nav_state        std_msgs/msg/Bool
+/obstacle_stop/enabled std_msgs/msg/Bool
 local_path        nav_msgs/msg/Path
 local_path_astar  nav_msgs/msg/Path
 local_goal_marker visualization_msgs/msg/Marker
 ```
+
+`/obstacle_stop/enabled`采用正向语义：`true`开启停障，`false`关闭停障。
 
 ## 控制逻辑
 

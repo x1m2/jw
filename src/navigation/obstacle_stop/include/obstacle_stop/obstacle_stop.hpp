@@ -82,7 +82,7 @@ class ObstacleStop {
   void plannedVelocityCallback(
       const geometry_msgs::msg::Twist::ConstSharedPtr message);
   void emergencyStopCallback(const std_msgs::msg::Bool::ConstSharedPtr message);
-  void disableObstacleStopCallback(
+  void obstacleStopEnabledCallback(
       const std_msgs::msg::Bool::ConstSharedPtr message);
   // 周期检查传感器、指令和障碍物状态，发布最终安全速度。
   void controlCallback();
@@ -111,7 +111,7 @@ class ObstacleStop {
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr planned_cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
-      disable_obstacle_stop_sub_;
+      obstacle_stop_enabled_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr safe_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_active_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
@@ -141,7 +141,7 @@ class ObstacleStop {
   bool hard_stop_active_{false};
   bool slowdown_active_{false};
   bool emergency_stop_active_{false};
-  bool obstacle_stop_disabled_{false};
+  bool obstacle_stop_enabled_{true};
   State last_state_{State::kWaitingForCommand};
   bool has_logged_state_{false};
 };

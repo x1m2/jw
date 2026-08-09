@@ -400,8 +400,8 @@ private:
       double weight = 0.0;
       std::string type;
       int bidirectional = 1;
-      int disable_obstacle_stop = 0;
-      int disable_obstacle_avoidance = 1;
+      int obstacle_stop_enabled = 1;
+      int obstacle_avoidance_enabled = 0;
       std::istringstream parser(line);
       if (!(parser >> edge_id >> from_id >> to_id >> weight >> type >>
             bidirectional)) {
@@ -409,8 +409,8 @@ private:
                     line.c_str());
         continue;
       }
-      parser >> disable_obstacle_stop;
-      parser >> disable_obstacle_avoidance;
+      parser >> obstacle_stop_enabled;
+      parser >> obstacle_avoidance_enabled;
 
       const auto edge = std::find_if(
           edges_.begin(), edges_.end(),
@@ -421,8 +421,8 @@ private:
         continue;
       }
       edge->bidirectional = bidirectional == 1;
-      edge->obstacle_stop_enabled = disable_obstacle_stop != 1;
-      edge->obstacle_avoidance_enabled = disable_obstacle_avoidance != 1;
+      edge->obstacle_stop_enabled = obstacle_stop_enabled == 1;
+      edge->obstacle_avoidance_enabled = obstacle_avoidance_enabled == 1;
     }
   }
 
@@ -571,7 +571,8 @@ private:
     }
 
     output << "# 格式: 边ID 起始节点ID 结束节点ID 权重 类型 双向 "
-              "关闭停障 关闭绕障\n";
+              "开启停障 开启绕障\n";
+    output << "# Fields: obstacle_stop_enabled obstacle_avoidance_enabled\n";
     output << "# Topology Edges\n";
     output << "# 新增连接 (按节点 ID 顺序自动生成)\n";
 
@@ -579,8 +580,8 @@ private:
       output << edge.id << " " << edge.from_id << " " << edge.to_id << " "
              << std::fixed << std::setprecision(6) << edge.weight << " auto "
              << (edge.bidirectional ? 1 : 0) << " "
-             << (edge.obstacle_stop_enabled ? 0 : 1) << " "
-             << (edge.obstacle_avoidance_enabled ? 0 : 1) << "\n";
+             << (edge.obstacle_stop_enabled ? 1 : 0) << " "
+             << (edge.obstacle_avoidance_enabled ? 1 : 0) << "\n";
     }
 
     output.flush();

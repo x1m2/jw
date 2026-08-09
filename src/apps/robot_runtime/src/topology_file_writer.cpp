@@ -63,7 +63,7 @@ bool TopologyFileWriter::write(
     }
 
     output << "# Format: edge_id from_id to_id weight type bidirectional "
-              "disable_obstacle_stop disable_obstacle_avoidance\n";
+              "obstacle_stop_enabled obstacle_avoidance_enabled\n";
     output << "# Topology Edges\n";
     // APP数组顺序就是巡检顺序，相邻节点按三维距离建立双向边。
     for (std::size_t index = 0; index + 1U < nodes.size(); ++index) {
@@ -74,7 +74,7 @@ bool TopologyFileWriter::write(
       const double dz = to.z - from.z;
       const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
       output << index << " " << index << " " << (index + 1U) << " "
-             << distance << " auto 1 0 1\n";
+             << distance << " auto 1 1 0\n";
     }
     output.flush();
     if (!output) {

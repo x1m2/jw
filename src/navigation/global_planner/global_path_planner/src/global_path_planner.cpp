@@ -191,34 +191,34 @@ bool GlobalPathPlanner::loadTopologyMap() {
                      node.y, node.z);
       }
     } else {
-      // 读取边: ID 起始ID 结束ID 权重 类型 双向 [关闭停障] [关闭绕障]
+      // 读取边: ID 起始ID 结束ID 权重 类型 双向 [停障策略] [绕障策略]
       TopologyEdge edge;
       std::string type;
       int bidirectional_int;
-      int disable_obstacle_stop_int = 0;
-      int disable_obstacle_avoidance_int = 1;
+      int obstacle_stop_enabled_int = 1;
+      int obstacle_avoidance_enabled_int = 0;
 
       if (iss >> edge.id >> edge.from_id >> edge.to_id >> edge.weight >> type >>
           bidirectional_int) {
         edge.bidirectional = (bidirectional_int == 1);
         // 可选字段缺省时保持停障启用、主动绕障关闭。
-        if (iss >> disable_obstacle_stop_int) {
-          edge.disable_obstacle_stop = (disable_obstacle_stop_int == 1);
-          if (iss >> disable_obstacle_avoidance_int) {
-            edge.disable_obstacle_avoidance =
-                (disable_obstacle_avoidance_int == 1);
+        if (iss >> obstacle_stop_enabled_int) {
+          edge.obstacle_stop_enabled = obstacle_stop_enabled_int == 1;
+          if (iss >> obstacle_avoidance_enabled_int) {
+            edge.obstacle_avoidance_enabled =
+                obstacle_avoidance_enabled_int == 1;
           }
         }
         edges_.push_back(edge);
 
         RCLCPP_DEBUG(this->get_logger(),
                      "读取边: ID=%d, %d->%d, 权重=%.2f, 双向=%s, "
-                     "关闭停障=%s, 关闭绕障=%s",
+                     "启用停障=%s, 启用绕障=%s",
                      edge.id,
                      edge.from_id, edge.to_id, edge.weight,
                      edge.bidirectional ? "是" : "否",
-                     edge.disable_obstacle_stop ? "是" : "否",
-                     edge.disable_obstacle_avoidance ? "是" : "否");
+                     edge.obstacle_stop_enabled ? "是" : "否",
+                     edge.obstacle_avoidance_enabled ? "是" : "否");
       }
     }
   }
@@ -294,9 +294,9 @@ void GlobalPathPlanner::goalCallback(
         global_path_pub_->publish(global_path);
         navigation_interfaces::msg::PathWithPolicy path_with_policy;
         path_with_policy.path = global_path;
-        path_with_policy.disable_obstacle_stop =
+        path_with_policy.obstacle_stop_enabled =
             last_path_obstacle_stop_policy_;
-        path_with_policy.disable_obstacle_avoidance =
+        path_with_policy.obstacle_avoidance_enabled =
             last_path_obstacle_avoidance_policy_;
         global_path_with_policy_pub_->publish(path_with_policy);
         RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
@@ -336,9 +336,9 @@ void GlobalPathPlanner::targetPointsCallback(
       global_path_pub_->publish(global_path);
       navigation_interfaces::msg::PathWithPolicy path_with_policy;
       path_with_policy.path = global_path;
-      path_with_policy.disable_obstacle_stop =
+      path_with_policy.obstacle_stop_enabled =
           last_path_obstacle_stop_policy_;
-      path_with_policy.disable_obstacle_avoidance =
+      path_with_policy.obstacle_avoidance_enabled =
           last_path_obstacle_avoidance_policy_;
       global_path_with_policy_pub_->publish(path_with_policy);
       RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
@@ -857,9 +857,9 @@ void GlobalPathPlanner::inheritEdgePolicy(const TopologyEdge *source,
   if (source == nullptr) {
     return;
   }
-  destination.disable_obstacle_stop = source->disable_obstacle_stop;
-  destination.disable_obstacle_avoidance =
-      source->disable_obstacle_avoidance;
+  destination.obstacle_stop_enabled = source->obstacle_stop_enabled;
+  destination.obstacle_avoidance_enabled =
+      source->obstacle_avoidance_enabled;
 }
 
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
@@ -1033,15 +1033,15 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
   }
 
   // 每个拓扑段继承所选边的停障策略；临时连接边默认启用停障。
-  std::vector<bool> segment_disable_obstacle_stop;
-  std::vector<bool> segment_disable_obstacle_avoidance;
-  segment_disable_obstacle_stop.reserve(topology_path.size() - 1U);
-  segment_disable_obstacle_avoidance.reserve(topology_path.size() - 1U);
+  std::vector<bool> segment_obstacle_stop_enabled;
+  std::vector<bool> segment_obstacle_avoidance_enabled;
+  segment_obstacle_stop_enabled.reserve(topology_path.size() - 1U);
+  segment_obstacle_avoidance_enabled.reserve(topology_path.size() - 1U);
   for (std::size_t i = 0; i + 1U < topology_path.size(); ++i) {
     const int from_id = topology_path[i];
     const int to_id = topology_path[i + 1U];
-    bool disabled = false;
-    bool avoidance_disabled = true;
+    bool obstacle_stop_enabled = true;
+    bool obstacle_avoidance_enabled = false;
     double selected_weight = std::numeric_limits<double>::infinity();
     for (const auto &candidate : temp_edges) {
       const bool matches =
@@ -1050,12 +1050,12 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
            candidate.to_id == from_id);
       if (matches && candidate.weight < selected_weight) {
         selected_weight = candidate.weight;
-        disabled = candidate.disable_obstacle_stop;
-        avoidance_disabled = candidate.disable_obstacle_avoidance;
+        obstacle_stop_enabled = candidate.obstacle_stop_enabled;
+        obstacle_avoidance_enabled = candidate.obstacle_avoidance_enabled;
       }
     }
-    segment_disable_obstacle_stop.push_back(disabled);
-    segment_disable_obstacle_avoidance.push_back(avoidance_disabled);
+    segment_obstacle_stop_enabled.push_back(obstacle_stop_enabled);
+    segment_obstacle_avoidance_enabled.push_back(obstacle_avoidance_enabled);
   }
 
   // 插值生成完整路径
@@ -1090,13 +1090,13 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
         // 拓扑节点边界采用下一段策略，确保进入下一段前完成模式切换。
         const bool at_segment_end = j + 1U == segment.size();
         const std::size_t policy_segment =
-            at_segment_end && i + 1U < segment_disable_obstacle_stop.size()
+            at_segment_end && i + 1U < segment_obstacle_stop_enabled.size()
                 ? i + 1U
                 : i;
         last_path_obstacle_stop_policy_.push_back(
-            segment_disable_obstacle_stop[policy_segment]);
+            segment_obstacle_stop_enabled[policy_segment]);
         last_path_obstacle_avoidance_policy_.push_back(
-            segment_disable_obstacle_avoidance[policy_segment]);
+            segment_obstacle_avoidance_enabled[policy_segment]);
       }
     }
   }

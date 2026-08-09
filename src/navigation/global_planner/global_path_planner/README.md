@@ -20,16 +20,15 @@
 边格式支持两个可选策略字段：
 
 ```text
-edge_id from_id to_id weight type bidirectional disable_obstacle_stop disable_obstacle_avoidance
-0 0 1 5.0 auto 1 0 1
-1 1 2 6.0 auto 1 1 1
+edge_id from_id to_id weight type bidirectional obstacle_stop_enabled obstacle_avoidance_enabled
+0 0 1 5.0 auto 1 1 0
+1 1 2 6.0 auto 1 0 0
 ```
 
-- `disable_obstacle_stop=1`：该拓扑边关闭雷达停障。
-- `disable_obstacle_avoidance=1`：该拓扑边关闭PurePursuit主动绕障。
-- `disable_obstacle_stop`默认`0`，即启用停障。
-- `disable_obstacle_avoidance`默认`1`，即不启用主动绕障。
-- 旧文件缺少两个字段时按上述默认策略处理。
+- `obstacle_stop_enabled=1`：该拓扑边开启雷达停障。
+- `obstacle_avoidance_enabled=1`：该拓扑边开启PurePursuit主动绕障。
+- 默认为`1 0`，即开启停障、关闭主动绕障。
+- 文件缺少两个字段时仍按停障开启、主动绕障关闭处理。
 
 ## 编译
 

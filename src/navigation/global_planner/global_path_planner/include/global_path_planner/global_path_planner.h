@@ -43,8 +43,8 @@ struct TopologyEdge {
   int to_id;
   double weight;
   bool bidirectional;
-  bool disable_obstacle_stop;
-  bool disable_obstacle_avoidance;
+  bool obstacle_stop_enabled;
+  bool obstacle_avoidance_enabled;
 
   TopologyEdge()
       : id(0),
@@ -52,16 +52,16 @@ struct TopologyEdge {
         to_id(0),
         weight(0.0),
         bidirectional(false),
-        disable_obstacle_stop(false),
-        disable_obstacle_avoidance(true) {}
+        obstacle_stop_enabled(true),
+        obstacle_avoidance_enabled(false) {}
   TopologyEdge(int _id, int _from, int _to, double _weight, bool _bi)
       : id(_id),
         from_id(_from),
         to_id(_to),
         weight(_weight),
         bidirectional(_bi),
-        disable_obstacle_stop(false),
-        disable_obstacle_avoidance(true) {}
+        obstacle_stop_enabled(true),
+        obstacle_avoidance_enabled(false) {}
 };
 
 class GlobalPathPlanner : public rclcpp::Node {

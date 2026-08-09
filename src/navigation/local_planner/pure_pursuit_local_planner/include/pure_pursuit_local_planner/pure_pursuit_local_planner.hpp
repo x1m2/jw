@@ -60,8 +60,6 @@ struct PlannerConfig {
   double yaw_adjustment_gain;  // 角度调整增益
 
   // Local planning parameters
-  bool enable_obstacle_replanning;  // 是否启用基于障碍物中心的主动绕障
-  bool enable_local_replanning;  // 是否启用A*局部重规划
   bool use_smoothed_path;        // 是否使用平滑后的路径
   double avoidance_reentry_cooldown;  // 绕障完成后重新触发冷却时间
 
@@ -129,7 +127,7 @@ class PurePursuitLocalPlanner {
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
       nav_state_pub_;  // 导航状态发布器
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
-      obstacle_stop_disable_pub_;
+      obstacle_stop_enabled_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
   rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
       global_path_with_policy_sub_;
@@ -158,9 +156,9 @@ class PurePursuitLocalPlanner {
   bool target_pose_received_;             // 新增：目标位姿接收标志
   int current_path_index_;
   size_t path_progress_index_;  // 路径进度索引，防止回头
-  std::vector<bool> disable_obstacle_stop_policy_;
-  std::vector<bool> disable_obstacle_avoidance_policy_;
-  bool published_disable_obstacle_stop_{false};
+  std::vector<bool> obstacle_stop_enabled_policy_;
+  std::vector<bool> obstacle_avoidance_enabled_policy_;
+  bool published_obstacle_stop_enabled_{true};
   bool has_published_obstacle_stop_policy_{false};
   bool pp_aligning_;
   bool pp_correcting_;
@@ -202,7 +200,7 @@ class PurePursuitLocalPlanner {
   void globalPathWithPolicyCallback(
       navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg);
   void publishCurrentObstacleStopPolicy();
-  bool isObstacleAvoidanceDisabled() const;
+  bool isObstacleAvoidanceEnabled() const;
 
   /**
    * @brief 代价地图回调函数
