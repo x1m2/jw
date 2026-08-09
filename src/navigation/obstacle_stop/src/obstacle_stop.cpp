@@ -30,27 +30,25 @@ bool ObstacleStop::initialize() {
       lidar_topic_, rclcpp::SensorDataQoS(),
       std::bind(&ObstacleStop::lidarCallback, this, std::placeholders::_1));
   planned_cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-      planned_cmd_topic_, rclcpp::QoS(10).reliable(),
+      planned_cmd_topic_, 10,
       std::bind(&ObstacleStop::plannedVelocityCallback, this,
                 std::placeholders::_1));
   emergency_stop_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
-      "/emergency_stop", rclcpp::QoS(10).reliable(),
+      "/emergency_stop", 10,
       std::bind(&ObstacleStop::emergencyStopCallback, this,
                 std::placeholders::_1));
-  disable_obstacle_stop_sub_ =
-      node_->create_subscription<std_msgs::msg::Bool>(
-          "/obstacle_stop/disable",
-          rclcpp::QoS(1).reliable().transient_local(),
-          std::bind(&ObstacleStop::disableObstacleStopCallback, this,
-                    std::placeholders::_1));
+  disable_obstacle_stop_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/obstacle_stop/disable", rclcpp::QoS(1).transient_local(),
+      std::bind(&ObstacleStop::disableObstacleStopCallback, this,
+                std::placeholders::_1));
 
   safe_cmd_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>(
-      safe_cmd_topic_, rclcpp::QoS(10).reliable());
+      safe_cmd_topic_, 10);
   stop_active_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
-      "/obstacle_stop/active", rclcpp::QoS(1).reliable().transient_local());
+      "/obstacle_stop/active", rclcpp::QoS(1).transient_local());
   if (config_.publish_visualization) {
     marker_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-        "/obstacle_stop/detection_marker", rclcpp::QoS(1));
+        "/obstacle_stop/detection_marker", 1);
   }
 
   control_timer_ = node_->create_wall_timer(

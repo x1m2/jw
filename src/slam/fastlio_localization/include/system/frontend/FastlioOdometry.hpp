@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <omp.h>
 #include <mutex>
 #include <math.h>
@@ -180,6 +182,7 @@ public:
 
     virtual bool run(PointCloudType::Ptr &feats_undistort)
     {
+        match_score = 0.0;
 #ifndef NO_LOGER
         if (loger.runtime_log && !loger.inited_first_lidar_beg_time)
         {
@@ -310,6 +313,11 @@ public:
         return state;
     }
 
+    virtual double get_match_score() const
+    {
+        return match_score;
+    }
+
     virtual state_ikfom integrate_imu_odom(const ImuData &imu_meas)
     {
         static double last_time = 0;
@@ -421,10 +429,36 @@ private:
         int effct_feat_num = effect_features.size();
         if (effct_feat_num < 1)
         {
+            match_score = 0.0;
             ekfom_data.valid = false;
             LOG_WARN("No Effective Points!");
             return;
         }
+
+        double residual_sum = 0.0;
+        for (const auto &feature : effect_features)
+            residual_sum += std::abs(feature.residual);
+
+        constexpr double valid_ratio_min = 0.3;
+        constexpr double valid_ratio_max = 0.8;
+        constexpr double residual_sigma = 0.05;
+        constexpr double valid_weight = 0.6;
+        constexpr double residual_weight = 0.4;
+
+        const double valid_ratio = static_cast<double>(effct_feat_num) /
+                                   static_cast<double>(feats_down_size);
+        const double mean_residual = residual_sum /
+                                     static_cast<double>(effct_feat_num);
+        const double valid_score = std::clamp(
+            (valid_ratio - valid_ratio_min) /
+                (valid_ratio_max - valid_ratio_min),
+            0.0, 1.0);
+        const double residual_score =
+            std::exp(-mean_residual / residual_sigma);
+
+        match_score = std::clamp(
+            valid_weight * valid_score + residual_weight * residual_score,
+            0.0, 1.0);
 
         /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
         ekfom_data.H = MatrixXd::Zero(effct_feat_num, 12);
@@ -654,6 +688,7 @@ public:
     mutex mtx_buffer;
 
     int frontend_type;
+    double match_score = 0.0;
     /*** frontend odometry ***/
     int point_skip_num;
     bool space_down_sample = true;

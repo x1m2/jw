@@ -14,6 +14,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <robot_interfaces/msg/localization_pose.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -122,6 +123,8 @@ class FastlioLocalizationNode : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
       reloc_status_pub;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_robot_pose;
+  rclcpp::Publisher<robot_interfaces::msg::LocalizationPose>::SharedPtr
+      pubAppLocalizationPose;
   rclcpp::TimerBase::SharedPtr timer;
 
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;

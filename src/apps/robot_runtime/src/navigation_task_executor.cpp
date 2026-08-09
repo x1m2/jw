@@ -60,7 +60,7 @@ NavigationTaskExecutor::NavigationTaskExecutor(
     throw std::invalid_argument("invalid navigation task executor config");
   }
   target_pose_pub_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-      "/target_points", rclcpp::QoS(10).reliable());
+      "/target_points", 10);
 }
 
 NavigationTaskExecutor::~NavigationTaskExecutor() {

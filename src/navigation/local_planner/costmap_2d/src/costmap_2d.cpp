@@ -49,7 +49,7 @@ bool CostMap2D::initialize() {
       std::bind(&CostMap2D::livoxCallback, this, std::placeholders::_1));
 
   costmap_pub_ = node_->create_publisher<nav_msgs::msg::OccupancyGrid>(
-      "/costmap", rclcpp::QoS(1).reliable());
+      "/costmap", 1);
 
   publishLidarStaticTransform();
   initializeLookupTables();

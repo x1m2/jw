@@ -81,7 +81,7 @@ Runtime按节点数组顺序生成相邻双向边，保存为：
 
 | 接口 | 类型 | QoS | 功能 |
 | --- | --- | --- | --- |
-| `/robot/current_pose` | `robot_interfaces/msg/RobotPose` | Reliable，KeepLast 20 | 发布`map`坐标下的`x/y/z/theta` |
+| `/robot/current_pose` | `robot_interfaces/msg/RobotPose` | Reliable，KeepLast 20 | 发布`map`坐标下的`x/y/z/theta`和定位匹配分数 |
 | `/robot/cloud_body` | `sensor_msgs/msg/PointCloud2` | Best Effort，KeepLast 20 | 转发实时机体点云 |
 | `/robot/keyframe_cloud` | `robot_interfaces/msg/MapKeyframe` | Reliable，KeepLast 100 | 转发新增地图关键帧 |
 | `/robot/runtime_state` | `robot_interfaces/msg/RuntimeState` | Reliable，Transient Local，KeepLast 1 | 发布运行状态和错误 |
@@ -93,10 +93,12 @@ float64 x
 float64 y
 float64 z
 float64 theta
+float32 match_score
 ```
 
 所有位姿字段使用`map`坐标系，位置单位为米，`theta`表示绕Z轴的yaw角，
-单位为弧度。
+单位为弧度。`match_score`取值范围为0～1，越大表示FAST-LIO当前帧与
+全局地图的匹配越好；建图阶段没有该分数时为0。
 
 PGO只在新增关键帧时发布一次，不在回环后重发旧关键帧。APP实时拼接结果
 用于建图预览，最终准确地图以`finish_mapping`保存的`globalmap.pcd`为准。

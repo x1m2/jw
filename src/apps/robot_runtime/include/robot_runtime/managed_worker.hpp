@@ -68,7 +68,7 @@ class ManagedWorker : public rclcpp::Node {
         std::bind(&ManagedWorker::stateCallback, this, std::placeholders::_1,
                   std::placeholders::_2));
     status_pub_ = create_publisher<WorkerStatus>(
-        "/robot_runtime/worker_status", rclcpp::QoS(10).reliable());
+        "/robot_runtime/worker_status", 10);
     status_timer_ = create_wall_timer(
         std::chrono::seconds(1),
         std::bind(&ManagedWorker::publishStatus, this));

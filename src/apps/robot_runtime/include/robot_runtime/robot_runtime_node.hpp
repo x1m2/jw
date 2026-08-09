@@ -20,6 +20,7 @@
 #include "robot_interfaces/action/navigate_to_pose.hpp"
 #include "robot_interfaces/action/start_navigation.hpp"
 #include "robot_interfaces/msg/map_keyframe.hpp"
+#include "robot_interfaces/msg/localization_pose.hpp"
 #include "robot_interfaces/msg/navigation_node.hpp"
 #include "robot_interfaces/msg/robot_pose.hpp"
 #include "robot_interfaces/msg/runtime_state.hpp"
@@ -48,6 +49,7 @@ class RobotRuntimeNode : public rclcpp::Node {
   using Trigger = std_srvs::srv::Trigger;
   using DeleteMap = robot_interfaces::srv::DeleteMap;
   using LoadMap = robot_interfaces::srv::LoadMap;
+  using LocalizationPose = robot_interfaces::msg::LocalizationPose;
   using MapKeyframe = robot_interfaces::msg::MapKeyframe;
   using NavigateToPose = robot_interfaces::action::NavigateToPose;
   using RobotPose = robot_interfaces::msg::RobotPose;
@@ -103,6 +105,9 @@ class RobotRuntimeNode : public rclcpp::Node {
   void keyframeCloudCallback(const MapKeyframe::SharedPtr message);
   void currentPoseCallback(
       const geometry_msgs::msg::PoseStamped::SharedPtr message);
+  void localizationPoseCallback(const LocalizationPose::SharedPtr message);
+  void publishCurrentPose(const geometry_msgs::msg::PoseStamped &pose,
+                          float match_score);
   void bodyCloudCallback(
       const sensor_msgs::msg::PointCloud2::SharedPtr message);
 
@@ -170,8 +175,7 @@ class RobotRuntimeNode : public rclcpp::Node {
   rclcpp::Subscription<MapKeyframe>::SharedPtr keyframe_cloud_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
       mapping_pose_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
-      localization_pose_sub_;
+  rclcpp::Subscription<LocalizationPose>::SharedPtr localization_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
       body_cloud_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr

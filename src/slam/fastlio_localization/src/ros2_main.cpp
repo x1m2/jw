@@ -121,6 +121,12 @@ void FastlioLocalizationNode::publish_geometry_msgs(
   robotPose.header.stamp = rclcpp::Time(lidar_end_time * 1e9);
   set_posestamp(robotPose, baselink_rot, baselink_pos);
   pub_robot_pose->publish(robotPose);
+
+  robot_interfaces::msg::LocalizationPose app_pose;
+  app_pose.pose = robotPose;
+  app_pose.match_score = static_cast<float>(slam.frontend->get_match_score());
+  pubAppLocalizationPose->publish(app_pose);
+
   if (lidar_tf_broadcast)
     publish_tf(baselink_rot, baselink_pos, lidar_end_time);
 }
@@ -705,6 +711,9 @@ void FastlioLocalizationNode::initialize() {
       node->create_publisher<std_msgs::msg::Bool>("/reloc_success", 1);
   pub_robot_pose = node->create_publisher<geometry_msgs::msg::PoseStamped>(
       "/pose_stamped_localization", 1000);
+  pubAppLocalizationPose =
+      node->create_publisher<robot_interfaces::msg::LocalizationPose>(
+          "/app/localization_pose", 20);
 #endif
 }
 

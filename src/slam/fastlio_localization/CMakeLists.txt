@@ -144,6 +144,7 @@ else(ROS_EDITION STREQUAL "ROS2")
   find_package(tf2_ros REQUIRED)
   find_package(livox_ros_driver2 REQUIRED)
   find_package(robot_runtime REQUIRED)
+  find_package(robot_interfaces REQUIRED)
 
   include_directories(
     ${pcl_conversions_INCLUDE_DIRS}
@@ -178,7 +179,8 @@ else(ROS_EDITION STREQUAL "ROS2")
     target_link_libraries(fastlio_localization_ros2 ${cpu_bbs3d_LIBRARY})
   endif()
   ament_target_dependencies(fastlio_localization_ros2
-    rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 robot_runtime)
+    rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 robot_interfaces
+    robot_runtime)
 
   # add_executable(fastlio_sam_test_bag test/read_rosbag_test.cpp)
   # target_link_libraries(fastlio_sam_test_bag ${PROJECT_NAME} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})

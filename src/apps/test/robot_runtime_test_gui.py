@@ -462,7 +462,8 @@ class RuntimeTestGui:
                     message, _count = payload
                     self._append_log(
                         f'[POSE] x={message.x:.3f} y={message.y:.3f} '
-                        f'z={message.z:.3f} theta={message.theta:.3f}'
+                        f'z={message.z:.3f} theta={message.theta:.3f} '
+                        f'score={message.match_score:.3f}'
                     )
                 elif kind == 'keyframe':
                     _message, count = payload

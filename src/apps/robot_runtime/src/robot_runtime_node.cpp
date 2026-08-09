@@ -1,5 +1,6 @@
 #include "robot_runtime/robot_runtime_node.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cmath>
@@ -123,24 +124,23 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
   runtime_state_pub_ = create_publisher<RuntimeState>(
       "/robot/runtime_state", rclcpp::QoS(1).reliable().transient_local());
   keyframe_cloud_pub_ = create_publisher<MapKeyframe>(
-      "/robot/keyframe_cloud", rclcpp::QoS(100).reliable());
-  current_pose_pub_ = create_publisher<RobotPose>("/robot/current_pose",
-                                                  rclcpp::QoS(20).reliable());
+      "/robot/keyframe_cloud", 100);
+  current_pose_pub_ = create_publisher<RobotPose>("/robot/current_pose", 20);
   body_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/robot/cloud_body", rclcpp::QoS(20).best_effort());
 
   // 算法内部Topic不直接暴露给APP，由Runtime转换为统一的 /robot/* Topic。
   keyframe_cloud_sub_ = create_subscription<MapKeyframe>(
-      "/pgo/keyframe_cloud", rclcpp::QoS(100).reliable(),
+      "/pgo/keyframe_cloud", 100,
       std::bind(&RobotRuntimeNode::keyframeCloudCallback, this,
                 std::placeholders::_1));
   mapping_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      "/pose_stamped", rclcpp::QoS(20).reliable(),
+      "/pose_stamped", 20,
       std::bind(&RobotRuntimeNode::currentPoseCallback, this,
                 std::placeholders::_1));
-  localization_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      "/pose_stamped_localization", rclcpp::QoS(20).reliable(),
-      std::bind(&RobotRuntimeNode::currentPoseCallback, this,
+  localization_pose_sub_ = create_subscription<LocalizationPose>(
+      "/app/localization_pose", 20,
+      std::bind(&RobotRuntimeNode::localizationPoseCallback, this,
                 std::placeholders::_1));
   body_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered_body", rclcpp::QoS(20).best_effort(),
@@ -149,7 +149,7 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
 
   initial_pose_pub_ =
       create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-          "/initialpose", rclcpp::QoS(1).reliable());
+          "/initialpose", 1);
 
   // 协议2.1～2.5、2.8～2.9：只创建协议中定义的APP Service。
   start_mapping_service_ = create_service<StartMapping>(
@@ -207,7 +207,7 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
   reloc_subscription_options.callback_group =
       localization_result_callback_group_;
   relocalization_result_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/reloc_success", rclcpp::QoS(10).reliable(),
+      "/reloc_success", 10,
       std::bind(&RobotRuntimeNode::relocalizationResultCallback, this,
                 std::placeholders::_1),
       reloc_subscription_options);
@@ -215,7 +215,7 @@ RobotRuntimeNode::RobotRuntimeNode() : Node("robot_runtime") {
   navigation_subscription_options.callback_group =
       navigation_result_callback_group_;
   navigation_state_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/nav_state", rclcpp::QoS(10).reliable(),
+      "/nav_state", 10,
       std::bind(&RobotRuntimeNode::navigationStateCallback, this,
                 std::placeholders::_1),
       navigation_subscription_options);
@@ -802,17 +802,30 @@ void RobotRuntimeNode::navigationStateCallback(
 
 void RobotRuntimeNode::currentPoseCallback(
     const geometry_msgs::msg::PoseStamped::SharedPtr message) {
-  // 协议2.10：内部保留完整Pose供导航，向APP发布x/y/z/theta。
+  // 建图位姿没有FAST-LIO匹配分数，按协议发布0。
+  publishCurrentPose(*message, 0.0F);
+}
+
+void RobotRuntimeNode::localizationPoseCallback(
+    const LocalizationPose::SharedPtr message) {
+  publishCurrentPose(message->pose,
+                     std::clamp(message->match_score, 0.0F, 1.0F));
+}
+
+void RobotRuntimeNode::publishCurrentPose(
+    const geometry_msgs::msg::PoseStamped &pose, float match_score) {
+  // 协议2.10：内部保留完整Pose供导航，向APP发布位姿和匹配分数。
   {
     std::lock_guard<std::mutex> lock(current_pose_mutex_);
-    current_pose_ = *message;
+    current_pose_ = pose;
     has_current_pose_ = true;
   }
   RobotPose robot_pose;
-  robot_pose.x = message->pose.position.x;
-  robot_pose.y = message->pose.position.y;
-  robot_pose.z = message->pose.position.z;
-  robot_pose.theta = pose_utils::yaw(message->pose.orientation);
+  robot_pose.x = pose.pose.position.x;
+  robot_pose.y = pose.pose.position.y;
+  robot_pose.z = pose.pose.position.z;
+  robot_pose.theta = pose_utils::yaw(pose.pose.orientation);
+  robot_pose.match_score = match_score;
   current_pose_pub_->publish(robot_pose);
 }
 

@@ -148,9 +148,7 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   corrected_path_.header.frame_id = map_frame_;
 
   /* QoS */
-  auto qos_latched =
-      rclcpp::QoS(rclcpp::KeepLast(10)).reliable().transient_local();
-  auto qos_normal = rclcpp::QoS(rclcpp::KeepLast(10));
+  auto qos_latched = rclcpp::QoS(10).transient_local();
 
   /* publishers */
   broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -171,7 +169,7 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   loop_detection_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(
       "/loop_detection", qos_latched);
   realtime_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
-      "/pose_stamped", qos_normal);
+      "/pose_stamped", 10);
   debug_src_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/src", qos_latched);
   debug_dst_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -184,7 +182,7 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
           "/fine_aligned_nano_gicp", qos_latched);
   keyframe_cloud_pub_ =
       this->create_publisher<robot_interfaces::msg::MapKeyframe>(
-          "/pgo/keyframe_cloud", rclcpp::QoS(100).reliable());
+          "/pgo/keyframe_cloud", 100);
 
   /* subscribers */
   sub_odom_ =
@@ -204,14 +202,14 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                                                  std::placeholders::_2));
 
   sub_save_flag_ = this->create_subscription<std_msgs::msg::Empty>(
-      "/save_dir", rclcpp::QoS(1),
+      "/save_dir", 1,
       [this](std_msgs::msg::Empty::SharedPtr /*msg*/) {
         RCLCPP_INFO(this->get_logger(),
                     "Receive save trigger, start saving...");
         this->saveFlagCallback();
       });
   save_done_pub_ = this->create_publisher<std_msgs::msg::Empty>(
-      "/save_done", rclcpp::QoS(1).transient_local().reliable());
+      "/save_done", rclcpp::QoS(1).transient_local());
 
   /* timers */
   loop_timer_ = this->create_wall_timer(
