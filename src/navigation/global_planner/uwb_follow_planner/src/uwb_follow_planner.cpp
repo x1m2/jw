@@ -1,6 +1,5 @@
 #include "uwb_follow_planner/uwb_follow_planner.hpp"
 
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/utils.h>
 
 #include <algorithm>
@@ -8,22 +7,25 @@
 #include <cmath>
 #include <functional>
 #include <stdexcept>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace uwb_follow_planner {
 
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kPointEpsilon = 1e-6;
-}
+}  // namespace
 
 UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
     : rclcpp::Node("uwb_follow_planner_node", options) {
-  uwb_topic_ = declare_parameter<std::string>(
-      "uwb_topic", "/libAoa_robot_publisher");
+  uwb_topic_ =
+      declare_parameter<std::string>("uwb_topic", "/libAoa_robot_publisher");
+  follow_command_topic_ =
+      declare_parameter<std::string>("follow_command_topic", "/ble_follow_cmd");
   odometry_topic_ =
       declare_parameter<std::string>("odometry_topic", "/Odometry");
-  path_topic_ = declare_parameter<std::string>(
-      "path_topic", "/global_path_with_policy");
+  path_topic_ =
+      declare_parameter<std::string>("path_topic", "/global_path_with_policy");
   global_frame_ = declare_parameter<std::string>("global_frame", "odom");
 
   range_scale_ = declare_parameter<double>("range_scale", 1.0);
@@ -40,16 +42,12 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   jump_margin_ = declare_parameter<double>("jump_margin", 0.8);
   trail_sample_distance_ =
       declare_parameter<double>("trail_sample_distance", 0.25);
-  trail_keep_seconds_ =
-      declare_parameter<double>("trail_keep_seconds", 45.0);
-  maximum_trail_points_ =
-      declare_parameter<int>("maximum_trail_points", 400);
+  trail_keep_seconds_ = declare_parameter<double>("trail_keep_seconds", 45.0);
+  maximum_trail_points_ = declare_parameter<int>("maximum_trail_points", 400);
   short_loop_merge_radius_ =
       declare_parameter<double>("short_loop_merge_radius", 0.4);
-  short_loop_max_age_ =
-      declare_parameter<double>("short_loop_max_age", 4.0);
-  path_point_spacing_ =
-      declare_parameter<double>("path_point_spacing", 0.2);
+  short_loop_max_age_ = declare_parameter<double>("short_loop_max_age", 4.0);
+  path_point_spacing_ = declare_parameter<double>("path_point_spacing", 0.2);
 
   follow_distance_ = declare_parameter<double>("follow_distance", 1.5);
   start_follow_distance_ =
@@ -57,8 +55,7 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   stop_follow_distance_ =
       declare_parameter<double>("stop_follow_distance", 1.6);
   hold_radius_ = declare_parameter<double>("hold_radius", 0.35);
-  start_move_distance_ =
-      declare_parameter<double>("start_move_distance", 0.7);
+  start_move_distance_ = declare_parameter<double>("start_move_distance", 0.7);
   movement_confirm_time_ =
       declare_parameter<double>("movement_confirm_time", 0.6);
   target_angle_update_threshold_degrees_ =
@@ -67,8 +64,7 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       declare_parameter<double>("target_position_update_threshold", 0.4);
   uwb_timeout_ = declare_parameter<double>("uwb_timeout", 0.5);
   pose_timeout_ = declare_parameter<double>("pose_timeout", 0.5);
-  planning_frequency_ =
-      declare_parameter<double>("planning_frequency", 3.0);
+  planning_frequency_ = declare_parameter<double>("planning_frequency", 3.0);
   manage_pure_pursuit_pause_ =
       declare_parameter<bool>("manage_pure_pursuit_pause", true);
   obstacle_stop_enabled_ =
@@ -97,9 +93,8 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
     throw std::invalid_argument("invalid UWB follow planner parameters");
   }
 
-  person_pose_publisher_ =
-      create_publisher<geometry_msgs::msg::PoseStamped>(
-          "/uwb_follow/person_pose", rclcpp::QoS(10));
+  person_pose_publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/uwb_follow/person_pose", rclcpp::QoS(10));
   trail_publisher_ = create_publisher<nav_msgs::msg::Path>(
       "/uwb_follow/person_trail", rclcpp::QoS(1).transient_local());
   path_publisher_ =
@@ -114,23 +109,24 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       odometry_topic_, rclcpp::QoS(20),
       std::bind(&UwbFollowPlanner::odometryCallback, this,
                 std::placeholders::_1));
-  uwb_subscriber_ =
-      create_subscription<uwb_aoa_pkg::msg::LibAoaRobotMsg>(
-          uwb_topic_, rclcpp::QoS(20),
-          std::bind(&UwbFollowPlanner::uwbCallback, this,
-                    std::placeholders::_1));
+  uwb_subscriber_ = create_subscription<uwb_aoa_pkg::msg::LibAoaRobotMsg>(
+      uwb_topic_, rclcpp::QoS(20),
+      std::bind(&UwbFollowPlanner::uwbCallback, this, std::placeholders::_1));
+  follow_command_subscriber_ = create_subscription<std_msgs::msg::Int8>(
+      follow_command_topic_, rclcpp::QoS(10).reliable(),
+      std::bind(&UwbFollowPlanner::followCommandCallback, this,
+                std::placeholders::_1));
   avoidance_state_subscriber_ =
       create_subscription<navigation_interfaces::msg::AvoidanceState>(
-          "/local_avoidance/state",
-          rclcpp::QoS(1).reliable().transient_local(),
+          "/local_avoidance/state", rclcpp::QoS(1).reliable().transient_local(),
           std::bind(&UwbFollowPlanner::avoidanceStateCallback, this,
                     std::placeholders::_1));
 
-  pause_client_ = create_client<std_srvs::srv::SetBool>(
-      "/pure_pursuit/set_paused");
+  pause_client_ =
+      create_client<std_srvs::srv::SetBool>("/pure_pursuit/set_paused");
 
-  const auto timer_period = std::chrono::duration<double>(
-      1.0 / planning_frequency_);
+  const auto timer_period =
+      std::chrono::duration<double>(1.0 / planning_frequency_);
   planning_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period),
       std::bind(&UwbFollowPlanner::planningTimerCallback, this));
@@ -138,9 +134,47 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   setState(FollowState::kWaitingForPose);
   RCLCPP_INFO(get_logger(),
               "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
-              "output=%s",
+              "output=%s, command=%s (0=start, 1=stop, 3=pause)",
               uwb_topic_.c_str(), odometry_topic_.c_str(),
-              global_frame_.c_str(), path_topic_.c_str());
+              global_frame_.c_str(), path_topic_.c_str(),
+              follow_command_topic_.c_str());
+}
+
+void UwbFollowPlanner::followCommandCallback(
+    std_msgs::msg::Int8::ConstSharedPtr message) {
+  const auto command = message->data;
+  // BLE命令是低频事件而非持续心跳，每实际接收一条都明确记录，
+  // 即使内容与上一次相同也打印，便于确认通信链路确实送达。
+  RCLCPP_INFO(get_logger(), "BLE follow command received: data=%d",
+              static_cast<int>(command));
+  if (command != static_cast<int8_t>(FollowCommand::kStart) &&
+      command != static_cast<int8_t>(FollowCommand::kStop) &&
+      command != static_cast<int8_t>(FollowCommand::kPause)) {
+    RCLCPP_WARN(get_logger(),
+                "Ignoring unsupported BLE follow command: %d (valid: 0,1,3)",
+                static_cast<int>(command));
+    return;
+  }
+
+  const int8_t previous = follow_command_.exchange(command);
+  if (command == static_cast<int8_t>(FollowCommand::kStop)) {
+    // 停止后再次开始应基于最新人员位置生成新目标，不复用旧控制目标。
+    has_follow_goal_ = false;
+    movement_candidate_active_ = false;
+    setState(FollowState::kCommandStopped);
+    requestPurePursuitPause(true);
+  } else if (command == static_cast<int8_t>(FollowCommand::kPause)) {
+    // 暂停保留跟随目标和历史轨迹，0到来后由规划周期恢复。
+    setState(FollowState::kCommandPaused);
+    requestPurePursuitPause(true);
+  } else {
+    // 不直接解除暂停；规划周期还要验证定位和UWB数据是否有效。
+    // 如果是从3恢复且旧目标仍存在，恢复原跟踪状态，不重新经过移动确认。
+    if (previous == static_cast<int8_t>(FollowCommand::kPause) &&
+        has_follow_goal_) {
+      setState(FollowState::kFollowing);
+    }
+  }
 }
 
 void UwbFollowPlanner::avoidanceStateCallback(
@@ -179,22 +213,19 @@ void UwbFollowPlanner::odometryCallback(
 
 void UwbFollowPlanner::uwbCallback(
     uwb_aoa_pkg::msg::LibAoaRobotMsg::ConstSharedPtr message) {
-  RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "UWB callback: r=%.3f, a=%.3f deg, pose=%s",
-      message->r, message->a, has_pose_ ? "ready" : "waiting");
-
   if (!has_pose_) {
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                         "UWB: r=%.3f m, a=%.1f deg, pose=waiting", message->r,
+                         message->a);
     return;
   }
 
   geometry_msgs::msg::Point measurement;
   double range_m = 0.0;
   if (!uwbMeasurementToGlobal(*message, measurement, range_m)) {
-    RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 2000,
-        "Ignoring invalid UWB measurement: r=%.3f, a=%.3f deg",
-        message->r, message->a);
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "Ignoring invalid UWB measurement: r=%.3f, a=%.3f deg",
+                         message->r, message->a);
     return;
   }
 
@@ -231,13 +262,11 @@ void UwbFollowPlanner::uwbCallback(
       std::atan2(person_map_.y - robot_pose_.pose.position.y,
                  person_map_.x - robot_pose_.pose.position.x) *
       180.0 / kPi;
-  RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "UWB accepted: range=%.3f m, target=(%.3f, %.3f), "
-      "filtered=(%.3f, %.3f), robot_yaw=%.1f deg, "
-      "person_bearing=%.1f deg",
-      range_m, measurement.x, measurement.y, person_map_.x, person_map_.y,
-      robot_yaw_degrees, person_bearing_degrees);
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                       "UWB: r=%.3f m, a=%.1f deg, filtered=(%.3f, %.3f), "
+                       "robot_yaw=%.1f deg, person_bearing=%.1f deg",
+                       range_m, message->a, person_map_.x, person_map_.y,
+                       robot_yaw_degrees, person_bearing_degrees);
 }
 
 bool UwbFollowPlanner::uwbMeasurementToGlobal(
@@ -264,10 +293,10 @@ bool UwbFollowPlanner::uwbMeasurementToGlobal(
   const double robot_yaw = tf2::getYaw(robot_pose_.pose.orientation);
   const double yaw_cos = std::cos(robot_yaw);
   const double yaw_sin = std::sin(robot_yaw);
-  person_global.x = robot_pose_.pose.position.x + yaw_cos * base_x -
-                    yaw_sin * base_y;
-  person_global.y = robot_pose_.pose.position.y + yaw_sin * base_x +
-                    yaw_cos * base_y;
+  person_global.x =
+      robot_pose_.pose.position.x + yaw_cos * base_x - yaw_sin * base_y;
+  person_global.y =
+      robot_pose_.pose.position.y + yaw_sin * base_x + yaw_cos * base_y;
   person_global.z = 0.0;
   return true;
 }
@@ -283,8 +312,8 @@ bool UwbFollowPlanner::acceptMeasurement(
   return distance2d(person_map_, person_map) <= maximum_jump;
 }
 
-void UwbFollowPlanner::updateTrail(
-    const geometry_msgs::msg::Point &person_map, const rclcpp::Time &stamp) {
+void UwbFollowPlanner::updateTrail(const geometry_msgs::msg::Point &person_map,
+                                   const rclcpp::Time &stamp) {
   if (trail_.empty()) {
     trail_.push_back({person_map, stamp});
     return;
@@ -353,18 +382,29 @@ void UwbFollowPlanner::planningTimerCallback() {
   const rclcpp::Time current_time = now();
   std_msgs::msg::Bool valid_message;
 
+  // BLE命令是事件信号而非心跳。没有新消息时一直保持最后一次命令；
+  // 节点刚启动时默认STOP，必须收到0才进入原有UWB跟随状态机。
+  const int8_t command = follow_command_.load();
+  if (command != static_cast<int8_t>(FollowCommand::kStart)) {
+    valid_message.data = false;
+    valid_publisher_->publish(valid_message);
+    setState(command == static_cast<int8_t>(FollowCommand::kPause)
+                 ? FollowState::kCommandPaused
+                 : FollowState::kCommandStopped);
+    requestPurePursuitPause(true);
+    return;
+  }
+
   const uint8_t avoidance_state = avoidance_state_.load();
   const bool local_avoidance_owns_motion =
-      avoidance_state ==
-          navigation_interfaces::msg::AvoidanceState::AVOIDING ||
+      avoidance_state == navigation_interfaces::msg::AvoidanceState::AVOIDING ||
       avoidance_state == navigation_interfaces::msg::AvoidanceState::BLOCKED ||
       avoidance_state == navigation_interfaces::msg::AvoidanceState::FAILED;
   if (local_avoidance_owns_motion) {
     // 绕障期间继续更新人员位置和历史轨迹，但不再发布新的控制参考路径。
     // Pure Pursuit控制循环必须保持运行，由局部规划器负责绕行或停车。
     valid_message.data =
-        has_uwb_ &&
-        (current_time - last_uwb_time_).seconds() <= uwb_timeout_;
+        has_uwb_ && (current_time - last_uwb_time_).seconds() <= uwb_timeout_;
     valid_publisher_->publish(valid_message);
     // The person may move significantly while avoidance owns the controller.
     // Discard the old target so the first post-avoidance path uses the latest
@@ -418,9 +458,8 @@ void UwbFollowPlanner::planningTimerCallback() {
     movement_candidate_active_ = false;
     setState(FollowState::kFollowing);
   } else if (state_ != FollowState::kFollowing) {
-    const bool movement_requires_follow =
-        map_range >= start_follow_distance_ ||
-        displacement >= start_move_distance_;
+    const bool movement_requires_follow = map_range >= start_follow_distance_ ||
+                                          displacement >= start_move_distance_;
     if (!movement_requires_follow) {
       has_follow_goal_ = false;
       movement_candidate_active_ = false;
@@ -476,8 +515,7 @@ void UwbFollowPlanner::planningTimerCallback() {
 
 bool UwbFollowPlanner::buildFollowPath(
     const rclcpp::Time &stamp,
-    navigation_interfaces::msg::PathWithPolicy &output,
-    bool &target_updated) {
+    navigation_interfaces::msg::PathWithPolicy &output, bool &target_updated) {
   target_updated = false;
   std::vector<geometry_msgs::msg::Point> raw_path;
   const geometry_msgs::msg::Point dog = robot_pose_.pose.position;
@@ -535,12 +573,12 @@ bool UwbFollowPlanner::buildFollowPath(
     has_follow_goal_ = true;
     target_updated = true;
     if (had_previous_goal) {
-      RCLCPP_INFO(
-          get_logger(),
-          "UWB follow target updated [%s]: angle_error=%.1f deg, "
-          "goal_shift=%.3f m, old=(%.3f, %.3f), new=(%.3f, %.3f)",
-          update_reason, angle_error_degrees, goal_shift, previous_goal.x,
-          previous_goal.y, follow_goal_.x, follow_goal_.y);
+      RCLCPP_INFO(get_logger(),
+                  "UWB follow target updated [%s]: angle_error=%.1f deg, "
+                  "goal_shift=%.3f m, old=(%.3f, %.3f), new=(%.3f, %.3f)",
+                  update_reason, angle_error_degrees, goal_shift,
+                  previous_goal.x, previous_goal.y, follow_goal_.x,
+                  follow_goal_.y);
     } else {
       RCLCPP_INFO(get_logger(),
                   "UWB follow target initialized: goal=(%.3f, %.3f)",
@@ -605,8 +643,8 @@ bool UwbFollowPlanner::buildFollowPath(
       "person=(%.3f, %.3f), goal=(%.3f, %.3f), points=%zu, "
       "robot_yaw=%.1f deg, person_bearing=%.1f deg, "
       "goal_bearing=%.1f deg, goal_yaw_error=%.1f deg",
-      update_goal ? "updated" : "locked", global_frame_.c_str(), dog.x,
-      dog.y, person_map_.x, person_map_.y, path_goal.x, path_goal.y,
+      update_goal ? "updated" : "locked", global_frame_.c_str(), dog.x, dog.y,
+      person_map_.x, person_map_.y, path_goal.x, path_goal.y,
       output.path.poses.size(), robot_yaw_degrees, person_bearing_degrees,
       goal_bearing_degrees, goal_yaw_error_degrees);
   return true;
@@ -666,14 +704,17 @@ const char *UwbFollowPlanner::stateName(FollowState state) {
       return "FOLLOWING";
     case FollowState::kTargetLost:
       return "TARGET_LOST";
+    case FollowState::kCommandStopped:
+      return "COMMAND_STOPPED";
+    case FollowState::kCommandPaused:
+      return "COMMAND_PAUSED";
   }
   return "UNKNOWN";
 }
 
 void UwbFollowPlanner::requestPurePursuitPause(bool paused) {
-  if (!manage_pure_pursuit_pause_ ||
-      (last_pause_request_.has_value() &&
-       last_pause_request_.value() == paused)) {
+  if (!manage_pure_pursuit_pause_ || (last_pause_request_.has_value() &&
+                                      last_pause_request_.value() == paused)) {
     return;
   }
   if (!pause_client_->service_is_ready()) {
@@ -687,9 +728,8 @@ void UwbFollowPlanner::requestPurePursuitPause(bool paused) {
   last_pause_request_ = paused;
 }
 
-double UwbFollowPlanner::distance2d(
-    const geometry_msgs::msg::Point &first,
-    const geometry_msgs::msg::Point &second) {
+double UwbFollowPlanner::distance2d(const geometry_msgs::msg::Point &first,
+                                    const geometry_msgs::msg::Point &second) {
   return std::hypot(first.x - second.x, first.y - second.y);
 }
 

@@ -3,6 +3,8 @@ uwb_follow_planner_node:
     # ==================== 话题与坐标系 ====================
     # UWB 测距/测角数据输入话题
     uwb_topic: "/libAoa_robot_publisher"
+    # BLE事件命令（非心跳）：0开始/恢复，1停止，3暂停；未发布时保持上次状态。
+    follow_command_topic: "/ble_follow_cmd"
     # FAST-LIO2 建图期间输出的实时里程计，类型 nav_msgs/msg/Odometry。
     odometry_topic: "/Odometry"
     # 跟随路径输出话题。

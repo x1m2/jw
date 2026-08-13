@@ -14,6 +14,7 @@
 #include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
@@ -38,11 +39,20 @@ class UwbFollowPlanner : public rclcpp::Node {
     kHold,
     kFollowing,
     kTargetLost,
+    kCommandStopped,
+    kCommandPaused,
+  };
+
+  enum class FollowCommand : int8_t {
+    kStart = 0,
+    kStop = 1,
+    kPause = 3,
   };
 
   void odometryCallback(nav_msgs::msg::Odometry::ConstSharedPtr message);
   void uwbCallback(
       uwb_aoa_pkg::msg::LibAoaRobotMsg::ConstSharedPtr message);
+  void followCommandCallback(std_msgs::msg::Int8::ConstSharedPtr message);
   void avoidanceStateCallback(
       navigation_interfaces::msg::AvoidanceState::ConstSharedPtr message);
   void planningTimerCallback();
@@ -72,6 +82,7 @@ class UwbFollowPlanner : public rclcpp::Node {
 
   // Topics and frames.
   std::string uwb_topic_;
+  std::string follow_command_topic_;
   std::string odometry_topic_;
   std::string path_topic_;
   std::string global_frame_;
@@ -113,6 +124,8 @@ class UwbFollowPlanner : public rclcpp::Node {
 
   rclcpp::Subscription<uwb_aoa_pkg::msg::LibAoaRobotMsg>::SharedPtr
       uwb_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr
+      follow_command_subscriber_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr
       odometry_subscriber_;
   rclcpp::Subscription<navigation_interfaces::msg::AvoidanceState>::SharedPtr
@@ -143,6 +156,9 @@ class UwbFollowPlanner : public rclcpp::Node {
   bool movement_candidate_active_{false};
   std::atomic<uint8_t> avoidance_state_{
       navigation_interfaces::msg::AvoidanceState::IDLE};
+  // BLE仅在操作时发布一次，因此命令必须锁存；节点启动默认不允许跟随。
+  std::atomic<int8_t> follow_command_{
+      static_cast<int8_t>(FollowCommand::kStop)};
   FollowState state_{FollowState::kWaitingForPose};
   std::optional<bool> last_pause_request_;
 };

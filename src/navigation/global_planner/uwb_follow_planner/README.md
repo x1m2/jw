@@ -7,6 +7,7 @@ range/bearing measurements and FAST-LIO2 mapping odometry.
 
 ```text
 /libAoa_robot_publisher + /Odometry (nav_msgs/msg/Odometry, frame=odom)
+  + /ble_follow_cmd (std_msgs/msg/Int8: 0=start, 1=stop, 3=pause)
   -> uwb_follow_planner
   -> /global_path_with_policy
   -> path_smoother
@@ -37,6 +38,12 @@ negative down to -180. In the robot frame the conversion is
 Distance scale, mounting offsets, filtering, hysteresis, timeouts, and follow
 distance are configurable in `config/uwb_follow_planner.yaml`.
 
+`/ble_follow_cmd` is an event command rather than a heartbeat. The last command
+is latched internally when the publisher is silent. The planner starts in the
+stopped state and requires `0` before following; `1` stops and clears the
+locked control target, while `3` pauses without clearing the target so a later
+`0` can resume it. Other command values are ignored.
+
 ## Outputs
 
 - `/global_path_with_policy`: dynamic path consumed by the existing smoother;
@@ -45,7 +52,7 @@ distance are configurable in `config/uwb_follow_planner.yaml`.
 - `/uwb_follow/person_pose`: filtered person position in `odom`.
 - `/uwb_follow/person_trail`: filtered breadcrumb trail for RViz.
 - `/uwb_follow/state`: `WAITING_FOR_POSE`, `WAITING_FOR_UWB`, `HOLD`,
-  `FOLLOWING`, or `TARGET_LOST`.
+  `FOLLOWING`, `TARGET_LOST`, `COMMAND_STOPPED`, or `COMMAND_PAUSED`.
 - `/uwb_follow/target_valid`: freshness/validity of the current UWB target.
 
 The planner requests `/pure_pursuit/set_paused` while holding or when UWB or
