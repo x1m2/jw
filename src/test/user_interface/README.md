@@ -15,12 +15,6 @@ ros2 launch user_interface navigation_task_state_machine.launch.py
 ros2 launch user_interface navigation_task_state_machine.launch.py map_id:=1
 ```
 
-测试 GUI 使用统一脚本：
-
-```bash
-python3 src/apps/test/navigation_workflow_gui.py
-```
-
 ## 接口
 
 订阅：

@@ -1,95 +1,71 @@
 /**:
   ros__parameters:
-    use_sim_time: false
-
-    use_smoothed_path: false
-
-    lookahead_distance_min: 0.4
-    lookahead_distance_max: 0.7
-    goal_tolerance: 0.10
-
-    max_linear_velocity: 0.6    ##最大线速度x
-    max_linear_velocity_y: 0.3
-    max_angular_velocity: 0.7  ##最大角速度
-    acceleration_limit: 0.5
-    deceleration_limit: 0.8
-
-    local_planning_frequency: 10.0
-    local_lookahead_distance: 1.0
-    local_min_lookahead_distance: 1.0
-    local_max_lookahead_distance: 3.0
-    avoidance_lateral_clearance: 1.3      # side_goal 相对障碍物中心的侧向安全距离
-    avoidance_obstacle_forward_offset: 0.0 # side_goal 相对障碍物中心沿全局路径方向的前向偏移
-    avoidance_return_min_distance: 1.5    # 从当前位置附近沿全局路径向前搜索回归点的最小距离
-    avoidance_return_max_distance: 4.0    # 回归点最大搜索距离
-    avoidance_search_step_distance: 0.3   # 回归点搜索步长
-    avoidance_goal_tolerance: 0.35        # 到达 side_goal / return_goal 的距离阈值
-    avoidance_return_goal_clearance: 0.80 # 回归点周围按车体尺寸检查的安全半径
-    avoidance_return_obstacle_clearance: 1.5 # 回归点至少距离本次障碍物中心 2m；目标点附近有障碍时直接跳过当前目标
-    avoidance_reentry_cooldown: 2.0       # 绕障完成后重新触发绕障的冷却时间
-
-    dijkstra_obstacle_threshold: 10.0
-    dijkstra_allow_diagonal: true
-    dijkstra_diagonal_cost: 5.4
-    dijkstra_straight_cost: 5.0
-    dijkstra_safety_margin: 0
-    dijkstra_path_deviation_weight: 0.0
-    dijkstra_obstacle_avoidance_weight: 20.0
-
-    costmap_threshold: 50.0 
-
-    potential_field:
-      attractive_gain: 8.0
-      repulsive_gain: 1.0
-      influence_radius: 0.2
-      safety_radius: 0.1
-      force_limit: 10.0
-      angular_gain: 0.3
-      speed_factor_gain: 1.0
-      y_force_threshold: 0.5
-      y_velocity_gain: 0.2
-      y_smoothing_factor: 0.3
-      y_dead_zone: 0.05
-      angular_smoothing_factor: 0.4
-      bilateral_threshold: 0.8
-      bilateral_damping: 0.1
-
-    front_obstacle_detector:
-      detection_shape: "sector"  # 前方检测区域的形状
-      detection_width: 0.3
-      detection_length: 1.0
-      # 机器人前方 sector_radius 范围内的障碍物都会参与减速/停障判断。
-      sector_radius: 1.5
-      # 扇形总张角，60° 表示机器人正前方左右各 30°。
-      sector_angle: 60.0
-      # 判定障碍物的 costmap 代价值阈值。
-      obstacle_threshold: 50
-      obstacle_ratio_threshold: 0.1
-
-      safety_margin: 0.10
-      # 1.0m~1.5m 前方扇形区域检测到障碍时，进入左右通道判断。
-      avoid_min_distance: 1.0
-      avoid_max_distance: 1.7
-      avoid_sector_angle: 60.0
-      # 左右绕行通道宽度，至少应大于 robot_width + 2 * safety_margin。
-      side_passage_width: 1.0
-      # 绕障触发只统计全局路径走廊内的扇形障碍，路径外障碍不触发绕障/阻塞。
-      enable_path_corridor_filter: true
-      path_obstacle_margin: 0.0  
-      path_check_distance: 2.0 #全局路径前方约 2.0m 范围内的路径走廊
-
-      debug_mode: true
-      enable_visualization: true
-
-    control_frequency: 20.0
-    transform_tolerance: 0.1
-
+    # ==================== 基础运行 ====================
     global_frame: "map"
     robot_frame: "base_link"
+    control_frequency: 20.0       # 控制指令计算频率（Hz）
+    transform_tolerance: 0.1      # TF 查询允许的时间容差（s）
 
-    curvature_smoothing_window: 3.0
-    max_curvature: 2.0
-    #角度 角速度相关参数
-    yaw_tolerance: 0.26
-    yaw_adjustment_gain: 0.9
-    final_yaw_min_angular_velocity: 0.35
+    # ==================== Pure Pursuit 路径跟踪 ====================
+    lookahead_distance_min: 0.4   # 低速最小前瞻距离（m）；越小转向越灵敏
+    lookahead_distance_max: 0.7   # 高速最大前瞻距离（m）；越大行驶越平稳
+    use_smoothed_path: false      # 是否使用外部发布的平滑局部路径
+
+    # ==================== 目标到达与最终朝向 ====================
+    goal_tolerance: 0.10                  # 目标位置容差（m）
+    yaw_tolerance: 0.26                   # 最终航向容差（rad），约 15°
+    yaw_adjustment_gain: 0.9              # 最终原地调向比例增益
+    final_yaw_min_angular_velocity: 0.35   # 最终调向最小角速度（rad/s）
+
+    # ==================== 速度与平滑限制 ====================
+    max_linear_velocity: 0.6      # X 方向最大线速度（m/s）
+    max_linear_velocity_y: 0.3    # Y 方向最大线速度（m/s）
+    max_angular_velocity: 0.7     # 最大角速度（rad/s）
+    acceleration_limit: 0.5       # 最大加速度（m/s²）
+    deceleration_limit: 0.8       # 最大减速度（m/s²）
+
+    # ==================== 局部绕障过程 ====================
+    local_planning_frequency: 10.0         # 局部 A* 重规划频率（Hz）
+    avoidance_lateral_clearance: 1.5       # 单个临时点与障碍物中心的侧向距离（m）
+    avoidance_max_entry_angle: 40.0        # 当前位置进入临时点的最大夹角（deg）
+    avoidance_max_return_angle: 30.0       # 临时点回归全局路径的最大夹角（deg）
+    avoidance_near_stop_margin: 0.0       # 路径净空直接使用1.0m硬停距离，不额外扩充
+    avoidance_goal_tolerance: 0.35         # 到达侧向点/回归点的距离阈值（m）
+    avoidance_return_goal_clearance: 0.80  # 回归点周围的安全检查半径（m）
+    avoidance_return_obstacle_clearance: 1.5 # 回归点与本次障碍物中心的最小距离（m）
+    avoidance_reentry_cooldown: 2.0        # 绕障完成后的再次触发冷却时间（s）
+
+    # ==================== 8 邻域 A* 局部规划 ====================
+    # 检测器和A*共用：大于等于该代价值时判为障碍并禁止通行。
+    obstacle_cost_threshold: 50
+    astar_allow_diagonal: true           # 是否允许对角线移动
+    astar_diagonal_cost: 1.414           # 对角移动代价，通常取 sqrt(2)
+    astar_straight_cost: 1.0             # 水平/垂直移动代价
+    astar_safety_margin: 2               # 障碍物周围软安全范围（栅格数）
+    astar_path_deviation_weight: 0.0     # 偏离全局路径权重；0 表示不约束
+    astar_obstacle_avoidance_weight: 2.0 # 靠近障碍物的附加代价权重
+    astar_footprint_padding: 0.10        # 机器人半对角线之外的硬碰撞余量（m）
+    astar_start_obstacle_threshold: 80  # 起点宽松阈值，独立于普通可通行阈值
+    astar_footprint_obstacle_threshold: 100 # 用于footprint硬碰撞的Costmap阈值
+
+    # ==================== 绕障触发与通道检测 ====================
+    front_obstacle_detector:
+      obstacle_ratio_threshold: 0.1   # 障碍栅格占比超过 10% 才触发
+
+      # 机器人前方 1.0～1.7m、左右各 30° 的扇环用于触发绕障；
+      # 车体前缘～1.0m 内检测到障碍时直接判为 BLOCKED。
+      avoid_min_distance: 1.0       # 绕障触发起始/近障碍阻塞分界（m）
+      avoid_max_distance: 1.7       # 绕障检测最远距离（m）
+      avoid_sector_angle: 60.0      # 绕障检测扇形总角度（deg）
+
+      safety_margin: 0.10           # 车体轮廓外扩安全距离（m）
+      side_passage_width: 1.0       # 左右绕行通道检测宽度（m）
+
+      # 只让全局路径走廊内的障碍物触发绕障，避免路径外障碍误触发。
+      enable_path_corridor_filter: true
+      path_obstacle_margin: 0.0     # 路径走廊额外外扩距离（m）
+      path_check_distance: 2.0      # 向前检查的全局路径长度（m）
+
+      # ==================== 调试 ====================
+      debug_mode: false             # 需要排查障碍检测时再开启详细日志
+      enable_visualization: true    # 发布真实绕障扇环到 RViz

@@ -23,7 +23,8 @@
 /obstacle_stop/detection_marker  visualization_msgs/msg/Marker
 ```
 
-点云或计划速度超时、过滤后有效点不足以及外部急停时，节点默认发布零速度。
+点云或计划速度超时、原始点云为空以及外部急停时，节点默认发布零速度。
+高度、距离和角度过滤后没有障碍点时，按检测区域无障碍处理。
 
 `/obstacle_stop/enabled=false`时透传规划速度并跳过雷达停障；外部急停和
 规划速度超时保护仍然有效。默认值为`true`。

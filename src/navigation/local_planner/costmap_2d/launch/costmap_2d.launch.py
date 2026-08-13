@@ -29,6 +29,7 @@ def generate_launch_description():
     config_file = LaunchConfiguration('config_file')
     robot_param_file = LaunchConfiguration('robot_param_file')
     runtime_profile = LaunchConfiguration('runtime_profile')
+    global_frame = LaunchConfiguration('global_frame')
 
     package_share = get_package_share_directory('costmap_2d')
     default_config_file = os.path.join(
@@ -55,6 +56,11 @@ def generate_launch_description():
             default_value='test',
             description='test自动启动算法；platform等待robot_runtime启动'
         ),
+        DeclareLaunchArgument(
+            'global_frame',
+            default_value='map',
+            description='Costmap global frame; use odom for FAST-LIO UWB follow'
+        ),
 
         Node(
             package='costmap_2d',
@@ -63,7 +69,10 @@ def generate_launch_description():
             parameters=[
                 config_file,
                 robot_param_file,
-                {'runtime_profile': runtime_profile}
+                {
+                    'runtime_profile': runtime_profile,
+                    'global_frame': global_frame,
+                }
             ],
             remappings=[
                 ('/costmap', '/local_costmap/costmap'),

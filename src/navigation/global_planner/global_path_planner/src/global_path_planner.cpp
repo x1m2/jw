@@ -6,13 +6,14 @@
 #include <fstream>
 #include <functional>
 #include <limits>
-#include <map>
 #include <queue>
+#include <set>
 #include <sstream>
+#include <unordered_map>
 
 namespace global_path_planner {
 
-GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions& options)
+GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
     : rclcpp::Node("global_path_planner_node", options),
       has_free_space_cloud_(false),
       has_current_pose_(false),
@@ -153,6 +154,9 @@ bool GlobalPathPlanner::loadTopologyMap() {
     return false;
   }
 
+  nodes_.clear();
+  edges_.clear();
+
   std::string line;
   bool reading_edges = false;
 
@@ -193,13 +197,13 @@ bool GlobalPathPlanner::loadTopologyMap() {
     } else {
       // 读取边: ID 起始ID 结束ID 权重 类型 双向 [停障策略] [绕障策略]
       TopologyEdge edge;
-      std::string type;
+      std::string ignored_type;
       int bidirectional_int;
       int obstacle_stop_enabled_int = 1;
       int obstacle_avoidance_enabled_int = 0;
 
-      if (iss >> edge.id >> edge.from_id >> edge.to_id >> edge.weight >> type >>
-          bidirectional_int) {
+      if (iss >> edge.id >> edge.from_id >> edge.to_id >> edge.weight >>
+          ignored_type >> bidirectional_int) {
         edge.bidirectional = (bidirectional_int == 1);
         // 可选字段缺省时保持停障启用、主动绕障关闭。
         if (iss >> obstacle_stop_enabled_int) {
@@ -214,8 +218,7 @@ bool GlobalPathPlanner::loadTopologyMap() {
         RCLCPP_DEBUG(this->get_logger(),
                      "读取边: ID=%d, %d->%d, 权重=%.2f, 双向=%s, "
                      "启用停障=%s, 启用绕障=%s",
-                     edge.id,
-                     edge.from_id, edge.to_id, edge.weight,
+                     edge.id, edge.from_id, edge.to_id, edge.weight,
                      edge.bidirectional ? "是" : "否",
                      edge.obstacle_stop_enabled ? "是" : "否",
                      edge.obstacle_avoidance_enabled ? "是" : "否");
@@ -223,7 +226,9 @@ bool GlobalPathPlanner::loadTopologyMap() {
     }
   }
 
-  file.close();
+  if (!rebuildGraphIndexes()) {
+    return false;
+  }
 
   RCLCPP_INFO(this->get_logger(), "拓扑地图加载完成: %lu 个节点, %lu 条边",
               nodes_.size(), edges_.size());
@@ -287,26 +292,7 @@ void GlobalPathPlanner::goalCallback(
     RCLCPP_INFO(this->get_logger(), "目标点位置: (%.2f, %.2f, %.2f)",
                 goal_position_.x, goal_position_.y, goal_position_.z);
 
-    // 如果有当前位置，立即规划路径
-    if (has_current_pose_) {
-      nav_msgs::msg::Path global_path = planGlobalPath();
-      if (!global_path.poses.empty()) {
-        global_path_pub_->publish(global_path);
-        navigation_interfaces::msg::PathWithPolicy path_with_policy;
-        path_with_policy.path = global_path;
-        path_with_policy.obstacle_stop_enabled =
-            last_path_obstacle_stop_policy_;
-        path_with_policy.obstacle_avoidance_enabled =
-            last_path_obstacle_avoidance_policy_;
-        global_path_with_policy_pub_->publish(path_with_policy);
-        RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
-                    global_path.poses.size());
-      } else {
-        RCLCPP_WARN(this->get_logger(), "无法规划路径");
-      }
-    } else {
-      RCLCPP_WARN(this->get_logger(), "尚未接收到当前位置信息");
-    }
+    planAndPublish();
   } catch (tf2::TransformException &ex) {
     RCLCPP_ERROR(this->get_logger(), "目标点坐标变换失败: %s", ex.what());
   }
@@ -329,26 +315,31 @@ void GlobalPathPlanner::targetPointsCallback(
               msg->orientation.x, msg->orientation.y, msg->orientation.z,
               msg->orientation.w);
 
-  // 如果有当前位置，立即规划路径
-  if (has_current_pose_) {
-    nav_msgs::msg::Path global_path = planGlobalPath();
-    if (!global_path.poses.empty()) {
-      global_path_pub_->publish(global_path);
-      navigation_interfaces::msg::PathWithPolicy path_with_policy;
-      path_with_policy.path = global_path;
-      path_with_policy.obstacle_stop_enabled =
-          last_path_obstacle_stop_policy_;
-      path_with_policy.obstacle_avoidance_enabled =
-          last_path_obstacle_avoidance_policy_;
-      global_path_with_policy_pub_->publish(path_with_policy);
-      RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
-                  global_path.poses.size());
-    } else {
-      RCLCPP_WARN(this->get_logger(), "无法规划路径");
-    }
-  } else {
+  planAndPublish();
+}
+
+void GlobalPathPlanner::planAndPublish() {
+  if (!has_current_pose_) {
     RCLCPP_WARN(this->get_logger(), "尚未接收到当前位置信息");
+    return;
   }
+
+  nav_msgs::msg::Path global_path = planGlobalPath();
+  if (global_path.poses.empty()) {
+    RCLCPP_WARN(this->get_logger(), "无法规划路径");
+    return;
+  }
+
+  global_path_pub_->publish(global_path);
+  navigation_interfaces::msg::PathWithPolicy path_with_policy;
+  path_with_policy.path = global_path;
+  path_with_policy.obstacle_stop_enabled = last_path_obstacle_stop_policy_;
+  path_with_policy.obstacle_avoidance_enabled =
+      last_path_obstacle_avoidance_policy_;
+  path_with_policy.dynamic_path = false;
+  global_path_with_policy_pub_->publish(path_with_policy);
+  RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
+              global_path.poses.size());
 }
 
 nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
@@ -367,46 +358,38 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
               goal_position_.x, goal_position_.y, goal_position_.z);
 
   try {
-    // 创建临时拓扑图，包含起点和终点作为临时节点
-    std::vector<TopologyNode> temp_nodes;
-    std::vector<TopologyEdge> temp_edges;
-
-    // 预分配内存以避免频繁重新分配
-    temp_nodes.reserve(nodes_.size() + 2);
-    temp_edges.reserve(edges_.size() + 10);  // 额外空间用于临时连接
-
-    // 复制原始节点和边
-    temp_nodes = nodes_;
-    temp_edges = edges_;
+    // 基础图已经建立索引；每次规划只创建起终点及其临时连接。
+    std::vector<TopologyNode> temporary_nodes;
+    std::vector<TopologyEdge> temporary_edges;
+    temporary_nodes.reserve(2);
+    temporary_edges.reserve(10);
 
     // 添加起点作为临时节点
-    int start_node_id = temp_nodes.size();
+    const int start_node_id = max_node_id_ + 1;
     TopologyNode start_node;
     start_node.id = start_node_id;
     start_node.x = current_position_.x;
     start_node.y = current_position_.y;
     start_node.z = current_position_.z;
     start_node.label = "start_temp";
-    temp_nodes.push_back(start_node);
+    temporary_nodes.push_back(start_node);
 
     // 添加终点作为临时节点
-    int goal_node_id = temp_nodes.size();
+    const int goal_node_id = start_node_id + 1;
     TopologyNode goal_node;
     goal_node.id = goal_node_id;
     goal_node.x = goal_position_.x;
     goal_node.y = goal_position_.y;
     goal_node.z = goal_position_.z;
     goal_node.label = "goal_temp";
-    temp_nodes.push_back(goal_node);
+    temporary_nodes.push_back(goal_node);
 
     // 起点是机器人当前实时位置，可以保留原来的“最近节点 +
     // 第二层邻居”逻辑，避免刚好在边中间时折返
-    addTemporaryConnections(temp_nodes, temp_edges, start_node_id,
-                            current_position_);
+    addTemporaryConnections(temporary_edges, start_node_id, current_position_);
 
     // 终点是真实目标点，不允许第二层邻居把目标点带到错误拓扑点
-    addGoalTemporaryConnection(temp_nodes, temp_edges, goal_node_id,
-                               goal_position_);
+    addGoalTemporaryConnection(temporary_edges, goal_node_id, goal_position_);
 
     // 检查起点和终点距离，如果很近且可行，直接连接
     double direct_distance =
@@ -449,7 +432,7 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
         direct_connection_feasible && direct_policy_unambiguous) {
       // 创建起点到终点的直接连接
       TopologyEdge direct_edge;
-      direct_edge.id = temp_edges.size();
+      direct_edge.id = edges_.size() + temporary_edges.size();
       direct_edge.from_id = start_node_id;
       direct_edge.to_id = goal_node_id;
       direct_edge.weight =
@@ -457,7 +440,7 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
           direct_connection_cost_ratio_;  // 给直接连接一个小的奖励
       direct_edge.bidirectional = true;
       inheritEdgePolicy(start_attached_edge, direct_edge);
-      temp_edges.push_back(direct_edge);
+      temporary_edges.push_back(direct_edge);
 
       RCLCPP_INFO(this->get_logger(),
                   "添加起点到终点的直接连接，距离: %.2f 米，继承边%d策略",
@@ -483,39 +466,36 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
       }
     }
 
+    const EdgeAdjacency temporary_adjacency = buildAdjacency(temporary_edges);
     RCLCPP_DEBUG(this->get_logger(), "临时拓扑图创建完成：%lu 个节点，%lu 条边",
-                 temp_nodes.size(), temp_edges.size());
+                 nodes_.size() + temporary_nodes.size(),
+                 edges_.size() + temporary_edges.size());
 
     // 在临时拓扑图中进行Dijkstra搜索
-    std::vector<int> topology_path = dijkstraSearchInTempGraph(
-        temp_nodes, temp_edges, start_node_id, goal_node_id);
+    TopologySearchResult topology_path = dijkstraSearchInTempGraph(
+        temporary_nodes, temporary_adjacency, start_node_id, goal_node_id);
     {
       RCLCPP_WARN(this->get_logger(),
                   "========== TOPOLOGY PATH RESULT ==========");
 
-      for (size_t i = 0; i < topology_path.size(); ++i) {
-        int id = topology_path[i];
-
-        auto it =
-            std::find_if(temp_nodes.begin(), temp_nodes.end(),
-                         [id](const TopologyNode &n) { return n.id == id; });
-
-        if (it != temp_nodes.end()) {
+      for (size_t i = 0; i < topology_path.node_ids.size(); ++i) {
+        const int id = topology_path.node_ids[i];
+        const TopologyNode *node = findNodeById(id, &temporary_nodes);
+        if (node != nullptr) {
           RCLCPP_WARN(
               this->get_logger(),
               "[TOPO_PATH] order=%zu id=%d label=%s x=%.3f y=%.3f z=%.3f", i,
-              it->id, it->label.c_str(), it->x, it->y, it->z);
+              node->id, node->label.c_str(), node->x, node->y, node->z);
         }
       }
     }
-    if (topology_path.empty()) {
+    if (topology_path.node_ids.empty()) {
       RCLCPP_WARN(this->get_logger(), "未找到可行路径");
       return path;
     }
 
     // 构建完整路径
-    path =
-        buildCompletePathFromTempGraph(temp_nodes, temp_edges, topology_path);
+    path = buildCompletePathFromTempGraph(temporary_nodes, topology_path);
   } catch (const std::exception &e) {
     RCLCPP_ERROR(this->get_logger(), "路径规划过程中发生异常: %s", e.what());
     return nav_msgs::msg::Path();  // 返回空路径
@@ -528,7 +508,6 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
 }
 
 void GlobalPathPlanner::addTemporaryConnections(
-    std::vector<TopologyNode> & /*temp_nodes*/,
     std::vector<TopologyEdge> &temp_edges, int temp_node_id,
     const geometry_msgs::msg::Point &position) {
   // 创建临时节点用于边合法性检查
@@ -564,16 +543,12 @@ void GlobalPathPlanner::addTemporaryConnections(
   for (const auto &node_pair : sorted_nodes) {
     int node_id = node_pair.second;
 
-    // 找到对应的节点
-    auto it = std::find_if(
-        nodes_.begin(), nodes_.end(),
-        [node_id](const TopologyNode &n) { return n.id == node_id; });
-
-    if (it != nodes_.end()) {
+    const TopologyNode *node = findNodeById(node_id);
+    if (node != nullptr) {
       // 根据参数控制是否进行边合法性检查
       bool is_legal = true;
       if (enable_temp_connection_feasibility_check_) {
-        is_legal = isEdgeLegal(temp_node, *it);
+        is_legal = isEdgeLegal(temp_node, *node);
       }
 
       if (is_legal) {
@@ -615,36 +590,32 @@ void GlobalPathPlanner::addTemporaryConnections(
   RCLCPP_INFO(this->get_logger(), "第一个合法节点: %d, 第二层候选节点总数: %lu",
               nearest_legal_node_id, candidate_nodes.size() - 1);
 
-  const TopologyEdge *nearest_position_edge =
-      findNearestTopologyEdge(position);
+  const TopologyEdge *nearest_position_edge = findNearestTopologyEdge(position);
 
   // 第三步：对所有候选节点进行合法性检查并创建连接
   int actual_connections = 0;
   for (int candidate_id : candidate_nodes) {
-    // 找到候选节点
-    auto it = std::find_if(
-        nodes_.begin(), nodes_.end(),
-        [candidate_id](const TopologyNode &n) { return n.id == candidate_id; });
-
-    if (it != nodes_.end()) {
+    const TopologyNode *candidate = findNodeById(candidate_id);
+    if (candidate != nullptr) {
       // 根据参数控制是否进行边合法性检查
       bool is_legal = true;
-      if (enable_temp_connection_feasibility_check_) {
-        is_legal = isEdgeLegal(temp_node, *it);
+      if (enable_temp_connection_feasibility_check_ &&
+          candidate_id != nearest_legal_node_id) {
+        is_legal = isEdgeLegal(temp_node, *candidate);
       }
 
       if (is_legal) {
         // 计算连接代价
         geometry_msgs::msg::Point node_pos;
-        node_pos.x = it->x;
-        node_pos.y = it->y;
-        node_pos.z = it->z;
+        node_pos.x = candidate->x;
+        node_pos.y = candidate->y;
+        node_pos.z = candidate->z;
 
-        double cost = calculateConnectionCost(position, node_pos);
+        const double cost = calculateDistance(position, node_pos);
 
         // 创建双向连接
         TopologyEdge edge;
-        edge.id = temp_edges.size();
+        edge.id = edges_.size() + temp_edges.size();
         edge.from_id = temp_node_id;
         edge.to_id = candidate_id;
         edge.weight = cost;
@@ -653,8 +624,7 @@ void GlobalPathPlanner::addTemporaryConnections(
         // 连接最近节点时，继承临时点所在的最近真实边。
         const TopologyEdge *policy_edge = nullptr;
         if (candidate_id != nearest_legal_node_id) {
-          policy_edge =
-              findTopologyEdge(nearest_legal_node_id, candidate_id);
+          policy_edge = findTopologyEdge(nearest_legal_node_id, candidate_id);
         }
         if (policy_edge == nullptr) {
           policy_edge = nearest_position_edge;
@@ -673,46 +643,11 @@ void GlobalPathPlanner::addTemporaryConnections(
     }
   }
 
-  if (actual_connections == 0) {
-    RCLCPP_ERROR(this->get_logger(),
-                 "临时节点 %d 无法创建任何合法连接，尝试强制连接到最近合法节点",
-                 temp_node_id);
-
-    // 强制连接到第一个合法节点作为备选
-    auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                           [nearest_legal_node_id](const TopologyNode &n) {
-                             return n.id == nearest_legal_node_id;
-                           });
-
-    if (it != nodes_.end()) {
-      geometry_msgs::msg::Point node_pos;
-      node_pos.x = it->x;
-      node_pos.y = it->y;
-      node_pos.z = it->z;
-
-      double cost = calculateDistance(position, node_pos);
-
-      TopologyEdge edge;
-      edge.id = temp_edges.size();
-      edge.from_id = temp_node_id;
-      edge.to_id = nearest_legal_node_id;
-      edge.weight = cost;
-      edge.bidirectional = true;
-      inheritEdgePolicy(nearest_position_edge, edge);
-      temp_edges.push_back(edge);
-
-      actual_connections = 1;
-      RCLCPP_WARN(this->get_logger(), "强制创建备选连接: 临时节点%d -> 节点%d",
-                  temp_node_id, nearest_legal_node_id);
-    }
-  }
-
   RCLCPP_INFO(this->get_logger(), "临时节点 %d 成功连接到 %d 个节点",
               temp_node_id, actual_connections);
 }
 
 void GlobalPathPlanner::addGoalTemporaryConnection(
-    std::vector<TopologyNode> & /*temp_nodes*/,
     std::vector<TopologyEdge> &temp_edges, int goal_node_id,
     const geometry_msgs::msg::Point &goal_position) {
   RCLCPP_INFO(this->get_logger(),
@@ -743,12 +678,8 @@ void GlobalPathPlanner::addGoalTemporaryConnection(
     return;
   }
 
-  auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                         [nearest_node_id](const TopologyNode &n) {
-                           return n.id == nearest_node_id;
-                         });
-
-  if (it == nodes_.end()) {
+  const TopologyNode *nearest_node = findNodeById(nearest_node_id);
+  if (nearest_node == nullptr) {
     RCLCPP_ERROR(this->get_logger(),
                  "[GOAL_TEMP_CONNECT_FAIL] nearest node id=%d not found",
                  nearest_node_id);
@@ -756,9 +687,9 @@ void GlobalPathPlanner::addGoalTemporaryConnection(
   }
 
   geometry_msgs::msg::Point node_pos;
-  node_pos.x = it->x;
-  node_pos.y = it->y;
-  node_pos.z = it->z;
+  node_pos.x = nearest_node->x;
+  node_pos.y = nearest_node->y;
+  node_pos.z = nearest_node->z;
 
   /*
    * 这里不要直接 return。
@@ -774,10 +705,10 @@ void GlobalPathPlanner::addGoalTemporaryConnection(
   }
 
   TopologyEdge edge;
-  edge.id = temp_edges.size();
+  edge.id = edges_.size() + temp_edges.size();
   edge.from_id = goal_node_id;
   edge.to_id = nearest_node_id;
-  edge.weight = calculateConnectionCost(goal_position, node_pos);
+  edge.weight = calculateDistance(goal_position, node_pos);
   edge.bidirectional = true;
   inheritEdgePolicy(findNearestTopologyEdge(goal_position), edge);
   temp_edges.push_back(edge);
@@ -785,18 +716,93 @@ void GlobalPathPlanner::addGoalTemporaryConnection(
   RCLCPP_WARN(this->get_logger(),
               "[GOAL_TEMP_CONNECT_OK] goal_temp -> node%d, "
               "goal=(%.3f, %.3f), node=(%.3f, %.3f), dist=%.3f, weight=%.3f",
-              nearest_node_id, goal_position.x, goal_position.y, it->x, it->y,
-              nearest_dist, edge.weight);
+              nearest_node_id, goal_position.x, goal_position.y,
+              nearest_node->x, nearest_node->y, nearest_dist, edge.weight);
+}
+
+bool GlobalPathPlanner::rebuildGraphIndexes() {
+  node_index_.clear();
+  base_adjacency_.clear();
+  max_node_id_ = -1;
+
+  node_index_.reserve(nodes_.size());
+  for (std::size_t index = 0; index < nodes_.size(); ++index) {
+    const int node_id = nodes_[index].id;
+    if (!node_index_.emplace(node_id, index).second) {
+      RCLCPP_ERROR(this->get_logger(), "拓扑地图包含重复节点ID: %d", node_id);
+      return false;
+    }
+    max_node_id_ = std::max(max_node_id_, node_id);
+  }
+
+  if (nodes_.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "拓扑地图不包含任何节点");
+    return false;
+  }
+  if (max_node_id_ > std::numeric_limits<int>::max() - 2) {
+    RCLCPP_ERROR(this->get_logger(), "拓扑节点ID过大，无法分配临时节点ID");
+    return false;
+  }
+
+  for (const auto &edge : edges_) {
+    if (node_index_.find(edge.from_id) == node_index_.end() ||
+        node_index_.find(edge.to_id) == node_index_.end()) {
+      RCLCPP_ERROR(this->get_logger(), "拓扑边%d引用不存在的节点: %d -> %d",
+                   edge.id, edge.from_id, edge.to_id);
+      return false;
+    }
+    if (!std::isfinite(edge.weight) || edge.weight < 0.0) {
+      RCLCPP_ERROR(this->get_logger(), "拓扑边%d包含非法权重: %.3f", edge.id,
+                   edge.weight);
+      return false;
+    }
+  }
+
+  base_adjacency_ = buildAdjacency(edges_);
+  return true;
+}
+
+GlobalPathPlanner::EdgeAdjacency GlobalPathPlanner::buildAdjacency(
+    const std::vector<TopologyEdge> &graph_edges) const {
+  EdgeAdjacency adjacency;
+  adjacency.reserve(nodes_.size() + 2U);
+  for (const auto &edge : graph_edges) {
+    adjacency[edge.from_id].push_back(&edge);
+    if (edge.bidirectional && edge.to_id != edge.from_id) {
+      adjacency[edge.to_id].push_back(&edge);
+    }
+  }
+  return adjacency;
+}
+
+const TopologyNode *GlobalPathPlanner::findNodeById(
+    int node_id, const std::vector<TopologyNode> *temporary_nodes) const {
+  const auto index_it = node_index_.find(node_id);
+  if (index_it != node_index_.end()) {
+    return &nodes_[index_it->second];
+  }
+  if (temporary_nodes != nullptr) {
+    for (const auto &node : *temporary_nodes) {
+      if (node.id == node_id) {
+        return &node;
+      }
+    }
+  }
+  return nullptr;
 }
 
 const TopologyEdge *GlobalPathPlanner::findTopologyEdge(
     int first_node_id, int second_node_id) const {
   const TopologyEdge *selected = nullptr;
-  for (const auto &edge : edges_) {
+  const auto adjacency_it = base_adjacency_.find(first_node_id);
+  if (adjacency_it == base_adjacency_.end()) {
+    return nullptr;
+  }
+  for (const TopologyEdge *edge_ptr : adjacency_it->second) {
+    const auto &edge = *edge_ptr;
     const bool forward =
         edge.from_id == first_node_id && edge.to_id == second_node_id;
-    const bool reverse = edge.bidirectional &&
-                         edge.from_id == second_node_id &&
+    const bool reverse = edge.bidirectional && edge.from_id == second_node_id &&
                          edge.to_id == first_node_id;
     if ((forward || reverse) &&
         (selected == nullptr || edge.weight < selected->weight)) {
@@ -812,33 +818,28 @@ const TopologyEdge *GlobalPathPlanner::findNearestTopologyEdge(
   double nearest_distance_squared = std::numeric_limits<double>::infinity();
 
   for (const auto &edge : edges_) {
-    const auto from_it = std::find_if(
-        nodes_.begin(), nodes_.end(),
-        [&edge](const TopologyNode &node) { return node.id == edge.from_id; });
-    const auto to_it = std::find_if(
-        nodes_.begin(), nodes_.end(),
-        [&edge](const TopologyNode &node) { return node.id == edge.to_id; });
-    if (from_it == nodes_.end() || to_it == nodes_.end()) {
+    const TopologyNode *from_node = findNodeById(edge.from_id);
+    const TopologyNode *to_node = findNodeById(edge.to_id);
+    if (from_node == nullptr || to_node == nullptr) {
       continue;
     }
 
-    const double dx = to_it->x - from_it->x;
-    const double dy = to_it->y - from_it->y;
-    const double dz = to_it->z - from_it->z;
+    const double dx = to_node->x - from_node->x;
+    const double dy = to_node->y - from_node->y;
+    const double dz = to_node->z - from_node->z;
     const double length_squared = dx * dx + dy * dy + dz * dz;
     double interpolation = 0.0;
     if (length_squared > 1e-12) {
       interpolation =
-          ((position.x - from_it->x) * dx +
-           (position.y - from_it->y) * dy +
-           (position.z - from_it->z) * dz) /
+          ((position.x - from_node->x) * dx + (position.y - from_node->y) * dy +
+           (position.z - from_node->z) * dz) /
           length_squared;
       interpolation = std::clamp(interpolation, 0.0, 1.0);
     }
 
-    const double nearest_x = from_it->x + interpolation * dx;
-    const double nearest_y = from_it->y + interpolation * dy;
-    const double nearest_z = from_it->z + interpolation * dz;
+    const double nearest_x = from_node->x + interpolation * dx;
+    const double nearest_y = from_node->y + interpolation * dy;
+    const double nearest_z = from_node->z + interpolation * dz;
     const double error_x = position.x - nearest_x;
     const double error_y = position.y - nearest_y;
     const double error_z = position.z - nearest_z;
@@ -858,8 +859,7 @@ void GlobalPathPlanner::inheritEdgePolicy(const TopologyEdge *source,
     return;
   }
   destination.obstacle_stop_enabled = source->obstacle_stop_enabled;
-  destination.obstacle_avoidance_enabled =
-      source->obstacle_avoidance_enabled;
+  destination.obstacle_avoidance_enabled = source->obstacle_avoidance_enabled;
 }
 
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
@@ -910,21 +910,36 @@ geometry_msgs::msg::Quaternion GlobalPathPlanner::calculateOrientation(
   return quat;
 }
 
-std::vector<int> GlobalPathPlanner::dijkstraSearchInTempGraph(
-    const std::vector<TopologyNode> &temp_nodes,
-    const std::vector<TopologyEdge> &temp_edges, int start_id, int goal_id) {
-  std::map<int, double> distances;
-  std::map<int, int> previous;
+GlobalPathPlanner::TopologySearchResult
+GlobalPathPlanner::dijkstraSearchInTempGraph(
+    const std::vector<TopologyNode> &temporary_nodes,
+    const EdgeAdjacency &temporary_adjacency, int start_id, int goal_id) {
+  TopologySearchResult result;
+  std::unordered_map<int, double> distances;
+  std::unordered_map<int, int> previous;
+  std::unordered_map<int, const TopologyEdge *> previous_edge;
   std::priority_queue<std::pair<double, int>,
                       std::vector<std::pair<double, int>>,
                       std::greater<std::pair<double, int>>>
       pq;
 
-  // 初始化距离
-  for (const auto &node : temp_nodes) {
-    distances[node.id] = std::numeric_limits<double>::infinity();
+  distances.reserve(nodes_.size() + temporary_nodes.size());
+  previous.reserve(nodes_.size() + temporary_nodes.size());
+  previous_edge.reserve(nodes_.size() + temporary_nodes.size());
+  for (const auto &node : nodes_) {
+    distances.emplace(node.id, std::numeric_limits<double>::infinity());
   }
-  distances[start_id] = 0.0;
+  for (const auto &node : temporary_nodes) {
+    distances.emplace(node.id, std::numeric_limits<double>::infinity());
+  }
+  auto start_it = distances.find(start_id);
+  const auto goal_it = distances.find(goal_id);
+  if (start_it == distances.end() || goal_it == distances.end()) {
+    RCLCPP_ERROR(this->get_logger(), "Dijkstra起点或终点不存在: %d -> %d",
+                 start_id, goal_id);
+    return result;
+  }
+  start_it->second = 0.0;
   pq.push(std::make_pair(0.0, start_id));
 
   while (!pq.empty()) {
@@ -936,90 +951,93 @@ std::vector<int> GlobalPathPlanner::dijkstraSearchInTempGraph(
       break;
     }
 
-    if (current_dist > distances[current_id]) {
+    const auto current_distance_it = distances.find(current_id);
+    if (current_distance_it == distances.end() ||
+        current_dist > current_distance_it->second) {
       continue;
     }
 
-    // 检查所有相邻节点
-    for (const auto &edge : temp_edges) {
-      int neighbor_id = -1;
-      if (edge.from_id == current_id) {
-        neighbor_id = edge.to_id;
-      } else if (edge.bidirectional && edge.to_id == current_id) {
-        neighbor_id = edge.from_id;
+    const auto relax_edges = [&](const EdgeAdjacency &adjacency) {
+      const auto adjacency_it = adjacency.find(current_id);
+      if (adjacency_it == adjacency.end()) {
+        return;
       }
-
-      if (neighbor_id != -1) {
-        double edge_weight = edge.weight;
-        double new_distance = distances[current_id] + edge_weight;
-
-        if (new_distance < distances[neighbor_id]) {
-          distances[neighbor_id] = new_distance;
+      for (const TopologyEdge *edge : adjacency_it->second) {
+        const int neighbor_id =
+            edge->from_id == current_id ? edge->to_id : edge->from_id;
+        auto neighbor_distance_it = distances.find(neighbor_id);
+        if (neighbor_distance_it == distances.end()) {
+          continue;
+        }
+        const double new_distance = current_dist + edge->weight;
+        if (new_distance < neighbor_distance_it->second) {
+          neighbor_distance_it->second = new_distance;
           previous[neighbor_id] = current_id;
+          previous_edge[neighbor_id] = edge;
           pq.push(std::make_pair(new_distance, neighbor_id));
         }
       }
-    }
+    };
+    relax_edges(base_adjacency_);
+    relax_edges(temporary_adjacency);
   }
 
-  // 重构路径
-  std::vector<int> path;
-  if (distances[goal_id] == std::numeric_limits<double>::infinity()) {
+  if (!std::isfinite(goal_it->second)) {
     RCLCPP_WARN(this->get_logger(), "在临时拓扑图中未找到从 %d 到 %d 的路径",
                 start_id, goal_id);
-    return path;
+    return result;
   }
 
+  std::vector<int> reversed_nodes;
+  std::vector<const TopologyEdge *> reversed_edges;
   int current = goal_id;
   while (current != start_id) {
-    path.push_back(current);
-    if (previous.find(current) == previous.end()) {
+    reversed_nodes.push_back(current);
+    const auto previous_it = previous.find(current);
+    const auto edge_it = previous_edge.find(current);
+    if (previous_it == previous.end() || edge_it == previous_edge.end()) {
       RCLCPP_ERROR(this->get_logger(), "路径重构失败：节点 %d 没有前驱节点",
                    current);
-      return std::vector<int>();
+      return TopologySearchResult{};
     }
-    current = previous[current];
+    reversed_edges.push_back(edge_it->second);
+    current = previous_it->second;
   }
-  path.push_back(start_id);
+  reversed_nodes.push_back(start_id);
 
-  std::reverse(path.begin(), path.end());
+  result.node_ids.assign(reversed_nodes.rbegin(), reversed_nodes.rend());
+  result.selected_edges.assign(reversed_edges.rbegin(), reversed_edges.rend());
 
   RCLCPP_INFO(this->get_logger(), "在临时拓扑图中找到路径，包含 %lu 个节点",
-              path.size());
-  return path;
+              result.node_ids.size());
+  return result;
 }
 
 nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
-    const std::vector<TopologyNode> &temp_nodes,
-    const std::vector<TopologyEdge> &temp_edges,
-    const std::vector<int> &topology_path) {
+    const std::vector<TopologyNode> &temporary_nodes,
+    const TopologySearchResult &topology_path) {
   nav_msgs::msg::Path path;
   path.header.stamp = this->now();
   path.header.frame_id = global_frame_;
 
-  if (topology_path.empty()) {
+  if (topology_path.node_ids.empty()) {
     RCLCPP_WARN(this->get_logger(), "拓扑路径为空，无法构建完整路径");
     return path;
   }
   last_path_obstacle_stop_policy_.clear();
   last_path_obstacle_avoidance_policy_.clear();
 
-  // 创建节点ID到节点的映射
-  std::map<int, TopologyNode> temp_node_map;
-  for (const auto &node : temp_nodes) {
-    temp_node_map[node.id] = node;
-  }
-
   std::vector<geometry_msgs::msg::Point> waypoints;
+  waypoints.reserve(topology_path.node_ids.size());
 
   // 将拓扑路径中的所有节点转换为路径点
-  for (int node_id : topology_path) {
-    if (temp_node_map.find(node_id) != temp_node_map.end()) {
-      const TopologyNode &node = temp_node_map[node_id];
+  for (int node_id : topology_path.node_ids) {
+    const TopologyNode *node = findNodeById(node_id, &temporary_nodes);
+    if (node != nullptr) {
       geometry_msgs::msg::Point point;
-      point.x = node.x;
-      point.y = node.y;
-      point.z = node.z;
+      point.x = node->x;
+      point.y = node->y;
+      point.z = node->z;
       waypoints.push_back(point);
     } else {
       RCLCPP_WARN(this->get_logger(), "节点 %d 在临时节点映射中不存在",
@@ -1031,31 +1049,23 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
     RCLCPP_WARN(this->get_logger(), "路径点不足，无法构建完整路径");
     return path;
   }
+  if (topology_path.selected_edges.size() + 1U != waypoints.size()) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "路径节点和边数量不匹配: nodes=%zu, edges=%zu",
+                 waypoints.size(), topology_path.selected_edges.size());
+    return path;
+  }
 
   // 每个拓扑段继承所选边的停障策略；临时连接边默认启用停障。
   std::vector<bool> segment_obstacle_stop_enabled;
   std::vector<bool> segment_obstacle_avoidance_enabled;
-  segment_obstacle_stop_enabled.reserve(topology_path.size() - 1U);
-  segment_obstacle_avoidance_enabled.reserve(topology_path.size() - 1U);
-  for (std::size_t i = 0; i + 1U < topology_path.size(); ++i) {
-    const int from_id = topology_path[i];
-    const int to_id = topology_path[i + 1U];
-    bool obstacle_stop_enabled = true;
-    bool obstacle_avoidance_enabled = false;
-    double selected_weight = std::numeric_limits<double>::infinity();
-    for (const auto &candidate : temp_edges) {
-      const bool matches =
-          (candidate.from_id == from_id && candidate.to_id == to_id) ||
-          (candidate.bidirectional && candidate.from_id == to_id &&
-           candidate.to_id == from_id);
-      if (matches && candidate.weight < selected_weight) {
-        selected_weight = candidate.weight;
-        obstacle_stop_enabled = candidate.obstacle_stop_enabled;
-        obstacle_avoidance_enabled = candidate.obstacle_avoidance_enabled;
-      }
-    }
-    segment_obstacle_stop_enabled.push_back(obstacle_stop_enabled);
-    segment_obstacle_avoidance_enabled.push_back(obstacle_avoidance_enabled);
+  segment_obstacle_stop_enabled.reserve(topology_path.selected_edges.size());
+  segment_obstacle_avoidance_enabled.reserve(
+      topology_path.selected_edges.size());
+  for (const TopologyEdge *edge : topology_path.selected_edges) {
+    segment_obstacle_stop_enabled.push_back(edge->obstacle_stop_enabled);
+    segment_obstacle_avoidance_enabled.push_back(
+        edge->obstacle_avoidance_enabled);
   }
 
   // 插值生成完整路径
@@ -1256,16 +1266,6 @@ bool GlobalPathPlanner::isPointInFreeSpaceWithRadius(
     RCLCPP_ERROR(this->get_logger(), "半径搜索时发生异常: %s", e.what());
     return false;
   }
-}
-
-double GlobalPathPlanner::calculateConnectionCost(
-    const geometry_msgs::msg::Point &from,
-    const geometry_msgs::msg::Point &to) {
-  // 基础距离代价
-  double distance_cost = calculateDistance(from, to);
-
-  // 简单的线性代价函数，距离越远代价越高
-  return distance_cost;
 }
 
 }  // namespace global_path_planner

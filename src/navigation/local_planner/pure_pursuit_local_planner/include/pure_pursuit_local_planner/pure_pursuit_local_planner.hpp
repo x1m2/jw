@@ -2,13 +2,13 @@
 #define PURE_PURSUIT_LOCAL_PLANNER_HPP
 
 #include <tf2/time.h>
-#include <tf2/LinearMath/Scalar.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -19,10 +19,13 @@
 #include <memory>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <navigation_interfaces/msg/avoidance_state.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
+#include <optional>
+#include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <tf2/LinearMath/Scalar.hpp>
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -32,46 +35,46 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "pure_pursuit_local_planner/front_obstacle_detector.hpp"
-#include "pure_pursuit_local_planner/local_path_planner.hpp"
+#include "pure_pursuit_local_planner/local_avoidance_manager.hpp"
 #include "pure_pursuit_local_planner/path_tracker.hpp"
+#include "pure_pursuit_local_planner/pure_pursuit_controller.hpp"
 
 namespace pure_pursuit_local_planner {
 
 struct PlannerConfig {
   // Pure Pursuit parameters
-  double lookahead_distance_min;  // 最小前瞻距离
-  double lookahead_distance_max;  // 最大前瞻距离
-  double goal_tolerance;          // 目标点容忍距离
+  double lookahead_distance_min; // 最小前瞻距离
+  double lookahead_distance_max; // 最大前瞻距离
+  double goal_tolerance;         // 目标点容忍距离
 
   // Speed parameters
-  double max_linear_velocity;    // 最大线速度 (X方向)
-  double max_linear_velocity_y;  // Y方向最大线速度 (全向机器人)
-  double max_angular_velocity;   // 最大角速度
-  double acceleration_limit;     // 加速度限制
-  double deceleration_limit;     // 减速度限制
+  double max_linear_velocity;   // 最大线速度 (X方向)
+  double max_linear_velocity_y; // Y方向最大线速度 (全向机器人)
+  double max_angular_velocity;  // 最大角速度
+  double acceleration_limit;    // 加速度限制
+  double deceleration_limit;    // 减速度限制
 
   // Obstacle avoidance parameters
   // Control parameters
-  double control_frequency;    // 控制频率
-  double transform_tolerance;  // TF变换容忍时间
+  double control_frequency;   // 控制频率
+  double transform_tolerance; // TF变换容忍时间
 
   // Orientation adjustment parameters
-  double yaw_tolerance;        // 角度容忍度
-  double yaw_adjustment_gain;  // 角度调整增益
+  double yaw_tolerance;       // 角度容忍度
+  double yaw_adjustment_gain; // 角度调整增益
 
   // Local planning parameters
-  bool use_smoothed_path;        // 是否使用平滑后的路径
-  double avoidance_reentry_cooldown;  // 绕障完成后重新触发冷却时间
+  bool use_smoothed_path; // 是否使用平滑后的路径
 
   // Frame IDs
-  std::string global_frame;  // 全局坐标系
-  std::string robot_frame;   // 机器人坐标系
+  std::string global_frame; // 全局坐标系
+  std::string robot_frame;  // 机器人坐标系
 
   double final_yaw_min_angular_velocity = 0.28;
 };
 
 class PurePursuitLocalPlanner {
- public:
+public:
   PurePursuitLocalPlanner();
   ~PurePursuitLocalPlanner();
 
@@ -93,49 +96,52 @@ class PurePursuitLocalPlanner {
    * @param global_path 全局路径
    * @return 设置是否成功
    */
-  bool setGlobalPath(const nav_msgs::msg::Path& global_path);
+  bool setGlobalPath(const nav_msgs::msg::Path &global_path,
+                     bool dynamic_path = false);
 
   /**
    * @brief 计算控制指令
    * @param cmd_vel 输出的控制指令
    * @return 计算是否成功
    */
-  bool computeVelocityCommands(geometry_msgs::msg::Twist& cmd_vel);
+  bool computeVelocityCommands(geometry_msgs::msg::Twist &cmd_vel);
 
   /**
    * @brief 判断是否到达目标点
    * @return 是否到达目标点
    */
-  bool isGoalReached(const geometry_msgs::msg::PoseStamped& robot_pose) const;
+  bool isGoalReached(const geometry_msgs::msg::PoseStamped &robot_pose) const;
 
   /**
    * @brief 获取机器人在全局坐标系下的位姿
    * @param robot_pose 输出的机器人位姿
    * @return 获取是否成功
    */
-  bool getRobotPose(geometry_msgs::msg::PoseStamped& robot_pose);
+  bool getRobotPose(geometry_msgs::msg::PoseStamped &robot_pose);
 
- private:
+private:
   // ROS相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr lookahead_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr
-      local_trajectory_pub_;  // 局部轨迹发布器
+      local_trajectory_pub_; // 局部轨迹发布器
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
-      velocity_arrow_pub_;  // 速度箭头发布器
+      velocity_arrow_pub_; // 速度箭头发布器
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
-      nav_state_pub_;  // 导航状态发布器
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr
-      obstacle_stop_enabled_pub_;
+      nav_state_pub_; // 导航状态发布器
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr nav_failed_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr obstacle_stop_enabled_pub_;
+  rclcpp::Publisher<navigation_interfaces::msg::AvoidanceState>::SharedPtr
+      avoidance_state_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
   rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
       global_path_with_policy_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr
-      smoothed_local_path_sub_;  // 新增：平滑后局部路径订阅器
+      smoothed_local_path_sub_; // 新增：平滑后局部路径订阅器
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
-      target_points_sub_;  // 新增：目标点订阅器
+      target_points_sub_; // 新增：目标点订阅器
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // TF
@@ -147,33 +153,28 @@ class PurePursuitLocalPlanner {
 
   // 路径和状态
   nav_msgs::msg::Path global_path_;
-  nav_msgs::msg::Path smoothed_local_path_;  // 新增：平滑后的局部路径
-  bool smoothed_local_path_received_;  // 新增：平滑后局部路径接收标志
+  nav_msgs::msg::Path smoothed_local_path_; // 新增：平滑后的局部路径
+  bool smoothed_local_path_received_; // 新增：平滑后局部路径接收标志
   bool path_received_;
   bool goal_reached_;
-  bool goal_position_reached_;            // 新增：目标位置到达锁存
-  geometry_msgs::msg::Pose target_pose_;  // 新增：目标位姿
-  bool target_pose_received_;             // 新增：目标位姿接收标志
+  bool goal_position_reached_;           // 新增：目标位置到达锁存
+  geometry_msgs::msg::Pose target_pose_; // 新增：目标位姿
+  bool target_pose_received_;            // 新增：目标位姿接收标志
   int current_path_index_;
-  size_t path_progress_index_;  // 路径进度索引，防止回头
+  size_t path_progress_index_; // 路径进度索引，防止回头
   std::vector<bool> obstacle_stop_enabled_policy_;
   std::vector<bool> obstacle_avoidance_enabled_policy_;
   bool published_obstacle_stop_enabled_{true};
   bool has_published_obstacle_stop_policy_{false};
-  bool pp_aligning_;
-  bool pp_correcting_;
-  bool local_replanning_active_;  // 是否正在跟踪局部绕障路径
-  bool local_avoidance_aligning_;  // 局部绕障起步时先原地对齐
-  bool has_last_avoidance_complete_time_;
-  rclcpp::Time last_avoidance_complete_time_;
-  bool latest_costmap_received_;
-  nav_msgs::msg::OccupancyGrid latest_costmap_;
+  std::atomic<uint8_t> avoidance_state_{255};
+  std::atomic<int64_t> dynamic_path_accept_after_ns_{0};
   // 组件
   std::unique_ptr<PathTracker> path_tracker_;
-  std::unique_ptr<LocalPathPlanner>
-      local_path_planner_;  // 新增：局部路径规划器
+  std::unique_ptr<PurePursuitController> controller_;
+  std::unique_ptr<LocalAvoidanceManager>
+      local_avoidance_manager_; // 新增：局部路径规划器
   std::unique_ptr<FrontObstacleDetector>
-      front_obstacle_detector_;  // 新增：前方障碍物检测器
+      front_obstacle_detector_; // 新增：前方障碍物检测器
 
   // 控制相关
   geometry_msgs::msg::Twist last_cmd_vel_;
@@ -186,8 +187,8 @@ class PurePursuitLocalPlanner {
    */
   void loadParameters();
 
-  void setLocalReplanningActive(bool active);
-  bool isLocalReplanningEnabled() const;
+  void publishAvoidanceFailure(bool failed);
+  void publishAvoidanceState(const LocalAvoidanceOutput &output);
 
   /**
    * @brief 控制回调函数
@@ -223,8 +224,10 @@ class PurePursuitLocalPlanner {
    * @param lookahead_point 输出的前瞻点
    * @return 计算是否成功
    */
-  bool computeLookaheadPoint(const geometry_msgs::msg::PoseStamped& robot_pose,
-                             geometry_msgs::msg::PointStamped& lookahead_point);
+  bool computeLookaheadPoint(const geometry_msgs::msg::PoseStamped &robot_pose,
+                             bool local_tracking,
+                             const std::optional<nav_msgs::msg::Path> &local_path,
+                             geometry_msgs::msg::PointStamped &lookahead_point);
 
   /**
    * @brief 计算Pure Pursuit控制指令
@@ -233,91 +236,45 @@ class PurePursuitLocalPlanner {
    * @param cmd_vel 输出的控制指令
    * @return 计算是否成功
    */
-  bool computePurePursuitCommand(
-      const geometry_msgs::msg::PoseStamped& robot_pose,
-      const geometry_msgs::msg::PointStamped& lookahead_point,
-      geometry_msgs::msg::Twist& cmd_vel);
-
-  /**
-   * @brief 应用速度限制
-   * @param cmd_vel 控制指令
-   */
-  void applyVelocityLimits(geometry_msgs::msg::Twist& cmd_vel);
-
   /**
    * @brief 发布可视化信息
    */
   void publishVisualization(
-      const geometry_msgs::msg::PoseStamped& robot_pose,
-      const geometry_msgs::msg::PointStamped& lookahead_point);
+      const geometry_msgs::msg::PointStamped &lookahead_point);
 
   /**
    * @brief 发布局部轨迹可视化
    */
-  void publishLocalTrajectory(const geometry_msgs::msg::PoseStamped& robot_pose,
-                              const geometry_msgs::msg::Twist& cmd_vel);
+  void publishLocalTrajectory(const geometry_msgs::msg::PoseStamped &robot_pose,
+                              const geometry_msgs::msg::Twist &cmd_vel);
 
   /**
    * @brief 发布速度箭头可视化
    */
-  void publishVelocityArrow(const geometry_msgs::msg::PoseStamped& robot_pose,
-                            const geometry_msgs::msg::Twist& cmd_vel);
+  void publishVelocityArrow(const geometry_msgs::msg::PoseStamped &robot_pose,
+                            const geometry_msgs::msg::Twist &cmd_vel);
 
   /**
    * @brief 生成局部轨迹预测路径
    */
-  nav_msgs::msg::Path generateLocalTrajectory(
-      const geometry_msgs::msg::PoseStamped& robot_pose,
-      const geometry_msgs::msg::Twist& cmd_vel, double prediction_time = 2.0,
-      double dt = 0.1);
-
-  /**
-   * @brief 计算两点间距离
-   */
-  static double calculateDistance(const geometry_msgs::msg::Point& p1,
-                                  const geometry_msgs::msg::Point& p2);
-
-  /**
-   * @brief 计算圆与线段的交点
-   * @param circle_x 圆心x坐标
-   * @param circle_y 圆心y坐标
-   * @param radius 圆半径
-   * @param line_start 线段起点
-   * @param line_end 线段终点
-   * @param intersections 输出交点，最多两个
-   * @return 交点数量
-   */
-  static size_t computeCircleLineIntersection(
-      double circle_x, double circle_y, double radius,
-      const geometry_msgs::msg::Point& line_start,
-      const geometry_msgs::msg::Point& line_end,
-      std::array<geometry_msgs::msg::Point, 2>& intersections);
+  nav_msgs::msg::Path
+  generateLocalTrajectory(const geometry_msgs::msg::PoseStamped &robot_pose,
+                          const geometry_msgs::msg::Twist &cmd_vel,
+                          double prediction_time = 2.0, double dt = 0.1);
 
   /**
    * @brief 更新路径进度索引（防止回头）
    * @param robot_pose 机器人当前位姿
    */
-  void updatePathProgress(const geometry_msgs::msg::PoseStamped& robot_pose);
+  void updatePathProgress(const geometry_msgs::msg::PoseStamped &robot_pose);
 
   /**
    * @brief 检查是否已达到目标朝向
    * @param robot_pose 机器人当前位姿
    * @return 是否达到目标朝向
    */
-  bool isTargetOrientationReached(
-      const geometry_msgs::msg::PoseStamped& robot_pose);
-
-  /**
-   * @brief 计算朝向调整控制指令
-   * @param robot_pose 机器人当前位姿
-   * @param cmd_vel 输出的控制指令
-   * @return 计算是否成功
-   */
-  bool computeOrientationAdjustmentCommand(
-      const geometry_msgs::msg::PoseStamped& robot_pose,
-      geometry_msgs::msg::Twist& cmd_vel);
 };
 
-}  // namespace pure_pursuit_local_planner
+} // namespace pure_pursuit_local_planner
 
-#endif  // PURE_PURSUIT_LOCAL_PLANNER_H
+#endif // PURE_PURSUIT_LOCAL_PLANNER_H

@@ -131,8 +131,6 @@ void ObstacleStop::loadParameters() {
       "command_timeout_sec", config_.command_timeout_sec);
   config_.control_frequency = node_->declare_parameter<double>(
       "control_frequency", config_.control_frequency);
-  config_.minimum_filtered_points = node_->declare_parameter<int>(
-      "minimum_filtered_points", config_.minimum_filtered_points);
   config_.publish_visualization = node_->declare_parameter<bool>(
       "publish_visualization", config_.publish_visualization);
 }
@@ -173,8 +171,7 @@ void ObstacleStop::lidarCallback(
   const auto grid_cell_count =
       static_cast<std::size_t>(config_.grid_width * config_.grid_height);
   occupied_cells.reserve(std::min(message->points.size(), grid_cell_count));
-  const std::size_t filtered_points =
-      buildObstacleGrid(*message, grid, occupied_cells);
+  buildObstacleGrid(*message, grid, occupied_cells);
   inflateGrid(grid, occupied_cells);
 
   // 近矩形强制停车，紧接其后的远矩形执行减速。
@@ -187,8 +184,9 @@ void ObstacleStop::lidarCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     has_lidar_ = true;
-    lidar_valid_ = filtered_points >=
-                   static_cast<std::size_t>(config_.minimum_filtered_points);
+    // 只把原始点云消息为空视为传感器数据异常。障碍过滤后没有点表示
+    // 当前检测范围内没有有效障碍，不能据此阻断机器运动。
+    lidar_valid_ = !message->points.empty();
     if (lidar_valid_) {
       updateObstacleState(raw_hard_stop, raw_slowdown, now);
     }
@@ -220,7 +218,7 @@ void ObstacleStop::obstacleStopEnabledCallback(
   obstacle_stop_enabled_ = message->data;
 }
 
-std::size_t ObstacleStop::buildObstacleGrid(
+void ObstacleStop::buildObstacleGrid(
     const livox_ros_driver2::msg::CustomMsg &message,
     std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const {
   grid.assign(
@@ -228,7 +226,6 @@ std::size_t ObstacleStop::buildObstacleGrid(
       kFree);
   occupied_cells.clear();
 
-  std::size_t filtered_points = 0U;
   for (const auto &point : message.points) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
         !std::isfinite(point.z)) {
@@ -246,7 +243,6 @@ std::size_t ObstacleStop::buildObstacleGrid(
     if (range < config_.range_min || range > config_.range_max) continue;
     const double angle = std::atan2(point_base.y(), point_base.x());
     if (angle < config_.angle_min || angle > config_.angle_max) continue;
-    ++filtered_points;
 
     int mx = 0;
     int my = 0;
@@ -260,7 +256,6 @@ std::size_t ObstacleStop::buildObstacleGrid(
       }
     }
   }
-  return filtered_points;
 }
 
 void ObstacleStop::inflateGrid(
@@ -393,7 +388,7 @@ void ObstacleStop::controlCallback() {
     reason = has_lidar ? "MID360 data timed out" : "waiting for MID360 data";
   } else if (!lidar_valid) {
     state = State::kSensorFault;
-    reason = "MID360 filtered point count is too low";
+    reason = "MID360 point cloud is empty";
   } else if (hard_stop) {
     state = State::kObstacleStop;
     reason = "obstacle in hard stop rectangle";
@@ -409,6 +404,15 @@ void ObstacleStop::controlCallback() {
     safe_command = planned;
   }
 
+  RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 500,
+      "[OBSTACLE_CMD] state=%s, enabled=%s, lidar_fresh=%s, "
+      "command_fresh=%s, planned=(vx=%.3f, vy=%.3f, wz=%.3f), "
+      "output=(vx=%.3f, vy=%.3f, wz=%.3f)",
+      stateName(state), obstacle_stop_enabled ? "true" : "false",
+      lidar_fresh ? "true" : "false", command_fresh ? "true" : "false",
+      planned.linear.x, planned.linear.y, planned.angular.z,
+      safe_command.linear.x, safe_command.linear.y, safe_command.angular.z);
   safe_cmd_pub_->publish(safe_command);
   std_msgs::msg::Bool stop_active;
   stop_active.data = state != State::kClear;

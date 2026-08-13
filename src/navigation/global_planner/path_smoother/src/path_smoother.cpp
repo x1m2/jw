@@ -101,11 +101,19 @@ void PathSmoother::pathWithPolicyCallback(
   // 保存原始路径
   last_raw_path_ = msg->path;
 
-  // 设置全局坐标系
+  // 保留路径源的坐标系。普通拓扑导航使用map，FAST-LIO UWB跟随使用odom；
+  // 平滑器不能把odom坐标数值仅通过改header伪装成map。
   nav_msgs::msg::Path path_to_smooth = msg->path;
-  path_to_smooth.header.frame_id = global_frame_;
+  if (path_to_smooth.header.frame_id.empty()) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Input path frame is empty, falling back to configured frame '%s'",
+                global_frame_.c_str());
+    path_to_smooth.header.frame_id = global_frame_;
+  }
+  const bool dynamic_path = msg->dynamic_path;
   const auto publish_path =
-      [this, &path_to_smooth, &raw_policy, &raw_avoidance_policy](
+      [this, &path_to_smooth, &raw_policy, &raw_avoidance_policy,
+       dynamic_path](
           const nav_msgs::msg::Path &path) {
     smoothed_path_pub_->publish(path);
     navigation_interfaces::msg::PathWithPolicy path_with_policy;
@@ -114,6 +122,7 @@ void PathSmoother::pathWithPolicyCallback(
         remapPolicyToSmoothedPath(path_to_smooth, raw_policy, path);
     path_with_policy.obstacle_avoidance_enabled = remapPolicyToSmoothedPath(
         path_to_smooth, raw_avoidance_policy, path);
+    path_with_policy.dynamic_path = dynamic_path;
     smoothed_path_with_policy_pub_->publish(path_with_policy);
   };
   {

@@ -30,6 +30,8 @@ def generate_launch_description():
     rviz_config = LaunchConfiguration('rviz_config')
     launch_rviz = LaunchConfiguration('launch_rviz')
     runtime_profile = LaunchConfiguration('runtime_profile')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    global_frame = LaunchConfiguration('global_frame')
 
     return LaunchDescription([
 
@@ -68,6 +70,16 @@ def generate_launch_description():
             default_value='test',
             description='test autostarts; platform waits for robot_runtime'
         ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation clock from /clock'
+        ),
+        DeclareLaunchArgument(
+            'global_frame',
+            default_value='map',
+            description='Tracking frame; use odom for FAST-LIO UWB follow'
+        ),
 
         Node(
             package='pure_pursuit_local_planner',
@@ -76,7 +88,11 @@ def generate_launch_description():
             parameters=[
                 config_file,
                 robot_param_file,
-                {'runtime_profile': runtime_profile}
+                {
+                    'runtime_profile': runtime_profile,
+                    'use_sim_time': use_sim_time,
+                    'global_frame': global_frame,
+                }
             ],
             remappings=[
                 ('/local_costmap', '/local_costmap/costmap'),

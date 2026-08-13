@@ -1,10 +1,15 @@
 #include "local_planner/costmap_2d.hpp"
 
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace local_planner {
@@ -36,29 +41,40 @@ CostMap2D::CostMap2D(const rclcpp::Node::SharedPtr& node)
 }
 
 bool CostMap2D::initialize() {
-  if (angle_increment_ <= 0.0 || angle_max_ <= angle_min_ ||
-      range_max_ <= range_min_ || max_height_ < min_height_) {
+  if (projection_config_.angle_increment <= 0.0 ||
+      projection_config_.angle_max <= projection_config_.angle_min ||
+      projection_config_.range_max <= projection_config_.range_min ||
+      projection_config_.max_height < projection_config_.min_height) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Invalid Livox projection parameters: angle/range/height "
                  "limits must be ordered and angle_increment must be > 0");
     return false;
   }
 
-  livox_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-      livox_topic_, rclcpp::SensorDataQoS(),
-      std::bind(&CostMap2D::livoxCallback, this, std::placeholders::_1));
+  if (lidar_type_ == 1) {
+    livox_custom_sub_ =
+        node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+            livox_topic_, rclcpp::SensorDataQoS(),
+            std::bind(&CostMap2D::livoxCallback, this, std::placeholders::_1));
+    RCLCPP_INFO(node_->get_logger(), "Point cloud input: Livox CustomMsg on %s",
+                livox_topic_.c_str());
+  } else {
+    pointcloud2_sub_ =
+        node_->create_subscription<sensor_msgs::msg::PointCloud2>(
+            livox_topic_, rclcpp::SensorDataQoS(),
+            std::bind(&CostMap2D::pointCloud2Callback, this,
+                      std::placeholders::_1));
+    RCLCPP_INFO(node_->get_logger(), "Point cloud input: PointCloud2 on %s",
+                livox_topic_.c_str());
+  }
 
-  costmap_pub_ = node_->create_publisher<nav_msgs::msg::OccupancyGrid>(
-      "/costmap", 1);
+  costmap_pub_ =
+      node_->create_publisher<nav_msgs::msg::OccupancyGrid>("/costmap", 1);
 
-  publishLidarStaticTransform();
   initializeLookupTables();
   initializeCostMap();
-
-  RCLCPP_INFO(node_->get_logger(), "CostMap2D node initialized successfully");
   RCLCPP_INFO(node_->get_logger(), "Subscribed to Livox CustomMsg: %s",
               livox_topic_.c_str());
-  RCLCPP_INFO(node_->get_logger(), "Publishing costmap to: costmap");
 
   return true;
 }
@@ -68,6 +84,7 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("robot_base_frame", "base_link");
   node_->declare_parameter<std::string>("livox_topic", "/livox/lidar");
   node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
+  node_->declare_parameter<int>("lidar_type", 1);
 
   node_->declare_parameter<std::vector<double>>("lidar_to_base_T",
                                                 std::vector<double>());
@@ -102,25 +119,19 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("robot_base_frame", robot_base_frame_);
   node_->get_parameter("livox_topic", livox_topic_);
   node_->get_parameter("lidar_frame", lidar_frame_);
+  node_->get_parameter("lidar_type", lidar_type_);
 
   std::vector<double> lidar_to_base_T;
   std::vector<double> lidar_to_base_R;
   node_->get_parameter("lidar_to_base_T", lidar_to_base_T);
   node_->get_parameter("lidar_to_base_R", lidar_to_base_R);
-  lidar_x_ = lidar_to_base_T[0];
-  lidar_y_ = lidar_to_base_T[1];
-  lidar_z_ = lidar_to_base_T[2];
-  lidar_roll_ = lidar_to_base_R[0];
-  lidar_pitch_ = lidar_to_base_R[1];
-  lidar_yaw_ = lidar_to_base_R[2];
-
-  node_->get_parameter("min_height", min_height_);
-  node_->get_parameter("max_height", max_height_);
-  node_->get_parameter("angle_min", angle_min_);
-  node_->get_parameter("angle_max", angle_max_);
-  node_->get_parameter("angle_increment", angle_increment_);
-  node_->get_parameter("range_min", range_min_);
-  node_->get_parameter("range_max", range_max_);
+  node_->get_parameter("min_height", projection_config_.min_height);
+  node_->get_parameter("max_height", projection_config_.max_height);
+  node_->get_parameter("angle_min", projection_config_.angle_min);
+  node_->get_parameter("angle_max", projection_config_.angle_max);
+  node_->get_parameter("angle_increment", projection_config_.angle_increment);
+  node_->get_parameter("range_min", projection_config_.range_min);
+  node_->get_parameter("range_max", projection_config_.range_max);
 
   node_->get_parameter("resolution", resolution_);
   node_->get_parameter("width", width_);
@@ -138,35 +149,23 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("max_pitch_angle", max_pitch_angle_);
   node_->get_parameter("pitch_recovery_time", pitch_recovery_time_);
 
-  const Eigen::AngleAxisd roll_angle(lidar_roll_, Eigen::Vector3d::UnitX());
-  const Eigen::AngleAxisd pitch_angle(lidar_pitch_, Eigen::Vector3d::UnitY());
-  const Eigen::AngleAxisd yaw_angle(lidar_yaw_, Eigen::Vector3d::UnitZ());
+  const Eigen::AngleAxisd roll_angle(lidar_to_base_R[0],
+                                     Eigen::Vector3d::UnitX());
+  const Eigen::AngleAxisd pitch_angle(lidar_to_base_R[1],
+                                      Eigen::Vector3d::UnitY());
+  const Eigen::AngleAxisd yaw_angle(lidar_to_base_R[2],
+                                    Eigen::Vector3d::UnitZ());
   lidar_to_base_transform_ =
-      Eigen::Translation3d(lidar_x_, lidar_y_, lidar_z_) * yaw_angle *
-      pitch_angle * roll_angle;
-}
-
-void CostMap2D::publishLidarStaticTransform() {
-  static_tf_broadcaster_ =
-      std::make_unique<tf2_ros::StaticTransformBroadcaster>(node_);
-
-  geometry_msgs::msg::TransformStamped transform;
-  transform.header.stamp = node_->now();
-  transform.header.frame_id = robot_base_frame_;
-  transform.child_frame_id = lidar_frame_;
-  transform.transform.translation.x = lidar_x_;
-  transform.transform.translation.y = lidar_y_;
-  transform.transform.translation.z = lidar_z_;
-
-  tf2::Quaternion rotation;
-  rotation.setRPY(lidar_roll_, lidar_pitch_, lidar_yaw_);
-  transform.transform.rotation = tf2::toMsg(rotation);
-  static_tf_broadcaster_->sendTransform(transform);
+      Eigen::Translation3d(lidar_to_base_T[0], lidar_to_base_T[1],
+                           lidar_to_base_T[2]) *
+      yaw_angle * pitch_angle * roll_angle;
 }
 
 void CostMap2D::initializeCostMap() {
   costmap_.resize(width_ * height_);
   obstacle_timestamps_.resize(width_ * height_);
+  costmap_scratch_.resize(width_ * height_);
+  timestamp_scratch_.resize(width_ * height_);
 
   std::fill(costmap_.begin(), costmap_.end(), FREE_SPACE);
 
@@ -199,11 +198,14 @@ void CostMap2D::initializeCostMap() {
 
 void CostMap2D::initializeLookupTables() {
   const auto ray_count = static_cast<std::size_t>(
-      std::ceil((angle_max_ - angle_min_) / angle_increment_));
+      std::ceil((projection_config_.angle_max - projection_config_.angle_min) /
+                projection_config_.angle_increment));
   ray_cosines_.resize(ray_count);
   ray_sines_.resize(ray_count);
   for (std::size_t i = 0; i < ray_count; ++i) {
-    const double angle = angle_min_ + static_cast<double>(i) * angle_increment_;
+    const double angle =
+        projection_config_.angle_min +
+        static_cast<double>(i) * projection_config_.angle_increment;
     ray_cosines_[i] = static_cast<float>(std::cos(angle));
     ray_sines_[i] = static_cast<float>(std::sin(angle));
   }
@@ -219,27 +221,25 @@ void CostMap2D::initializeLookupTables() {
       (2 * inflation_cells + 1) * (2 * inflation_cells + 1)));
   for (int dx = -inflation_cells; dx <= inflation_cells; ++dx) {
     for (int dy = -inflation_cells; dy <= inflation_cells; ++dy) {
-      const double dist = std::hypot(static_cast<double>(dx),
-                                     static_cast<double>(dy)) *
-                          resolution_;
+      const double dist =
+          std::hypot(static_cast<double>(dx), static_cast<double>(dy)) *
+          resolution_;
       if (dist > inflation_radius_) {
         continue;
       }
 
       const double normalized_dist = dist / inflation_radius_;
       unsigned char cost = static_cast<unsigned char>(
-          LETHAL_OBSTACLE -
-          normalized_dist * (LETHAL_OBSTACLE - FREE_SPACE));
+          LETHAL_OBSTACLE - normalized_dist * (LETHAL_OBSTACLE - FREE_SPACE));
       cost = std::max(static_cast<unsigned char>(FREE_SPACE + 1), cost);
-      cost =
-          std::min(static_cast<unsigned char>(LETHAL_OBSTACLE - 1), cost);
+      cost = std::min(static_cast<unsigned char>(LETHAL_OBSTACLE - 1), cost);
       inflation_offsets_.push_back(InflationOffset{dx, dy, cost});
     }
   }
 }
 
 void CostMap2D::livoxCallback(
-    const livox_ros_driver2::msg::CustomMsg::SharedPtr livox_msg) {
+    const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr livox_msg) {
   if (livox_msg->points.empty()) {
     return;
   }
@@ -256,57 +256,97 @@ void CostMap2D::livoxCallback(
   processLaserScan(*livoxToLaserScan(*livox_msg));
 }
 
-sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
-    const livox_ros_driver2::msg::CustomMsg& livox_msg) const {
-  auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
-  scan->header.stamp = livox_msg.header.stamp;
-  scan->header.frame_id = robot_base_frame_;
-  scan->angle_min = static_cast<float>(angle_min_);
-  scan->angle_max = static_cast<float>(angle_max_);
-  scan->angle_increment = static_cast<float>(angle_increment_);
-  scan->range_min = static_cast<float>(range_min_);
-  scan->range_max = static_cast<float>(range_max_);
+void CostMap2D::pointCloud2Callback(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr pointcloud_msg) {
+  if (pointcloud_msg->data.empty()) {
+    return;
+  }
 
+  if (!pointcloud_msg->header.frame_id.empty() &&
+      pointcloud_msg->header.frame_id != lidar_frame_) {
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 5000,
+        "PointCloud2 frame '%s' differs from configured lidar_frame '%s'; "
+        "using configured fixed extrinsics",
+        pointcloud_msg->header.frame_id.c_str(), lidar_frame_.c_str());
+  }
+
+  processLaserScan(*pointCloud2ToLaserScan(*pointcloud_msg));
+}
+
+sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::makeEmptyLaserScan(
+    const builtin_interfaces::msg::Time& stamp) const {
+  auto scan = std::make_shared<sensor_msgs::msg::LaserScan>();
+  scan->header.stamp = stamp;
+  scan->header.frame_id = robot_base_frame_;
+  scan->angle_min = static_cast<float>(projection_config_.angle_min);
+  scan->angle_max = static_cast<float>(projection_config_.angle_max);
+  scan->angle_increment =
+      static_cast<float>(projection_config_.angle_increment);
+  scan->range_min = static_cast<float>(projection_config_.range_min);
+  scan->range_max = static_cast<float>(projection_config_.range_max);
   scan->ranges.assign(ray_cosines_.size(),
                       std::numeric_limits<float>::infinity());
+  return scan;
+}
+
+void CostMap2D::projectLidarPoint(double x, double y, double z,
+                                  sensor_msgs::msg::LaserScan& scan) const {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    return;
+  }
+
+  const Eigen::Vector3d point_base =
+      lidar_to_base_transform_ * Eigen::Vector3d(x, y, z);
+  if (point_base.z() < projection_config_.min_height ||
+      point_base.z() > projection_config_.max_height) {
+    return;
+  }
+
+  const double range = std::hypot(point_base.x(), point_base.y());
+  if (range < projection_config_.range_min ||
+      range > projection_config_.range_max) {
+    return;
+  }
+
+  const double angle = std::atan2(point_base.y(), point_base.x());
+  if (angle < projection_config_.angle_min ||
+      angle > projection_config_.angle_max) {
+    return;
+  }
+
+  const auto index =
+      static_cast<std::size_t>((angle - projection_config_.angle_min) /
+                               projection_config_.angle_increment);
+  if (index < scan.ranges.size() && range < scan.ranges[index]) {
+    scan.ranges[index] = static_cast<float>(range);
+  }
+}
+
+sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::livoxToLaserScan(
+    const livox_ros_driver2::msg::CustomMsg& livox_msg) const {
+  auto scan = makeEmptyLaserScan(livox_msg.header.stamp);
 
   for (const auto& livox_point : livox_msg.points) {
-    if (!std::isfinite(livox_point.x) || !std::isfinite(livox_point.y) ||
-        !std::isfinite(livox_point.z)) {
-      continue;
-    }
-
-    const Eigen::Vector3d point_base =
-        lidar_to_base_transform_ *
-        Eigen::Vector3d(livox_point.x, livox_point.y, livox_point.z);
-
-    if (point_base.z() < min_height_ || point_base.z() > max_height_) {
-      continue;
-    }
-
-    const double range = std::hypot(point_base.x(), point_base.y());
-    if (range < range_min_ || range > range_max_) {
-      continue;
-    }
-
-    const double angle = std::atan2(point_base.y(), point_base.x());
-    if (angle < angle_min_ || angle > angle_max_) {
-      continue;
-    }
-
-    const auto index =
-        static_cast<std::size_t>((angle - angle_min_) / angle_increment_);
-    if (index < scan->ranges.size() && range < scan->ranges[index]) {
-      scan->ranges[index] = static_cast<float>(range);
-    }
+    projectLidarPoint(livox_point.x, livox_point.y, livox_point.z, *scan);
   }
 
   return scan;
 }
 
-void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
-  std::lock_guard<std::mutex> lock(costmap_mutex_);
+sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::pointCloud2ToLaserScan(
+    const sensor_msgs::msg::PointCloud2& pointcloud_msg) const {
+  pcl::PointCloud<pcl::PointXYZ> pointcloud;
+  pcl::fromROSMsg(pointcloud_msg, pointcloud);
 
+  auto scan = makeEmptyLaserScan(pointcloud_msg.header.stamp);
+  for (const auto& point : pointcloud.points) {
+    projectLidarPoint(point.x, point.y, point.z, *scan);
+  }
+  return scan;
+}
+
+void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
   geometry_msgs::msg::TransformStamped robot_transform;
   try {
     // 同一帧统一使用同一个最新位姿，避免重复查询TF以及各处理阶段位姿不一致。
@@ -321,128 +361,59 @@ void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
 
   updateMapOrigin(robot_transform);
   const bool pitch_exceeded = isPitchAngleExceeded(robot_transform);
+  tf2::Transform map_from_base;
+  tf2::fromMsg(robot_transform.transform, map_from_base);
 
   if (pitch_exceeded) {
     clearCostMap();
     RCLCPP_DEBUG(node_->get_logger(), "Pitch angle exceeded, costmap cleared");
   } else {
-    raytraceFreespace(scan_msg, robot_transform);
+    raytraceFreespace(scan_msg, map_from_base);
+    markObstacles(scan_msg, map_from_base);
+    inflateObstacles();
 
-    pcl::PointCloud<pcl::PointXYZ> scan_cloud;
-    scanToPointCloud(scan_msg, scan_cloud);
-
-    pcl::PointCloud<pcl::PointXYZ> global_cloud;
-    if (transformPointCloud(scan_cloud, global_cloud, global_frame_,
-                            robot_transform)) {
-      markObstacles(global_cloud);
-      inflateObstacles();
-
-      if (use_time_decay_) {
-        decayObstacles();
-      }
-    } else {
-      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                           "Failed to transform scan to global frame");
+    if (use_time_decay_) {
+      decayObstacles();
     }
   }
 
   publishCostMap();
 }
 
-void CostMap2D::scanToPointCloud(const sensor_msgs::msg::LaserScan& scan,
-                                 pcl::PointCloud<pcl::PointXYZ>& cloud) {
-  cloud.clear();
-  cloud.header.frame_id = scan.header.frame_id;
-  pcl_conversions::toPCL(scan.header.stamp, cloud.header.stamp);
+void CostMap2D::clearCostMap() {
+  std::fill(costmap_.begin(), costmap_.end(), FREE_SPACE);
+}
 
-  for (size_t i = 0; i < scan.ranges.size(); ++i) {
-    float range = scan.ranges[i];
-
+void CostMap2D::markObstacles(const sensor_msgs::msg::LaserScan& scan,
+                              const tf2::Transform& map_from_base) {
+  const rclcpp::Time current_time = node_->now();
+  for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
+    const float range = scan.ranges[i];
     if (range < scan.range_min || range > scan.range_max ||
         range < min_obstacle_range_ || range > max_obstacle_range_) {
       continue;
     }
 
-    pcl::PointXYZ point;
+    double local_x;
+    double local_y;
     if (i < ray_cosines_.size()) {
-      point.x = range * ray_cosines_[i];
-      point.y = range * ray_sines_[i];
+      local_x = range * ray_cosines_[i];
+      local_y = range * ray_sines_[i];
     } else {
-      const float angle =
-          scan.angle_min + static_cast<float>(i) * scan.angle_increment;
-      point.x = range * std::cos(angle);
-      point.y = range * std::sin(angle);
+      const double angle =
+          scan.angle_min + static_cast<double>(i) * scan.angle_increment;
+      local_x = range * std::cos(angle);
+      local_y = range * std::sin(angle);
     }
-    point.z = 0.0f;
+    const tf2::Vector3 point_map =
+        map_from_base * tf2::Vector3(local_x, local_y, 0.0);
 
-    cloud.points.push_back(point);
-  }
-
-  cloud.width = static_cast<std::uint32_t>(cloud.points.size());
-  cloud.height = 1;
-  cloud.is_dense = true;
-}
-
-bool CostMap2D::transformPointCloud(
-    const pcl::PointCloud<pcl::PointXYZ>& cloud_in,
-    pcl::PointCloud<pcl::PointXYZ>& cloud_out,
-    const std::string& target_frame,
-    const geometry_msgs::msg::TransformStamped& transform) {
-  try {
-    cloud_out.clear();
-    cloud_out.header.frame_id = target_frame;
-    cloud_out.header.stamp = cloud_in.header.stamp;
-
-    for (const auto& point : cloud_in.points) {
-      geometry_msgs::msg::PointStamped point_in;
-      geometry_msgs::msg::PointStamped point_out;
-
-      point_in.header.frame_id = cloud_in.header.frame_id;
-      point_in.header.stamp = transform.header.stamp;
-      point_in.point.x = point.x;
-      point_in.point.y = point.y;
-      point_in.point.z = point.z;
-
-      tf2::doTransform(point_in, point_out, transform);
-
-      pcl::PointXYZ transformed_point;
-      transformed_point.x = static_cast<float>(point_out.point.x);
-      transformed_point.y = static_cast<float>(point_out.point.y);
-      transformed_point.z = static_cast<float>(point_out.point.z);
-
-      cloud_out.points.push_back(transformed_point);
-    }
-
-    cloud_out.width = static_cast<std::uint32_t>(cloud_out.points.size());
-    cloud_out.height = 1;
-    cloud_out.is_dense = true;
-
-    return true;
-  } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                         "Transform failed: %s", ex.what());
-    return false;
-  }
-}
-
-void CostMap2D::clearCostMap() {
-  std::fill(costmap_.begin(), costmap_.end(), FREE_SPACE);
-}
-
-void CostMap2D::markObstacles(const pcl::PointCloud<pcl::PointXYZ>& cloud) {
-  rclcpp::Time current_time = node_->now();
-
-  for (const auto& point : cloud.points) {
     int mx;
     int my;
-
-    if (worldToMap(point.x, point.y, mx, my)) {
-      int index = my * width_ + mx;
-      setCost(mx, my, LETHAL_OBSTACLE);
-
-      if (index >= 0 && index < static_cast<int>(obstacle_timestamps_.size())) {
-        obstacle_timestamps_[index] = current_time;
-      }
+    if (worldToMap(point_map.x(), point_map.y(), mx, my)) {
+      const auto index = static_cast<std::size_t>(my * width_ + mx);
+      costmap_[index] = LETHAL_OBSTACLE;
+      obstacle_timestamps_[index] = current_time;
     }
   }
 }
@@ -471,8 +442,7 @@ void CostMap2D::inflateObstacles() {
       }
 
       const auto index = static_cast<std::size_t>(ny * width_ + nx);
-      if (costmap_[index] != LETHAL_OBSTACLE &&
-          offset.cost > costmap_[index]) {
+      if (costmap_[index] != LETHAL_OBSTACLE && offset.cost > costmap_[index]) {
         costmap_[index] = offset.cost;
       }
     }
@@ -498,8 +468,10 @@ void CostMap2D::updateMapOrigin(
 
     rollMap(offset_x, offset_y);
 
-    origin_x_ = new_origin_x;
-    origin_y_ = new_origin_y;
+    // 地图内容只移动了整数个栅格，原点必须移动完全相同的距离，避免
+    // 连续坐标的小数部分导致历史地图与OccupancyGrid原点逐渐错位。
+    origin_x_ += offset_x * resolution_;
+    origin_y_ += offset_y * resolution_;
 
     RCLCPP_DEBUG(node_->get_logger(),
                  "Map rolled by (%d, %d) pixels to origin (%.2f, %.2f, %.2f)",
@@ -514,24 +486,12 @@ void CostMap2D::updateMapOrigin(
 }
 
 bool CostMap2D::worldToMap(double wx, double wy, int& mx, int& my) {
-  mx = static_cast<int>((wx - origin_x_) / resolution_);
-  my = static_cast<int>((wy - origin_y_) / resolution_);
+  // 必须向下取整。直接static_cast<int>会向零截断，使原点左侧/下侧不足
+  // 一个栅格的越界点错误落入第0格。
+  mx = static_cast<int>(std::floor((wx - origin_x_) / resolution_));
+  my = static_cast<int>(std::floor((wy - origin_y_) / resolution_));
 
   return mx >= 0 && mx < width_ && my >= 0 && my < height_;
-}
-
-void CostMap2D::setCost(int mx, int my, unsigned char cost) {
-  if (mx >= 0 && mx < width_ && my >= 0 && my < height_) {
-    costmap_[my * width_ + mx] = cost;
-  }
-}
-
-unsigned char CostMap2D::getCost(int mx, int my) {
-  if (mx >= 0 && mx < width_ && my >= 0 && my < height_) {
-    return costmap_[my * width_ + mx];
-  }
-
-  return NO_INFORMATION;
 }
 
 bool CostMap2D::isPitchAngleExceeded(
@@ -660,40 +620,16 @@ void CostMap2D::decayObstacles() {
 }
 
 void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
-                                  const geometry_msgs::msg::TransformStamped&
-                                      robot_transform) {
+                                  const tf2::Transform& map_from_base) {
   const rclcpp::Time frame_time = node_->now();
   int robot_mx;
   int robot_my;
 
-  if (!worldToMap(robot_transform.transform.translation.x,
-                  robot_transform.transform.translation.y, robot_mx,
-                  robot_my)) {
+  const tf2::Vector3& robot_origin = map_from_base.getOrigin();
+  if (!worldToMap(robot_origin.x(), robot_origin.y(), robot_mx, robot_my)) {
     RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 5000,
         "Robot position outside costmap bounds for raytracing");
-    return;
-  }
-
-  geometry_msgs::msg::PointStamped sensor_origin_local;
-  geometry_msgs::msg::PointStamped sensor_origin_global;
-
-  sensor_origin_local.header.frame_id = scan.header.frame_id;
-  sensor_origin_local.header.stamp = robot_transform.header.stamp;
-  sensor_origin_local.point.x = 0.0;
-  sensor_origin_local.point.y = 0.0;
-  sensor_origin_local.point.z = 0.0;
-
-  tf2::doTransform(sensor_origin_local, sensor_origin_global,
-                   robot_transform);
-
-  int sensor_mx;
-  int sensor_my;
-
-  if (!worldToMap(sensor_origin_global.point.x, sensor_origin_global.point.y,
-                  sensor_mx, sensor_my)) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                         "Sensor position outside costmap bounds");
     return;
   }
 
@@ -716,33 +652,28 @@ void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
       effective_range = static_cast<float>(max_obstacle_range_);
     }
 
-    geometry_msgs::msg::PointStamped ray_end_local;
-    geometry_msgs::msg::PointStamped ray_end_global;
-
-    ray_end_local.header.frame_id = scan.header.frame_id;
-    ray_end_local.header.stamp = robot_transform.header.stamp;
+    double local_x;
+    double local_y;
     if (i < ray_cosines_.size()) {
-      ray_end_local.point.x = effective_range * ray_cosines_[i];
-      ray_end_local.point.y = effective_range * ray_sines_[i];
+      local_x = effective_range * ray_cosines_[i];
+      local_y = effective_range * ray_sines_[i];
     } else {
-      const float angle =
-          scan.angle_min + static_cast<float>(i) * scan.angle_increment;
-      ray_end_local.point.x = effective_range * std::cos(angle);
-      ray_end_local.point.y = effective_range * std::sin(angle);
+      const double angle =
+          scan.angle_min + static_cast<double>(i) * scan.angle_increment;
+      local_x = effective_range * std::cos(angle);
+      local_y = effective_range * std::sin(angle);
     }
-    ray_end_local.point.z = 0.0;
-
-    tf2::doTransform(ray_end_local, ray_end_global, robot_transform);
+    const tf2::Vector3 ray_end_map =
+        map_from_base * tf2::Vector3(local_x, local_y, 0.0);
 
     int end_mx;
     int end_my;
 
-    if (worldToMap(ray_end_global.point.x, ray_end_global.point.y, end_mx,
-                   end_my)) {
+    if (worldToMap(ray_end_map.x(), ray_end_map.y(), end_mx, end_my)) {
       bool obstacle_hit = valid_range && range <= max_obstacle_range_ &&
                           range >= min_obstacle_range_;
 
-      clearRayPath(sensor_mx, sensor_my, end_mx, end_my, obstacle_hit,
+      clearRayPath(robot_mx, robot_my, end_mx, end_my, obstacle_hit,
                    frame_time);
     }
   }
@@ -794,9 +725,7 @@ void CostMap2D::publishCostMap() {
   costmap_msg_.header.frame_id = global_frame_;
 
   for (size_t i = 0; i < costmap_.size(); ++i) {
-    if (costmap_[i] == NO_INFORMATION) {
-      costmap_msg_.data[i] = -1;
-    } else if (costmap_[i] == LETHAL_OBSTACLE) {
+    if (costmap_[i] == LETHAL_OBSTACLE) {
       costmap_msg_.data[i] = 100;
     } else if (costmap_[i] == FREE_SPACE) {
       costmap_msg_.data[i] = 0;
@@ -814,26 +743,36 @@ void CostMap2D::publishCostMap() {
 }
 
 void CostMap2D::rollMap(int offset_x, int offset_y) {
-  std::vector<unsigned char> new_costmap(width_ * height_, FREE_SPACE);
-  std::vector<rclcpp::Time> new_timestamps(width_ * height_, node_->now());
+  const rclcpp::Time now = node_->now();
+  if (std::abs(offset_x) >= width_ || std::abs(offset_y) >= height_) {
+    // 新旧地图已经没有重叠区域，直接清空比逐格搬运更明确也更高效。
+    std::fill(costmap_.begin(), costmap_.end(), FREE_SPACE);
+    std::fill(obstacle_timestamps_.begin(), obstacle_timestamps_.end(), now);
+    return;
+  }
 
-  for (int old_y = 0; old_y < height_; ++old_y) {
-    for (int old_x = 0; old_x < width_; ++old_x) {
-      int new_x = old_x - offset_x;
-      int new_y = old_y - offset_y;
+  std::fill(costmap_scratch_.begin(), costmap_scratch_.end(), FREE_SPACE);
+  std::fill(timestamp_scratch_.begin(), timestamp_scratch_.end(), now);
 
-      if (new_x >= 0 && new_x < width_ && new_y >= 0 && new_y < height_) {
-        int old_index = old_y * width_ + old_x;
-        int new_index = new_y * width_ + new_x;
+  // 只遍历新旧地图的重叠区域，边界外区域已在scratch中初始化为空闲。
+  const int old_x_begin = std::max(0, offset_x);
+  const int old_x_end = std::min(width_, width_ + offset_x);
+  const int old_y_begin = std::max(0, offset_y);
+  const int old_y_end = std::min(height_, height_ + offset_y);
+  for (int old_y = old_y_begin; old_y < old_y_end; ++old_y) {
+    for (int old_x = old_x_begin; old_x < old_x_end; ++old_x) {
+      const int new_x = old_x - offset_x;
+      const int new_y = old_y - offset_y;
+      const int old_index = old_y * width_ + old_x;
+      const int new_index = new_y * width_ + new_x;
 
-        new_costmap[new_index] = costmap_[old_index];
-        new_timestamps[new_index] = obstacle_timestamps_[old_index];
-      }
+      costmap_scratch_[new_index] = costmap_[old_index];
+      timestamp_scratch_[new_index] = obstacle_timestamps_[old_index];
     }
   }
 
-  costmap_ = std::move(new_costmap);
-  obstacle_timestamps_ = std::move(new_timestamps);
+  costmap_.swap(costmap_scratch_);
+  obstacle_timestamps_.swap(timestamp_scratch_);
 }
 
 }  // namespace local_planner

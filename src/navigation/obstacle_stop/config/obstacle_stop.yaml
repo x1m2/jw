@@ -35,6 +35,4 @@
     lidar_timeout_sec: 0.30
     command_timeout_sec: 0.30
     control_frequency: 30.0
-    # 经过外参、高度、距离和角度过滤后的最少有效点数。
-    minimum_filtered_points: 10
     publish_visualization: true

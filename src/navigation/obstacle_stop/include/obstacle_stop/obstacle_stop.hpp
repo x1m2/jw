@@ -66,7 +66,6 @@ class ObstacleStop {
     double lidar_timeout_sec{0.30};
     double command_timeout_sec{0.30};
     double control_frequency{30.0};
-    int minimum_filtered_points{10};
     bool publish_visualization{true};
   };
 
@@ -88,7 +87,7 @@ class ObstacleStop {
   void controlCallback();
 
   // 过滤MID360点云并直接构建临时局部障碍栅格。
-  std::size_t buildObstacleGrid(
+  void buildObstacleGrid(
       const livox_ros_driver2::msg::CustomMsg &message,
       std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
   void inflateGrid(std::vector<uint8_t> &grid,

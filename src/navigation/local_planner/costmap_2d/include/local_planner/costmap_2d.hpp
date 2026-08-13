@@ -1,24 +1,21 @@
 #ifndef LOCAL_PLANNER_COSTMAP_2D_HPP
 #define LOCAL_PLANNER_COSTMAP_2D_HPP
 
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-#include <pcl_conversions/pcl_conversions.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Transform.h>
 #include <tf2_ros/buffer.h>
-#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
 #include <Eigen/Dense>
-#include <geometry_msgs/msg/point_stamped.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
-#include <mutex>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <vector>
@@ -26,17 +23,12 @@
 namespace local_planner {
 
 // 代价值定义
-static const unsigned char NO_INFORMATION = 255;
 static const unsigned char LETHAL_OBSTACLE = 254;
 static const unsigned char INSCRIBED_INFLATED_OBSTACLE = 253;
 static const unsigned char FREE_SPACE = 0;
 
 class CostMap2D {
  public:
-  /**
-   * @brief 构造函数
-   * @param node ROS2节点
-   */
   explicit CostMap2D(const rclcpp::Node::SharedPtr& node);
 
   ~CostMap2D() = default;
@@ -47,11 +39,6 @@ class CostMap2D {
    */
   bool initialize();
 
-  /**
-   * @brief 发布代价地图
-   */
-  void publishCostMap();
-
  private:
   struct InflationOffset {
     int dx;
@@ -59,50 +46,57 @@ class CostMap2D {
     unsigned char cost;
   };
 
+  // 三维点云裁剪并投影为二维射线时使用的参数集合。
+  struct PointCloudProjectionConfig {
+    double min_height;
+    double max_height;
+    double angle_min;
+    double angle_max;
+    double angle_increment;
+    double range_min;
+    double range_max;
+  };
+
   // ROS2相关
   rclcpp::Node::SharedPtr node_;
 
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
-      livox_sub_;
+      livox_custom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
+      pointcloud2_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_pub_;
 
   // TF相关
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
-  std::unique_ptr<tf2_ros::StaticTransformBroadcaster>
-      static_tf_broadcaster_;
 
   // Livox 原始点云回调及内部二维投影
   void livoxCallback(
-      const livox_ros_driver2::msg::CustomMsg::SharedPtr livox_msg);
+      const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr livox_msg);
+  void pointCloud2Callback(
+      const sensor_msgs::msg::PointCloud2::ConstSharedPtr pointcloud_msg);
   sensor_msgs::msg::LaserScan::SharedPtr livoxToLaserScan(
       const livox_ros_driver2::msg::CustomMsg& livox_msg) const;
+  sensor_msgs::msg::LaserScan::SharedPtr pointCloud2ToLaserScan(
+      const sensor_msgs::msg::PointCloud2& pointcloud_msg) const;
+  sensor_msgs::msg::LaserScan::SharedPtr makeEmptyLaserScan(
+      const builtin_interfaces::msg::Time& stamp) const;
+  void projectLidarPoint(double x, double y, double z,
+                         sensor_msgs::msg::LaserScan& scan) const;
   void processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg);
-  void publishLidarStaticTransform();
 
   // 参数
-  std::string global_frame_;      // 全局坐标系
+  std::string global_frame_;
   std::string robot_base_frame_;  // 机器人基座坐标系
-  std::string livox_topic_;       // Livox CustomMsg 话题名
-  std::string lidar_frame_;       // 雷达坐标系
+  std::string livox_topic_;
+  std::string lidar_frame_;
+  int lidar_type_;  // 1: Livox CustomMsg，其他: PointCloud2
 
   // 雷达在 robot_base_frame 中的固定外参
-  double lidar_x_;
-  double lidar_y_;
-  double lidar_z_;
-  double lidar_roll_;
-  double lidar_pitch_;
-  double lidar_yaw_;
   Eigen::Affine3d lidar_to_base_transform_;
 
   // 三维点云裁剪及二维投影参数
-  double min_height_;
-  double max_height_;
-  double angle_min_;
-  double angle_max_;
-  double angle_increment_;
-  double range_min_;
-  double range_max_;
+  PointCloudProjectionConfig projection_config_;
 
   // 代价地图参数
   double resolution_;  // 分辨率 (m/pixel)
@@ -134,13 +128,13 @@ class CostMap2D {
   // 代价地图数据
   std::vector<unsigned char> costmap_;
   std::vector<rclcpp::Time> obstacle_timestamps_;
+  // 滚动地图复用缓冲区，避免机器人每移动一个栅格都重新申请整图内存。
+  std::vector<unsigned char> costmap_scratch_;
+  std::vector<rclcpp::Time> timestamp_scratch_;
   nav_msgs::msg::OccupancyGrid costmap_msg_;
   std::vector<float> ray_cosines_;
   std::vector<float> ray_sines_;
   std::vector<InflationOffset> inflation_offsets_;
-
-  // 互斥锁
-  std::mutex costmap_mutex_;
 
   /**
    * @brief 初始化代价地图数据
@@ -151,27 +145,6 @@ class CostMap2D {
    * @brief 预计算固定射线方向和膨胀模板
    */
   void initializeLookupTables();
-
-  /**
-   * @brief 将激光数据转换为点云
-   * @param scan 激光数据
-   * @param cloud 输出点云
-   */
-  void scanToPointCloud(const sensor_msgs::msg::LaserScan& scan,
-                        pcl::PointCloud<pcl::PointXYZ>& cloud);
-
-  /**
-   * @brief 将点云转换到地图坐标系
-   * @param cloud_in 输入点云
-   * @param cloud_out 输出点云
-   * @param target_frame 目标坐标系
-   * @param stamp 时间戳
-   */
-  bool transformPointCloud(const pcl::PointCloud<pcl::PointXYZ>& cloud_in,
-                           pcl::PointCloud<pcl::PointXYZ>& cloud_out,
-                           const std::string& target_frame,
-                           const geometry_msgs::msg::TransformStamped&
-                               transform);
 
   /**
    * @brief 清除代价地图
@@ -187,20 +160,19 @@ class CostMap2D {
    * @brief 射线追踪清理自由空间
    */
   void raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
-                         const geometry_msgs::msg::TransformStamped&
-                             robot_transform);
+                         const tf2::Transform& map_from_base);
 
   /**
    * @brief 清理射线路径上的障碍物
    */
-  void clearRayPath(int x0, int y0, int x1, int y1,
-                    bool obstacle_detected,
+  void clearRayPath(int x0, int y0, int x1, int y1, bool obstacle_detected,
                     const rclcpp::Time& frame_time);
 
   /**
    * @brief 在代价地图上标记障碍物
    */
-  void markObstacles(const pcl::PointCloud<pcl::PointXYZ>& cloud);
+  void markObstacles(const sensor_msgs::msg::LaserScan& scan,
+                     const tf2::Transform& map_from_base);
 
   /**
    * @brief 膨胀障碍物
@@ -213,16 +185,6 @@ class CostMap2D {
   bool worldToMap(double wx, double wy, int& mx, int& my);
 
   /**
-   * @brief 设置代价值
-   */
-  void setCost(int mx, int my, unsigned char cost);
-
-  /**
-   * @brief 获取代价值
-   */
-  unsigned char getCost(int mx, int my);
-
-  /**
    * @brief 更新代价地图原点位置
    */
   void updateMapOrigin(
@@ -232,6 +194,11 @@ class CostMap2D {
    * @brief 滚动地图数据
    */
   void rollMap(int offset_x, int offset_y);
+
+  /**
+   * @brief 发布代价地图
+   */
+  void publishCostMap();
 
   /**
    * @brief 检查机器人俯仰角是否超过阈值

@@ -1,6 +1,7 @@
 #!/bin/bash
 # kill_robot_ros2_nodes.sh
-# 用于停止 run_slam.sh / run_rviz_topology_editor.sh / run_nav.sh
+# 用于停止 run_slam.sh / run_rviz_topology_editor.sh / run_nav.sh /
+# run_uwb_follow.sh
 # 启动的 ROS2 节点和相关 Python 脚本
 
 set +e
@@ -10,7 +11,6 @@ SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 WORKSPACE_DIR="$(dirname "${SCRIPT_DIR}")"
 
 readonly DATA_DIR="/robotfs/data/slam_data"
-LOG_ROOT_BASE="${DATA_DIR}/log"
 
 SELF_PID="$$"
 
@@ -37,6 +37,7 @@ is_alive() {
 kill_pid_gracefully() {
     local pid="$1"
     local name="$2"
+    local int_wait_steps="${3:-3}"
 
     if [ -z "$pid" ]; then
         return
@@ -54,7 +55,13 @@ kill_pid_gracefully() {
 
     # 优先杀进程组。如果该 pid 不是组长，kill -PID 会失败，再杀单进程。
     kill -SIGINT "-${pid}" 2>/dev/null || kill -SIGINT "${pid}" 2>/dev/null || true
-    sleep 0.3
+    local step
+    for ((step=0; step<int_wait_steps; step++)); do
+        if ! is_alive "$pid"; then
+            return
+        fi
+        sleep 0.1
+    done
 
     if is_alive "$pid"; then
         kill -SIGTERM "-${pid}" 2>/dev/null || kill -SIGTERM "${pid}" 2>/dev/null || true
@@ -70,6 +77,7 @@ kill_pid_gracefully() {
 kill_by_pattern() {
     local pattern="$1"
     local name="$2"
+    local int_wait_steps="${3:-3}"
 
     local pids
     pids=$(pgrep -f "$pattern" 2>/dev/null | sort -u)
@@ -86,20 +94,21 @@ kill_by_pattern() {
         if [ "$pid" = "$SELF_PID" ] || [ "$pid" = "$PPID" ]; then
             continue
         fi
-        kill_pid_gracefully "$pid" "$name"
+        kill_pid_gracefully "$pid" "$name" "$int_wait_steps"
     done
 }
 
 kill_from_pid_files() {
     print_header "[STEP 1] Kill processes recorded in pid files"
 
-    if [ ! -d "$LOG_ROOT_BASE" ]; then
-        echo "[INFO] log root not found: $LOG_ROOT_BASE"
+    if [ ! -d "$DATA_DIR" ]; then
+        echo "[INFO] runtime data root not found: $DATA_DIR"
         return
     fi
 
     local pid_files
-    pid_files=$(find "$LOG_ROOT_BASE" -type f -name "*.pid" 2>/dev/null | sort -u)
+    # 工作流PID位于map_<id>/run，旧脚本也可能把PID写入log目录。
+    pid_files=$(find "$DATA_DIR" -type f -name "*.pid" 2>/dev/null | sort -u)
 
     if [ -z "$pid_files" ]; then
         echo "[INFO] no pid files found"
@@ -110,7 +119,12 @@ kill_from_pid_files() {
         local pid
         pid=$(cat "$f" 2>/dev/null | tr -cd '0-9')
         if [ -n "$pid" ]; then
-            kill_pid_gracefully "$pid" "pid-file: $f"
+            if [ "$(basename "$f")" = "uwb_follow.pid" ]; then
+                # UWB总控脚本需要按反向顺序清理多个launch进程，最多等待30秒。
+                kill_pid_gracefully "$pid" "pid-file: $f" 300
+            else
+                kill_pid_gracefully "$pid" "pid-file: $f"
+            fi
         fi
         rm -f "$f" 2>/dev/null || true
     done
@@ -118,6 +132,9 @@ kill_from_pid_files() {
 
 kill_known_launches() {
     print_header "[STEP 2] Kill known ros2 launch processes"
+    # 优先通知UWB总控脚本，让它按反向启动顺序自行清理子进程。
+    kill_by_pattern "run_uwb_follow[.]sh" "run_uwb_follow workflow" 300
+
     # Livox ROS Driver2
     kill_by_pattern "ros2 launch livox_ros_driver2 msg_MID360s_launch.py" "livox_ros_driver2 launch"
 
@@ -127,6 +144,7 @@ kill_known_launches() {
     # run_slam.sh
     kill_by_pattern "ros2 launch pgo_sc run.launch.py" "pgo_sc launch"
     kill_by_pattern "ros2 launch topology_map_generator topology_map_generator.launch.py" "topology_map_generator launch"
+    kill_by_pattern "ros2 launch uwb_follow_planner uwb_follow_planner.launch.py" "uwb_follow_planner launch"
 
     # run_rviz_topology_editor.sh
     kill_by_pattern "ros2 launch rviz_topology_editor rviz_topology_editor.launch.py" "rviz_topology_editor launch"
@@ -152,7 +170,6 @@ kill_known_python_scripts() {
     kill_by_pattern "wait_reloc_success_" "wait_reloc_success"
 
     if [ "$KILL_NAV_GUI" = "1" ]; then
-        kill_by_pattern "navigation_workflow_gui.py" "navigation workflow GUI"
         kill_by_pattern "robot_runtime_test_gui.py" "robot runtime test GUI"
     else
         echo "[INFO] skip test GUIs; set KILL_NAV_GUI=1 to kill them"
@@ -168,6 +185,7 @@ kill_node_executables() {
     kill_by_pattern "livox_lidar_publisher" "livox_lidar_publisher node"
     kill_by_pattern "imu_filter_madgwick" "imu_filter_madgwick executable"
     kill_by_pattern "imu_filter_madgwick_node" "imu_filter_madgwick_node executable"
+    kill_by_pattern "fastlio_mapping_node" "fast_lio mapping executable"
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"
     kill_by_pattern "rviz_topology_editor_node" "rviz_topology_editor executable"
@@ -177,6 +195,7 @@ kill_node_executables() {
     kill_by_pattern "global_path_planner" "global_path_planner executable"
     kill_by_pattern "path_smoother" "path_smoother executable"
     kill_by_pattern "pure_pursuit" "pure_pursuit executable"
+    kill_by_pattern "uwb_follow_planner_node" "uwb_follow_planner executable"
     # kill_by_pattern "dual_radar" "dual_radar executable"
     kill_by_pattern "target_points_visualizer" "target_points_visualizer executable"
     kill_by_pattern "navigation_task_state_machine" "navigation_task_state_machine executable"

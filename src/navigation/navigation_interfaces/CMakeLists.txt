@@ -6,6 +6,7 @@ find_package(nav_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/AvoidanceState.msg"
   "msg/PathWithPolicy.msg"
   DEPENDENCIES nav_msgs
 )

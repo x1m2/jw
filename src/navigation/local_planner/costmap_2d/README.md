@@ -55,18 +55,21 @@ rostopic echo /costmap
 ## 主要话题
 
 ### 订阅的话题
-- `/livox/lidar` (livox_ros_driver2/msg/CustomMsg) - Livox 原始点云
+- `lidar_type=1`: `/livox/lidar` 使用 `livox_ros_driver2/msg/CustomMsg`
+- `lidar_type!=1`: `/livox/lidar` 使用 `sensor_msgs/msg/PointCloud2`
+
+两种订阅互斥，节点运行时只创建其中一个。
 
 ### 发布的话题
 - `/costmap` (nav_msgs/OccupancyGrid) - 代价地图
-- `/costmap_vis` (nav_msgs/OccupancyGrid) - 可视化用代价地图
 
 ## 参数说明
 
 ### 坐标系参数
 - `global_frame`: 全局坐标系 (默认: "map")
 - `robot_base_frame`: 机器人基座坐标系 (默认: "base_link")
-- `livox_topic`: Livox 原始点云话题 (默认: "/livox/lidar")
+- `lidar_type`: `1` 表示Livox CustomMsg，其他值表示标准PointCloud2
+- `livox_topic`: 点云输入话题 (默认: "/livox/lidar")
 - `lidar_frame`: 雷达坐标系 (默认: "livox_frame")
 
 ### 雷达外参与投影参数
@@ -91,7 +94,6 @@ rostopic echo /costmap
 - `0`: 自由空间 (FREE_SPACE)
 - `80`: 膨胀障碍物 (INSCRIBED_INFLATED_OBSTACLE)
 - `100`: 致命障碍物 (LETHAL_OBSTACLE)
-- `-1`: 未知区域 (NO_INFORMATION)
 
 ## 可视化
 

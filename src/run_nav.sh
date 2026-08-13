@@ -345,7 +345,7 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 # ==================================================
 # 导航保持运行：
 # run_nav.sh 统一负责重定位、人工确认后的导航启动和后台节点清理。
-# 任务选择、急停、回家、停止/继续任务统一在 navigation_workflow_gui.py 内操作。
+# 该脚本保留旧的独立导航状态机流程；正式APP流程由RobotRuntime Action控制。
 # ==================================================
 info "导航后台节点已启动"
 info "请在主 GUI 的导航任务控制区选择任务、急停、回家、停止或继续任务"

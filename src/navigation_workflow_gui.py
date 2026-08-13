@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""导航工作流独立算法模式的建图、地图编辑、定位与导航测试GUI。
+"""导航工作流独立算法模式的建图、UWB跟随、地图编辑与导航测试GUI。
 
 重定位与导航由 run_nav.sh 分阶段执行。GUI 读取：
   relocalization_exit_code.txt
   relocalization_success.txt
 并通过 navigation_confirm.txt 将人工确认结果交给同一个脚本。
+UWB跟随由 run_uwb_follow.sh 启停。
 """
 
 import datetime
 import glob
 import os
 import queue
+import signal
 import shutil
 import subprocess
 import threading
@@ -62,6 +64,9 @@ class NavigationWorkflowGUI:
             self.script_dir, "scripts", "keyboard_control.py"
         )
         self.run_nav_script = os.path.join(self.script_dir, "run_nav.sh")
+        self.run_uwb_follow_script = os.path.join(
+            self.script_dir, "run_uwb_follow.sh"
+        )
 
         self.startup_kill_output = ""
         self.startup_kill_returncode = None
@@ -71,12 +76,14 @@ class NavigationWorkflowGUI:
         self.edit_map_terminal_process = None
         self.keyboard_terminal_process = None
         self.nav_terminal_process = None
+        self.uwb_follow_terminal_process = None
 
         self.slam_running = False
         self.edit_map_running = False
         self.keyboard_running = False
         self.relocalization_running = False
         self.nav_running = False
+        self.uwb_follow_running = False
 
         self.log_queue = queue.Queue()
         self.terminal_columns = 140
@@ -135,7 +142,7 @@ class NavigationWorkflowGUI:
         self.load_available_tasks()
 
         self.root.deiconify()
-        self.root.title("建图 / 地图打点 / 键盘控制 / 重定位 / 自主导航控制界面")
+        self.root.title("建图 / 地图打点 / UWB跟随 / 自主导航控制界面")
         self.root.geometry("820x820")
         self.root.resizable(True, True)
         self.create_widgets()
@@ -145,7 +152,7 @@ class NavigationWorkflowGUI:
         self.root.after(200, self.update_nav_control_display)
         self.update_map_status_display()
  
-        self.add_log("建图 / 地图打点 / 重定位 / 自主导航 GUI 已启动")
+        self.add_log("建图 / 地图打点 / UWB跟随 / 自主导航 GUI 已启动")
         self.add_log(f"工作空间目录: {self.workspace_dir}")
         self.add_log(f"脚本目录: {self.script_dir}")
         self.add_log(f"运行数据/日志根目录: {self.runtime_data_dir}")
@@ -190,16 +197,16 @@ class NavigationWorkflowGUI:
         if hasattr(self, "map_status_label"):
             self.update_map_status_display()
 
-    def prompt_mapping_map_id(self):
+    def prompt_mapping_map_id(self, action_title="开始建图"):
         """强制读取一个合法的 ROS 2 uint32 map_id；取消则不启动建图。"""
         while True:
             value = simpledialog.askstring(
-                "开始建图",
+                action_title,
                 "请输入 map_id（0～4294967295，不能为空）：",
                 parent=self.root,
             )
             if value is None:
-                self.add_log("用户取消输入 map_id，未启动建图")
+                self.add_log(f"用户取消输入 map_id，未{action_title}")
                 return None
 
             value = value.strip()
@@ -308,12 +315,12 @@ class NavigationWorkflowGUI:
         for line in self.startup_kill_output.strip().splitlines()[:80]:
             self.add_log(f"[KILL] {line}")
 
-    def kill_old_nodes_before_relocalization(self) -> bool:
+    def kill_old_nodes_before_action(self, action_name) -> bool:
         if not os.path.isfile(self.run_kill_node_script):
             messagebox.showerror("清理脚本不存在", f"找不到清理脚本:\n{self.run_kill_node_script}")
             return False
-        self.add_log("启动重定位前再次清理旧 ROS2 节点 / launch / rviz2")
-        self.set_current_action("启动重定位前正在清理旧 ROS2 节点...", "orange")
+        self.add_log(f"{action_name}前再次清理旧 ROS2 节点 / launch / rviz2")
+        self.set_current_action(f"{action_name}前正在清理旧 ROS2 节点...", "orange")
         self.root.update_idletasks()
         try:
             result = subprocess.run(
@@ -323,9 +330,9 @@ class NavigationWorkflowGUI:
                 text=True, timeout=25,
             )
             for line in (result.stdout or "").strip().splitlines():
-                self.add_log(f"[KILL_BEFORE_NAV] {line}")
+                self.add_log(f"[KILL_BEFORE_ACTION] {line}")
             if result.returncode == 0:
-                self.add_log("启动重定位前清理完成")
+                self.add_log(f"{action_name}前清理完成")
                 return True
             return messagebox.askyesno(
                 "清理异常",
@@ -408,7 +415,7 @@ class NavigationWorkflowGUI:
         main.rowconfigure(5, weight=0)
 
         tk.Label(
-            main, text="建图 / 地图打点 / 键盘控制 / 重定位 / 自主导航控制界面",
+            main, text="建图 / 地图打点 / UWB跟随 / 自主导航控制界面",
             font=(self.font_family, 18, "bold"), fg="navy",
         ).grid(row=0, column=0, pady=(0, 15))
 
@@ -424,6 +431,9 @@ class NavigationWorkflowGUI:
         self.robot_target_label = self._compact_status_row(status, 2, 0, "当前目标点:", "等待目标点", "blue")
         self.emergency_status_label = self._compact_status_row(status, 2, 2, "紧急停止:", "关闭", "green")
         self.target_update_label = self._compact_status_row(status, 3, 0, "最后更新:", self.last_target_update, "gray")
+        self.uwb_follow_status_label = self._compact_status_row(
+            status, 3, 2, "UWB跟随:", "未启动", "gray"
+        )
 
         tk.Label(status, text="当前动作:", font=(self.font_family, 11, "bold")).grid(
             row=4, column=0, sticky=tk.W, padx=5, pady=4
@@ -467,7 +477,7 @@ class NavigationWorkflowGUI:
 
         controls = ttk.LabelFrame(main, text="流程控制", padding="10")
         controls.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        for i in range(3):
+        for i in range(4):
             controls.columnconfigure(i, weight=1)
 
         self.start_slam_button = tk.Button(
@@ -485,6 +495,13 @@ class NavigationWorkflowGUI:
             bg="purple", fg="white", font=(self.font_family, 13, "bold"), height=2,
         )
         self.start_nav_button.grid(row=0, column=2, padx=5, pady=5, sticky=(tk.W, tk.E))
+        self.start_uwb_follow_button = tk.Button(
+            controls, text="开始跟随", command=self.toggle_uwb_follow,
+            bg="teal", fg="white", font=(self.font_family, 13, "bold"), height=2,
+        )
+        self.start_uwb_follow_button.grid(
+            row=0, column=3, padx=5, pady=5, sticky=(tk.W, tk.E)
+        )
 
         self.create_nav_control_panel(main, row=3)
 
@@ -495,7 +512,8 @@ class NavigationWorkflowGUI:
             text=(
                 "1. 没有地图时：先点击“开始建图”，完成地图采集与保存。\n"
                 "2. 建图完成后点击“启动地图打点”，在RViz中设置拓扑点并保存。\n"
-                "3. 有可用地图和任务后，点击“自主导航”，系统会先启动重定位。"
+                "3. 有可用地图和任务后，点击“自主导航”，系统会先启动重定位。\n"
+                "4. 点击“开始跟随”。"
             ),
             font=(self.font_family, 10), fg="gray", justify=tk.LEFT, anchor=tk.W,
         ).grid(row=0, column=0, sticky=(tk.W, tk.E))
@@ -883,6 +901,8 @@ class NavigationWorkflowGUI:
         self._set(self.relocalization_status_label, text, color)
     def set_nav_status(self, text, color="gray"):
         self._set(self.nav_status_label, text, color)
+    def set_uwb_follow_status(self, text, color="gray"):
+        self._set(self.uwb_follow_status_label, text, color)
     def set_current_action(self, text, color="blue"):
         self.current_action_label.config(text=text, fg=color)
         self.status_bar.config(text=text)
@@ -894,6 +914,12 @@ class NavigationWorkflowGUI:
         self.start_keyboard_button.config(state=tk.DISABLED if running else tk.NORMAL)
     def set_nav_button_running(self, running):
         self.start_nav_button.config(state=tk.DISABLED if running else tk.NORMAL)
+    def set_uwb_follow_button_running(self, running):
+        self.start_uwb_follow_button.config(
+            text="停止跟随" if running else "开始跟随",
+            bg="firebrick" if running else "teal",
+            state=tk.NORMAL,
+        )
 
     def has_saved_map(self):
         if os.path.isfile(self.map_pcd_file):
@@ -1031,6 +1057,113 @@ class NavigationWorkflowGUI:
             return None
 
     # ------------------------- keyboard / slam / edit -------------------------
+    def toggle_uwb_follow(self):
+        if self.uwb_follow_running:
+            self.stop_uwb_follow()
+        else:
+            self.start_uwb_follow()
+
+    def start_uwb_follow(self):
+        if self.has_running_processes():
+            messagebox.showwarning(
+                "存在运行任务",
+                "请先停止建图、地图编辑、键盘控制、重定位或自主导航。",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "启动UWB跟随。\n\n是否继续？",
+        ):
+            return
+
+        if not self.kill_old_nodes_before_action("启动UWB跟随"):
+            self.set_uwb_follow_status("清理失败，未启动", "red")
+            self.set_current_action("清理旧节点失败，未启动UWB跟随", "red")
+            return
+
+        self.uwb_follow_terminal_process = self.start_script_in_terminal(
+            self.run_uwb_follow_script,
+            "UWB 跟随 - run_uwb_follow",
+            keep_open=False,
+            extra_env={
+                "MAP_ID": self.map_id,
+                "DATA_DIR": self.runtime_data_dir,
+            },
+        )
+        if self.uwb_follow_terminal_process is None:
+            return
+
+        self.uwb_follow_running = True
+        self.set_uwb_follow_status("运行中", "teal")
+        self.set_current_action("UWB跟随启动中，等待FAST-LIO和UWB数据", "teal")
+        self.set_uwb_follow_button_running(True)
+        self.start_slam_button.config(state=tk.DISABLED)
+        self.start_edit_map_button.config(state=tk.DISABLED)
+        self.start_nav_button.config(state=tk.DISABLED)
+        self.start_keyboard_button.config(state=tk.DISABLED)
+        self.add_log("已启动 run_uwb_follow.sh（FAST-LIO2直接位姿，不启动PGO）")
+        threading.Thread(target=self.watch_uwb_follow_process, daemon=True).start()
+
+    def stop_uwb_follow(self):
+        if not self.uwb_follow_running:
+            return
+        if not messagebox.askyesno("停止UWB跟随", "确定停止UWB跟随并清理相关节点吗？"):
+            return
+
+        self.start_uwb_follow_button.config(state=tk.DISABLED)
+        self.set_uwb_follow_status("正在停止", "orange")
+        self.set_current_action("正在停止UWB跟随并清理节点", "orange")
+
+        pid_file = os.path.join(self.runtime_data_dir, "run", "uwb_follow.pid")
+        stopped = False
+        try:
+            if os.path.isfile(pid_file):
+                with open(pid_file, "r", encoding="utf-8") as file:
+                    script_pid = int(file.read().strip())
+                os.kill(script_pid, signal.SIGINT)
+                stopped = True
+                self.add_log(f"已向 run_uwb_follow.sh PID={script_pid} 发送SIGINT")
+        except (OSError, ValueError) as error:
+            self.add_log(f"[WARN] 通过PID文件停止UWB跟随失败: {error}")
+
+        if not stopped and self.uwb_follow_terminal_process is not None:
+            try:
+                os.killpg(
+                    os.getpgid(self.uwb_follow_terminal_process.pid), signal.SIGINT
+                )
+                stopped = True
+            except OSError as error:
+                self.add_log(f"[WARN] 通过终端进程组停止UWB跟随失败: {error}")
+
+        if not stopped:
+            self.start_uwb_follow_button.config(state=tk.NORMAL)
+            self.set_uwb_follow_status("停止失败", "red")
+            messagebox.showerror(
+                "停止失败", "没有找到UWB跟随脚本进程，请使用“清理节点”。"
+            )
+
+    def watch_uwb_follow_process(self):
+        if self.uwb_follow_terminal_process is None:
+            return
+        ret = self.uwb_follow_terminal_process.wait()
+        self.add_log_from_thread(f"run_uwb_follow.sh 终端进程退出，返回码: {ret}")
+        self.root.after(0, lambda: self._uwb_follow_finished(ret))
+
+    def _uwb_follow_finished(self, return_code):
+        self.uwb_follow_running = False
+        self.uwb_follow_terminal_process = None
+        if return_code == 0:
+            self.set_uwb_follow_status("已停止", "green")
+            self.set_current_action("UWB跟随流程已结束", "green")
+        else:
+            self.set_uwb_follow_status("异常退出", "red")
+            self.set_current_action("UWB跟随脚本异常退出，请检查日志", "red")
+        self.set_uwb_follow_button_running(False)
+        self.set_slam_button_running(False)
+        self.set_edit_map_button_running(False)
+        self.set_nav_button_running(False)
+        self.set_keyboard_button_running(False)
+
     def start_keyboard_control(self):
         if self.keyboard_running:
             messagebox.showwarning("提示", "键盘控制已经在运行")
@@ -1060,8 +1193,8 @@ class NavigationWorkflowGUI:
         self.set_keyboard_button_running(False)
 
     def start_slam(self):
-        if self.slam_running:
-            messagebox.showwarning("提示", "建图已经在运行")
+        if self.slam_running or self.uwb_follow_running:
+            messagebox.showwarning("提示", "建图或UWB跟随已经在运行")
             return
 
         map_id = self.prompt_mapping_map_id()
@@ -1150,8 +1283,8 @@ class NavigationWorkflowGUI:
 
     # ------------------------- relocalization + nav -------------------------
     def start_nav(self):
-        if self.nav_running or self.relocalization_running:
-            messagebox.showwarning("提示", "自主导航或重定位流程已经在运行")
+        if self.nav_running or self.relocalization_running or self.uwb_follow_running:
+            messagebox.showwarning("提示", "自主导航、重定位或UWB跟随流程已经在运行")
             return
         map_id = self.prompt_existing_map_id("启动自主导航")
         if map_id is None:
@@ -1168,7 +1301,7 @@ class NavigationWorkflowGUI:
             "成功后需要确认位置，再启动导航。\n\n是否继续？",
         ):
             return
-        if not self.kill_old_nodes_before_relocalization():
+        if not self.kill_old_nodes_before_action("启动重定位"):
             self.set_relocalization_status("清理失败，未启动重定位", "red")
             self.set_nav_status("未启动", "gray")
             self.set_current_action("清理旧节点失败或取消，未启动自主导航", "red")
@@ -1405,6 +1538,7 @@ class NavigationWorkflowGUI:
     def _manual_kill_done(self):
         self.slam_running = self.edit_map_running = self.keyboard_running = False
         self.relocalization_running = self.nav_running = False
+        self.uwb_follow_running = False
         self.robot_nav_state = False
         self.robot_nav_state_received = False
         self.set_slam_status("已清理/未启动", "gray")
@@ -1412,10 +1546,12 @@ class NavigationWorkflowGUI:
         self.set_keyboard_status("已清理/未启动", "gray")
         self.set_relocalization_status("已清理/未启动", "gray")
         self.set_nav_status("已清理/未启动", "gray")
+        self.set_uwb_follow_status("已清理/未启动", "gray")
         self.set_slam_button_running(False)
         self.set_edit_map_button_running(False)
         self.set_keyboard_button_running(False)
         self.set_nav_button_running(False)
+        self.set_uwb_follow_button_running(False)
         self.emergency_stop_state = False
         self.emergency_button.config(text="紧急停止", bg="red")
         self.set_nav_control_enabled(False)
@@ -1442,6 +1578,7 @@ class NavigationWorkflowGUI:
         return any([
             self.slam_running, self.edit_map_running, self.keyboard_running,
             self.relocalization_running, self.nav_running,
+            self.uwb_follow_running,
         ])
 
     def on_closing(self):

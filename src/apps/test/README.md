@@ -1,13 +1,11 @@
 # robot_runtime_test
 
-该目录统一保存两套内部人工测试GUI：
+该目录保存RobotRuntime内部集成测试工具：
 
-- `navigation_workflow_gui.py`：通过`run_slam.sh`、`run_nav.sh`和
-  `/nav_task_signal`测试独立算法流程，Worker使用`test`模式。
 - `robot_runtime_test_gui.py`：调用正式的`/robot/*` Service、Action和
   Topic测试RobotRuntime，Worker使用`platform`模式。
-
-两套流程会管理相同的算法节点，不能同时运行。独立流程启动前会清理旧节点。
+- `robot_runtime_platform_test.launch.py`：启动RobotRuntime及全部platform
+  Worker外壳。
 
 ## 构建与启动
 
@@ -17,20 +15,15 @@ source install/setup.bash
 ros2 launch robot_runtime_test robot_runtime_platform_test.launch.py
 ```
 
-直接启动需要的测试GUI：
+启动测试GUI：
 
 ```bash
 source install/setup.bash
 
-# 独立算法流程
-ros2 run robot_runtime_test navigation_workflow_gui.py
-
-# RobotRuntime接口流程
 ros2 run robot_runtime_test robot_runtime_test_gui.py
 ```
 
 `robot_runtime_platform_test.launch.py`只服务于RobotRuntime接口测试。
-独立算法流程由自身GUI按步骤调用工作空间中的脚本。
 
 RobotRuntime测试launch会启动与 `run_slam.sh` 一致的 Livox MID360s 驱动、
 `robot_runtime` 以及 PGO、FastLIO、定位和导航的所有 Worker 外壳，

@@ -16,7 +16,6 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -31,7 +30,6 @@ set(dependencies
   std_srvs
   geometry_msgs
   nav_msgs
-  sensor_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
@@ -40,9 +38,10 @@ set(dependencies
 
 add_library(${PROJECT_NAME}
   src/pure_pursuit_local_planner.cpp
-  src/obstacle_avoidance.cpp
+  src/pure_pursuit_controller.cpp
   src/path_tracker.cpp
-  src/local_path_planner.cpp
+  src/local_avoidance_manager.cpp
+  src/avoidance_path_planner.cpp
   src/astar_planner.cpp
   src/front_obstacle_detector.cpp
 )
@@ -76,4 +75,12 @@ install(DIRECTORY launch config rviz
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(${dependencies})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_astar_planner test/test_astar_planner.cpp)
+  target_link_libraries(test_astar_planner ${PROJECT_NAME})
+  ament_target_dependencies(test_astar_planner ${dependencies})
+endif()
+
 ament_package()

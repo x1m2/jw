@@ -4,7 +4,8 @@
     global_frame: "map"
     robot_base_frame: "base_link"
 
-    # Livox MID-360 原始点云输入
+    # 点云输入：1使用Livox CustomMsg，其他值使用标准PointCloud2。
+    lidar_type: 1
     livox_topic: "/livox/lidar"
     lidar_frame: "livox_frame"
 

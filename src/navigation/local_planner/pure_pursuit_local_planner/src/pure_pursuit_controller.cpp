@@ -1,0 +1,234 @@
+#include "pure_pursuit_local_planner/pure_pursuit_controller.hpp"
+
+#include <algorithm>
+#include <cmath>
+
+#include <tf2/LinearMath/Scalar.hpp>
+#include <tf2/utils.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+namespace pure_pursuit_local_planner {
+
+bool PurePursuitController::initialize(
+    rclcpp::Node::SharedPtr node, const PurePursuitControllerConfig &config) {
+  node_ = std::move(node);
+  config_ = config;
+  resetTrackingState();
+  return true;
+}
+
+void PurePursuitController::resetTrackingState() {
+  aligning_ = false;
+  correcting_ = false;
+  local_avoidance_aligning_ = false;
+}
+
+void PurePursuitController::startLocalAvoidanceAlignment() {
+  local_avoidance_aligning_ = true;
+  aligning_ = false;
+  correcting_ = false;
+}
+
+bool PurePursuitController::computeCommand(
+    const geometry_msgs::msg::PoseStamped &robot_pose,
+    const geometry_msgs::msg::PointStamped &lookahead_point,
+    double target_velocity, bool local_replanning_active,
+    std::size_t path_progress_index, int current_path_index,
+    geometry_msgs::msg::Twist &cmd_vel) {
+  const double dx = lookahead_point.point.x - robot_pose.pose.position.x;
+  const double dy = lookahead_point.point.y - robot_pose.pose.position.y;
+  const double distance = std::hypot(dx, dy);
+  if (distance < 1e-6) {
+    cmd_vel = geometry_msgs::msg::Twist();
+    return false;
+  }
+
+  const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  const double min_distance_factor = 0.3;
+  const double max_distance_factor = 1.0;
+  const double distance_factor =
+      min_distance_factor +
+      (max_distance_factor - min_distance_factor) *
+          std::clamp(distance / config_.lookahead_distance_max, 0.0, 1.0);
+  target_velocity *= distance_factor;
+
+  const double target_yaw = std::atan2(dy, dx);
+  const double yaw_error = tf2NormalizeAngle(target_yaw - robot_yaw);
+  const double yaw_error_abs = std::abs(yaw_error);
+  // 局部绕障路径包含侧向切入/切出弯道，35°就原地旋转会让机器人在
+  // 点1和回归点频繁停车。局部路径允许更大的边走边转范围。
+  const double rotate_enter_threshold =
+      tf2Radians(local_replanning_active ? 65.0 : 35.0);
+  const double rotate_exit_threshold =
+      tf2Radians(local_replanning_active ? 15.0 : 10.0);
+  const double correct_enter_threshold = tf2Radians(8.0);
+  const double correct_exit_threshold = tf2Radians(4.0);
+  const double angular_gain = 0.7;
+
+  cmd_vel = geometry_msgs::msg::Twist();
+
+  // 刚切入局部路径时优先完成一次方向对齐，避免带线速度横切局部路径。
+  if (local_replanning_active && local_avoidance_aligning_) {
+    const double avoid_align_exit_threshold = tf2Radians(8.0);
+    if (yaw_error_abs < avoid_align_exit_threshold) {
+      local_avoidance_aligning_ = false;
+      aligning_ = false;
+      correcting_ = false;
+      RCLCPP_DEBUG(node_->get_logger(),
+                   "[AVOID_ALIGN] aligned to local path, yaw_error=%.2f deg",
+                   tf2Degrees(yaw_error));
+    } else {
+      cmd_vel.angular.z = angular_gain * yaw_error;
+      const double min_avoid_align_wz = 0.22;
+      if (std::abs(cmd_vel.angular.z) < min_avoid_align_wz) {
+        cmd_vel.angular.z = std::copysign(min_avoid_align_wz, yaw_error);
+      }
+      cmd_vel.angular.z =
+          std::clamp(cmd_vel.angular.z, -config_.max_angular_velocity,
+                     config_.max_angular_velocity);
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                           "[AVOID_ALIGN] rotate in place before local path, "
+                           "robot_yaw=%.2f deg, target_yaw=%.2f deg, "
+                           "yaw_error=%.2f deg, vx=%.2f, wz=%.2f",
+                           tf2Degrees(robot_yaw), tf2Degrees(target_yaw),
+                           tf2Degrees(yaw_error), cmd_vel.linear.x,
+                           cmd_vel.angular.z);
+      return true;
+    }
+  }
+
+  // 大角度原地旋转采用进入/退出双阈值，避免在临界角附近频繁切换。
+  if (!aligning_ && yaw_error_abs > rotate_enter_threshold)
+    aligning_ = true;
+  if (aligning_ && yaw_error_abs < rotate_exit_threshold)
+    aligning_ = false;
+
+  if (aligning_) {
+    cmd_vel.angular.z = angular_gain * yaw_error;
+    const double min_rotate_wz = 0.35;
+    if (std::abs(cmd_vel.angular.z) < min_rotate_wz) {
+      cmd_vel.angular.z = std::copysign(min_rotate_wz, yaw_error);
+    }
+    RCLCPP_INFO_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 500,
+        "[PP_ALIGN] robot_yaw=%.2f deg, target_yaw=%.2f deg, "
+        "yaw_error=%.2f deg, rotate in place, vx=%.2f, wz=%.2f",
+        tf2Degrees(robot_yaw), tf2Degrees(target_yaw), tf2Degrees(yaw_error),
+        cmd_vel.linear.x, cmd_vel.angular.z);
+  } else {
+    // 中等角度误差同样使用滞回，保持原来的边走边修正行为。
+    if (!correcting_ && yaw_error_abs > correct_enter_threshold) {
+      correcting_ = true;
+    }
+    if (correcting_ && yaw_error_abs < correct_exit_threshold) {
+      correcting_ = false;
+    }
+
+    if (correcting_) {
+      cmd_vel.linear.x = target_velocity;
+      cmd_vel.angular.z = angular_gain * yaw_error;
+      const double min_walk_wz = 0.08;
+      if (std::abs(cmd_vel.angular.z) < min_walk_wz) {
+        cmd_vel.angular.z = std::copysign(min_walk_wz, yaw_error);
+      }
+      const double max_walk_wz = 0.35;
+      cmd_vel.angular.z =
+          std::clamp(cmd_vel.angular.z, -max_walk_wz, max_walk_wz);
+    } else {
+      const double yaw_deg = tf2Degrees(yaw_error_abs);
+      cmd_vel.linear.x = target_velocity;
+      if (yaw_deg > 4.0) {
+        cmd_vel.angular.z = 0.30 * yaw_error;
+        const double max_small_wz = 0.08;
+        cmd_vel.angular.z =
+            std::clamp(cmd_vel.angular.z, -max_small_wz, max_small_wz);
+      }
+    }
+  }
+
+  cmd_vel.angular.z =
+      std::clamp(cmd_vel.angular.z, -config_.max_angular_velocity,
+                 config_.max_angular_velocity);
+  RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 500,
+      "[PP_CMD] robot=(%.3f, %.3f, yaw=%.2f deg), "
+      "lookahead=(%.3f, %.3f), dx=%.3f, dy=%.3f, "
+      "target_yaw=%.2f deg, yaw_error=%.2f deg, vx=%.2f, wz=%.2f, "
+      "progress=%zu, path_idx=%d, max_v=%.2f",
+      robot_pose.pose.position.x, robot_pose.pose.position.y,
+      tf2Degrees(robot_yaw), lookahead_point.point.x, lookahead_point.point.y,
+      dx, dy, tf2Degrees(target_yaw), tf2Degrees(yaw_error), cmd_vel.linear.x,
+      cmd_vel.angular.z, path_progress_index, current_path_index,
+      config_.max_linear_velocity);
+  return true;
+}
+
+void PurePursuitController::applyVelocityLimits(
+    const geometry_msgs::msg::Twist &last_cmd_vel, double dt,
+    geometry_msgs::msg::Twist &cmd_vel) const {
+  if (dt <= 0.0)
+    return;
+  cmd_vel.linear.x = std::clamp(cmd_vel.linear.x, -config_.max_linear_velocity,
+                                config_.max_linear_velocity);
+  cmd_vel.linear.y =
+      std::clamp(cmd_vel.linear.y, -config_.max_linear_velocity_y,
+                 config_.max_linear_velocity_y);
+
+  const double velocity_diff_x = cmd_vel.linear.x - last_cmd_vel.linear.x;
+  const double max_velocity_change_x = velocity_diff_x > 0
+                                           ? config_.acceleration_limit * dt
+                                           : config_.deceleration_limit * dt;
+  if (std::abs(velocity_diff_x) > max_velocity_change_x) {
+    cmd_vel.linear.x = last_cmd_vel.linear.x +
+                       std::copysign(max_velocity_change_x, velocity_diff_x);
+  }
+
+  const double velocity_diff_y = cmd_vel.linear.y - last_cmd_vel.linear.y;
+  const double max_velocity_change_y = velocity_diff_y > 0
+                                           ? config_.acceleration_limit * dt
+                                           : config_.deceleration_limit * dt;
+  if (std::abs(velocity_diff_y) > max_velocity_change_y) {
+    cmd_vel.linear.y = last_cmd_vel.linear.y +
+                       std::copysign(max_velocity_change_y, velocity_diff_y);
+  }
+  cmd_vel.angular.z =
+      std::clamp(cmd_vel.angular.z, -config_.max_angular_velocity,
+                 config_.max_angular_velocity);
+}
+
+bool PurePursuitController::isTargetOrientationReached(
+    const geometry_msgs::msg::PoseStamped &robot_pose,
+    const geometry_msgs::msg::Pose &target_pose) const {
+  const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  const double target_yaw = tf2::getYaw(target_pose.orientation);
+  return std::abs(tf2NormalizeAngle(target_yaw - robot_yaw)) <
+         config_.yaw_tolerance;
+}
+
+bool PurePursuitController::computeOrientationAdjustmentCommand(
+    const geometry_msgs::msg::PoseStamped &robot_pose,
+    const geometry_msgs::msg::Pose &target_pose,
+    geometry_msgs::msg::Twist &cmd_vel) const {
+  const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  const double target_yaw = tf2::getYaw(target_pose.orientation);
+  const double yaw_error = tf2NormalizeAngle(target_yaw - robot_yaw);
+
+  cmd_vel = geometry_msgs::msg::Twist();
+  cmd_vel.angular.z = config_.yaw_adjustment_gain * yaw_error;
+  if (std::abs(cmd_vel.angular.z) < config_.final_yaw_min_angular_velocity) {
+    cmd_vel.angular.z =
+        std::copysign(config_.final_yaw_min_angular_velocity, yaw_error);
+  }
+  cmd_vel.angular.z =
+      std::clamp(cmd_vel.angular.z, -config_.max_angular_velocity,
+                 config_.max_angular_velocity);
+  RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                       "[FINAL_YAW] robot_yaw=%.2f deg, target_yaw=%.2f deg, "
+                       "yaw_error=%.2f deg, vx=%.2f, wz=%.2f",
+                       tf2Degrees(robot_yaw), tf2Degrees(target_yaw),
+                       tf2Degrees(yaw_error), cmd_vel.linear.x,
+                       cmd_vel.angular.z);
+  return true;
+}
+
+} // namespace pure_pursuit_local_planner

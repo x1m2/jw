@@ -22,6 +22,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <unordered_map>
 #include <vector>
 
 namespace global_path_planner {
@@ -73,6 +74,14 @@ class GlobalPathPlanner : public rclcpp::Node {
   bool initialize();
 
  private:
+  using EdgeAdjacency =
+      std::unordered_map<int, std::vector<const TopologyEdge*>>;
+
+  struct TopologySearchResult {
+    std::vector<int> node_ids;
+    std::vector<const TopologyEdge*> selected_edges;
+  };
+
   // ROS2组件
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr global_path_pub_;
   rclcpp::Publisher<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
@@ -113,6 +122,9 @@ class GlobalPathPlanner : public rclcpp::Node {
   // 数据
   std::vector<TopologyNode> nodes_;
   std::vector<TopologyEdge> edges_;
+  std::unordered_map<int, std::size_t> node_index_;
+  EdgeAdjacency base_adjacency_;
+  int max_node_id_{-1};
   geometry_msgs::msg::Point current_position_;
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
@@ -126,6 +138,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   void goalCallback(geometry_msgs::msg::PointStamped::ConstSharedPtr msg);
   void targetPointsCallback(
       geometry_msgs::msg::Pose::ConstSharedPtr msg);  // 新增：目标点回调函数
+  void planAndPublish();
 
   // 路径规划核心方法
   nav_msgs::msg::Path planGlobalPath();
@@ -143,30 +156,30 @@ class GlobalPathPlanner : public rclcpp::Node {
   bool loadFreeSpaceCloudFromPcd();
 
   // 临时拓扑图相关方法
-  void addTemporaryConnections(std::vector<TopologyNode>& temp_nodes,
-                               std::vector<TopologyEdge>& temp_edges,
+  void addTemporaryConnections(std::vector<TopologyEdge>& temp_edges,
                                int temp_node_id,
                                const geometry_msgs::msg::Point& position);
   void addGoalTemporaryConnection(
-      std::vector<TopologyNode>& temp_nodes,
       std::vector<TopologyEdge>& temp_edges, int goal_node_id,
       const geometry_msgs::msg::Point& goal_position);
-  std::vector<int> dijkstraSearchInTempGraph(
-      const std::vector<TopologyNode>& temp_nodes,
-      const std::vector<TopologyEdge>& temp_edges, int start_id, int goal_id);
+  TopologySearchResult dijkstraSearchInTempGraph(
+      const std::vector<TopologyNode>& temporary_nodes,
+      const EdgeAdjacency& temporary_adjacency, int start_id, int goal_id);
   nav_msgs::msg::Path buildCompletePathFromTempGraph(
-      const std::vector<TopologyNode>& temp_nodes,
-      const std::vector<TopologyEdge>& temp_edges,
-      const std::vector<int>& topology_path);
+      const std::vector<TopologyNode>& temporary_nodes,
+      const TopologySearchResult& topology_path);
+  bool rebuildGraphIndexes();
+  EdgeAdjacency buildAdjacency(
+      const std::vector<TopologyEdge>& graph_edges) const;
+  const TopologyNode* findNodeById(
+      int node_id,
+      const std::vector<TopologyNode>* temporary_nodes = nullptr) const;
   const TopologyEdge* findTopologyEdge(int first_node_id,
                                        int second_node_id) const;
   const TopologyEdge* findNearestTopologyEdge(
       const geometry_msgs::msg::Point& position) const;
   static void inheritEdgePolicy(const TopologyEdge* source,
                                 TopologyEdge& destination);
-
-  double calculateConnectionCost(const geometry_msgs::msg::Point& from,
-                                 const geometry_msgs::msg::Point& to);
 
   // 新的边合法性检查方法
   bool isEdgeLegal(const TopologyNode& node1, const TopologyNode& node2);
