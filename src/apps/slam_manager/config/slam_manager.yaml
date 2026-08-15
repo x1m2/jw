@@ -1,0 +1,26 @@
+slam_manager:
+  ros__parameters:
+    # APP传完整map_id（例如map_0）；目录为 <root>/<map_id>/{map,log,task}/。
+    map_storage:
+      root_directory: "/robotfs/data/slam_data"
+      max_maps: 5
+      # start_mapping等待PGO和Fast-LIO节点级Ready。
+      start_mapping_timeout_sec: 30.0
+      finish_mapping_timeout_sec: 300.0
+
+    # 开始定位Service等待重定位成功；超时后停止定位并返回失败。
+    localization:
+      relocalization_timeout_sec: 60.0
+      stop_timeout_sec: 10.0
+      # finish_mapping在PGO保存globalmap.pcd后运行该工具，生成voxelmaps_coords。
+      bbs:
+        saver_executable: "/home/jw/robot_rk3588_ws/env/3d_bbs/test/build/saver"
+        min_level_resolution: 0.5
+        max_level: 6
+        generation_timeout_sec: 120.0
+
+    # 导航Worker启停、暂停控制和单个目标点执行超时。
+    navigation:
+      control_timeout_sec: 3.0
+      worker_timeout_sec: 30.0
+      goal_timeout_sec: 300.0

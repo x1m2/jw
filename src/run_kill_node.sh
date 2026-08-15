@@ -170,7 +170,7 @@ kill_known_python_scripts() {
     kill_by_pattern "wait_reloc_success_" "wait_reloc_success"
 
     if [ "$KILL_NAV_GUI" = "1" ]; then
-        kill_by_pattern "robot_runtime_test_gui.py" "robot runtime test GUI"
+        kill_by_pattern "slam_manager_test_gui.py" "robot runtime test GUI"
     else
         echo "[INFO] skip test GUIs; set KILL_NAV_GUI=1 to kill them"
     fi

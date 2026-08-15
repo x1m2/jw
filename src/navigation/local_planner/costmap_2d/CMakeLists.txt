@@ -13,7 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(rclcpp REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -76,7 +76,7 @@ add_executable(costmap_2d_node
 # 节点依赖
 ament_target_dependencies(costmap_2d_node
   rclcpp
-  robot_runtime
+  slam_manager
   std_msgs
   sensor_msgs
   geometry_msgs

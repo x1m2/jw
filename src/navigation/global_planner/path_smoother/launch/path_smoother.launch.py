@@ -25,7 +25,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'runtime_profile',
             default_value='test',
-            description='test autostarts; platform waits for robot_runtime'
+            description='test autostarts; platform waits for slam_manager'
         ),
 
         Node(

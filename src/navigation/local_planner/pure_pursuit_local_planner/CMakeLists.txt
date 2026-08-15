@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(navigation_interfaces REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -53,7 +53,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 add_executable(${PROJECT_NAME}_node src/pure_pursuit_node.cpp)
 target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME})
-ament_target_dependencies(${PROJECT_NAME}_node ${dependencies} robot_runtime)
+ament_target_dependencies(${PROJECT_NAME}_node ${dependencies} slam_manager)
 
 install(TARGETS
   ${PROJECT_NAME}

@@ -2,15 +2,15 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "pgo_sc.hpp"
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
 
-  auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+  auto worker = std::make_shared<slam_manager::ManagedWorker>(
       "pgo_worker",
-      [](const robot_runtime::ManagedWorker::StartContext &context) {
-        robot_runtime::ManagedWorker::AlgorithmInstance instance;
+      [](const slam_manager::ManagedWorker::StartContext &context) {
+        slam_manager::ManagedWorker::AlgorithmInstance instance;
         rclcpp::NodeOptions options;
         if (!context.resource_path.empty()) {
           options.append_parameter_override("basic.package_path",

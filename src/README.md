@@ -44,7 +44,7 @@ colcon build --symlink-install --parallel-workers 2 \
     -DHUMBLE_ROS=humble
 
 colcon build --symlink-install --parallel-workers 1 \
-  --packages-select fast_lio fastlio_localization pgo_sc  robot_runtime_test \
+  --packages-select fast_lio fastlio_localization pgo_sc  slam_manager_test \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 source install/setup.bash

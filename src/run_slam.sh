@@ -77,9 +77,9 @@ TOPOLOGY_PID=""
 CLEANING=0
 
 SAVE_POPUP_PID=""
-ROBOT_RUNTIME_DIR="$(dirname "${DATA_DIR}")"
-SAVE_POPUP_SIGNAL="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_done_$$"
-SAVE_POPUP_STATUS="${ROBOT_RUNTIME_DIR}/run_slam_save_popup_status_$$"
+SLAM_MANAGER_DIR="$(dirname "${DATA_DIR}")"
+SAVE_POPUP_SIGNAL="${SLAM_MANAGER_DIR}/run_slam_save_popup_done_$$"
+SAVE_POPUP_STATUS="${SLAM_MANAGER_DIR}/run_slam_save_popup_status_$$"
 
 show_save_popup_with_done_button() {
     rm -f "${SAVE_POPUP_SIGNAL}" "${SAVE_POPUP_STATUS}"
@@ -237,7 +237,7 @@ cleanup() {
 
     show_save_popup_with_done_button
 
-    SAVE_DONE_FLAG="${ROBOT_RUNTIME_DIR}/pgo_sc_save_done_$$"
+    SAVE_DONE_FLAG="${SLAM_MANAGER_DIR}/pgo_sc_save_done_$$"
     rm -f "${SAVE_DONE_FLAG}"
 
     timeout 120s bash -c "

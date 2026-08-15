@@ -62,8 +62,8 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(robot_interfaces REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager_interfaces REQUIRED)
+find_package(slam_manager REQUIRED)
 
 set(dependencies
   rclcpp
@@ -78,8 +78,8 @@ set(dependencies
   pcl_ros
   pcl_conversions
   livox_ros_driver2
-  robot_interfaces
-  robot_runtime
+  slam_manager_interfaces
+  slam_manager
 )
 
 # Thirdparty libraries

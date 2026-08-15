@@ -14,7 +14,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 
 /**
  * @brief 目标点结构体
@@ -347,14 +347,14 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
   try {
-    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+    auto worker = std::make_shared<slam_manager::ManagedWorker>(
         "target_points_visualizer_worker", []() {
           auto visualizer = std::make_shared<TargetPointsVisualizer>();
           if (!visualizer->initialize()) {
             throw std::runtime_error("目标点可视化节点初始化失败");
           }
           visualizer->start();
-          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          slam_manager::ManagedWorker::AlgorithmInstance instance;
           instance.node = visualizer;
           return instance;
         });

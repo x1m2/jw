@@ -14,7 +14,7 @@ find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
@@ -37,7 +37,7 @@ ament_target_dependencies(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} Eigen3::Eigen)
 
 add_executable(obstacle_stop_node src/obstacle_stop_node.cpp)
-ament_target_dependencies(obstacle_stop_node rclcpp robot_runtime)
+ament_target_dependencies(obstacle_stop_node rclcpp slam_manager)
 target_link_libraries(obstacle_stop_node ${PROJECT_NAME})
 
 install(

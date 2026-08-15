@@ -4,20 +4,20 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "local_planner/costmap_2d.hpp"
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
 
   try {
-    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+    auto worker = std::make_shared<slam_manager::ManagedWorker>(
         "costmap_worker", []() {
           auto node = std::make_shared<rclcpp::Node>("costmap_2d");
           auto costmap = std::make_shared<local_planner::CostMap2D>(node);
           if (!costmap->initialize()) {
             throw std::runtime_error("Failed to initialize costmap");
           }
-          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          slam_manager::ManagedWorker::AlgorithmInstance instance;
           instance.node = node;
           instance.owner = costmap;
           return instance;

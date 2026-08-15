@@ -181,7 +181,7 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/fine_aligned_nano_gicp", qos_latched);
   keyframe_cloud_pub_ =
-      this->create_publisher<robot_interfaces::msg::MapKeyframe>(
+      this->create_publisher<slam_manager_interfaces::msg::MapKeyframe>(
           "/pgo/keyframe_cloud", 100);
 
   /* subscribers */
@@ -672,7 +672,7 @@ void PgoSc::publishKeyframe(const PosePcd &keyframe) {
     return;
   }
 
-  robot_interfaces::msg::MapKeyframe message;
+  slam_manager_interfaces::msg::MapKeyframe message;
   message.keyframe_id = static_cast<uint32_t>(keyframe.idx_);
   message.cloud = pclToPclRos(
       transformPcd(keyframe.pcd_, keyframe.pose_corrected_eig_), map_frame_);

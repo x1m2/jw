@@ -13,7 +13,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 
 add_library(${PROJECT_NAME}
@@ -37,7 +37,7 @@ target_link_libraries(navigation_task_state_machine_node
 )
 ament_target_dependencies(navigation_task_state_machine_node
   rclcpp
-  robot_runtime
+  slam_manager
 )
 
 install(

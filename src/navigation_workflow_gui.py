@@ -53,7 +53,7 @@ class NavigationWorkflowGUI:
         # GUI 未选择地图时使用 map_0；点击“开始建图”后必须由用户明确输入 map_id。
         self.map_id = 0
         self.runtime_data_dir = os.path.join(self.data_dir, "map_0")
-        self.robot_runtime_dir = os.path.dirname(self.data_dir)
+        self.slam_manager_dir = os.path.dirname(self.data_dir)
 
         self.run_kill_node_script = os.path.join(self.script_dir, "run_kill_node.sh")
         self.run_slam_script = os.path.join(self.script_dir, "run_slam.sh")
@@ -353,7 +353,7 @@ class NavigationWorkflowGUI:
             outputs.append(message)
 
         log_dir = os.path.join(self.runtime_data_dir, "log")
-        launch_params_pattern = os.path.join(self.robot_runtime_dir, "launch_params_*")
+        launch_params_pattern = os.path.join(self.slam_manager_dir, "launch_params_*")
         try:
             should_clean = messagebox.askyesno(
                 "清理旧日志",

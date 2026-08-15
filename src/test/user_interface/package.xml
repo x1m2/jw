@@ -11,7 +11,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>geometry_msgs</depend>
   <depend>rclcpp</depend>
-  <depend>robot_runtime</depend>
+  <depend>slam_manager</depend>
   <depend>std_msgs</depend>
 
   <export>

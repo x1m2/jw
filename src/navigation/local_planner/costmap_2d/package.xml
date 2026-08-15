@@ -14,7 +14,7 @@
 
   <!-- Core ROS2 dependencies -->
   <depend>rclcpp</depend>
-  <depend>robot_runtime</depend>
+  <depend>slam_manager</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>

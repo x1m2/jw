@@ -54,7 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'runtime_profile',
             default_value='test',
-            description='test自动启动算法；platform等待robot_runtime启动'
+            description='test自动启动算法；platform等待slam_manager启动'
         ),
         DeclareLaunchArgument(
             'global_frame',

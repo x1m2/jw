@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -61,7 +61,7 @@ add_executable(${PROJECT_NAME}_node
 
 ament_target_dependencies(${PROJECT_NAME}_node
   rclcpp
-  robot_runtime
+  slam_manager
   std_msgs
   sensor_msgs
   nav_msgs

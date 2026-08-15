@@ -63,8 +63,8 @@ mkdir -p "${NAV_LOG_DIR}" "${RELOCALIZATION_DIR}"
 RELOCALIZATION_EXIT_CODE_FILE="${RELOCALIZATION_DIR}/relocalization_exit_code.txt"
 RELOCALIZATION_SUCCESS_FILE="${RELOCALIZATION_DIR}/relocalization_success.txt"
 NAVIGATION_CONFIRM_FILE="${RELOCALIZATION_DIR}/navigation_confirm.txt"
-ROBOT_RUNTIME_DIR="$(dirname "${DATA_DIR}")"
-WAIT_SCRIPT="${ROBOT_RUNTIME_DIR}/wait_reloc_success_$$.py"
+SLAM_MANAGER_DIR="$(dirname "${DATA_DIR}")"
+WAIT_SCRIPT="${SLAM_MANAGER_DIR}/wait_reloc_success_$$.py"
 
 rm -f \
     "${RELOCALIZATION_EXIT_CODE_FILE}" \
@@ -345,7 +345,7 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 # ==================================================
 # 导航保持运行：
 # run_nav.sh 统一负责重定位、人工确认后的导航启动和后台节点清理。
-# 该脚本保留旧的独立导航状态机流程；正式APP流程由RobotRuntime Action控制。
+# 该脚本保留旧的独立导航状态机流程；正式APP流程由SlamManager Action控制。
 # ==================================================
 info "导航后台节点已启动"
 info "请在主 GUI 的导航任务控制区选择任务、急停、回家、停止或继续任务"

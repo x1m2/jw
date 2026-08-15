@@ -4,7 +4,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <stdexcept>
 
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 #include "user_interface/navigation_task_state_machine.hpp"
 
 void signalHandler(int signum) {
@@ -24,14 +24,14 @@ int main(int argc, char** argv) {
               "启动导航任务状态机节点");
 
   try {
-    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+    auto worker = std::make_shared<slam_manager::ManagedWorker>(
         "navigation_task_worker", []() {
           auto state_machine =
               std::make_shared<user_interface::NavigationTaskStateMachine>();
           if (!state_machine->initialize()) {
             throw std::runtime_error("导航任务状态机初始化失败");
           }
-          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          slam_manager::ManagedWorker::AlgorithmInstance instance;
           instance.node = state_machine;
           return instance;
         });

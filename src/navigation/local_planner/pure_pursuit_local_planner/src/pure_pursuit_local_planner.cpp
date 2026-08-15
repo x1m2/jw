@@ -126,7 +126,7 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   LocalAvoidanceOutput initial_avoidance_output;
   publishAvoidanceState(initial_avoidance_output);
 
-  // RobotRuntime内部控制接口，不作为APP直接调用的业务API。
+  // SlamManager内部控制接口，不作为APP直接调用的业务API。
   pause_service_ = node_->create_service<std_srvs::srv::SetBool>(
       "/pure_pursuit/set_paused",
       [this](const std_srvs::srv::SetBool::Request::SharedPtr request,

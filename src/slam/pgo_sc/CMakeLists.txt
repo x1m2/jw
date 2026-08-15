@@ -37,8 +37,8 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(ament_index_cpp REQUIRED)
-find_package(robot_interfaces REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager_interfaces REQUIRED)
+find_package(slam_manager REQUIRED)
 # rosbag2
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
@@ -96,8 +96,8 @@ set(ROS_DEPENDENCIES
   # scancontext
   rosbag2_cpp
   rosbag2_storage
-  robot_interfaces
-  robot_runtime
+  slam_manager_interfaces
+  slam_manager
 )
 
 add_library(${PROJECT_NAME}_modules STATIC

@@ -3,7 +3,7 @@
 #include <clocale>
 #include <exception>
 
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 
 int main(int argc, char ** argv)
 {
@@ -11,13 +11,13 @@ int main(int argc, char ** argv)
   rclcpp::init(argc, argv);
 
   try {
-    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+    auto worker = std::make_shared<slam_manager::ManagedWorker>(
         "dual_radar_worker", []() {
           auto node = std::make_shared<rclcpp::Node>(
               "dual_radar_traversable_extractor");
           auto extractor =
               std::make_shared<DualRadarTraversableExtractor>(node);
-          robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          slam_manager::ManagedWorker::AlgorithmInstance instance;
           instance.node = node;
           instance.owner = extractor;
           return instance;

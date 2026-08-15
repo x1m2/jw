@@ -11,7 +11,7 @@
 
   <depend>rclcpp</depend>
   <depend>navigation_interfaces</depend>
-  <depend>robot_runtime</depend>
+  <depend>slam_manager</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>geometry_msgs</depend>

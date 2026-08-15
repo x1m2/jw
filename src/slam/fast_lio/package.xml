@@ -28,8 +28,8 @@
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
   <depend>livox_ros_driver2</depend>
-  <depend>robot_interfaces</depend>
-  <depend>robot_runtime</depend>
+  <depend>slam_manager_interfaces</depend>
+  <depend>slam_manager</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>

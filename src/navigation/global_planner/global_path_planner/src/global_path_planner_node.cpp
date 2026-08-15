@@ -4,7 +4,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 
 int main(int argc, char ** argv)
 {
@@ -12,9 +12,9 @@ int main(int argc, char ** argv)
 
     rclcpp::init(argc, argv);
 
-    auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+    auto worker = std::make_shared<slam_manager::ManagedWorker>(
         "global_path_planner_worker",
-        [](const robot_runtime::ManagedWorker::StartContext &context) {
+        [](const slam_manager::ManagedWorker::StartContext &context) {
             rclcpp::NodeOptions options;
             if (!context.resource_id.empty()) {
                 options.append_parameter_override(
@@ -31,7 +31,7 @@ int main(int argc, char ** argv)
             if (!planner->initialize()) {
                 throw std::runtime_error("全局路径规划器初始化失败");
             }
-            robot_runtime::ManagedWorker::AlgorithmInstance instance;
+            slam_manager::ManagedWorker::AlgorithmInstance instance;
             instance.node = planner;
             return instance;
         });

@@ -1,6 +1,6 @@
 # user_interface
 
-独立导航流程的测试状态机。源码放在 `src/test`，与 RobotRuntime 正式任务链路隔离；
+独立导航流程的测试状态机。源码放在 `src/test`，与 SlamManager 正式任务链路隔离；
 ROS 包名、节点名和话题保持不变。
 
 ## 启动

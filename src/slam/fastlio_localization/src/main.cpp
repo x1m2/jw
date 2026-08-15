@@ -1,18 +1,18 @@
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
 
-#include "robot_runtime/managed_worker.hpp"
+#include "slam_manager/managed_worker.hpp"
 #include "ros2_main.hpp"
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
 
   const rclcpp::NodeOptions algorithm_options;
-  auto worker = std::make_shared<robot_runtime::ManagedWorker>(
+  auto worker = std::make_shared<slam_manager::ManagedWorker>(
       "fastlio_localization_worker",
       [algorithm_options](
-          const robot_runtime::ManagedWorker::StartContext &context) {
-        robot_runtime::ManagedWorker::AlgorithmInstance instance;
+          const slam_manager::ManagedWorker::StartContext &context) {
+        slam_manager::ManagedWorker::AlgorithmInstance instance;
         auto options = algorithm_options;
         if (!context.resource_path.empty()) {
           options.append_parameter_override("map_path", context.resource_path);

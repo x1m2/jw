@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(navigation_interfaces REQUIRED)
-find_package(robot_runtime REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -50,7 +50,7 @@ add_executable(global_path_planner_node
 
 ament_target_dependencies(global_path_planner_node
   rclcpp
-  robot_runtime
+  slam_manager
 )
 
 target_link_libraries(global_path_planner_node

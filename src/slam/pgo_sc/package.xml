@@ -26,8 +26,8 @@
   <depend>nano_gicp</depend>
   <depend>quatro</depend>
   <depend>scancontext</depend>
-  <depend>robot_interfaces</depend>
-  <depend>robot_runtime</depend>
+  <depend>slam_manager_interfaces</depend>
+  <depend>slam_manager</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
