@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstddef>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <future>
@@ -30,11 +30,10 @@ bool validMapId(const std::string &map_id, std::string &message) {
     return false;
   }
   for (const char character : map_id) {
-    const bool valid =
-        (character >= 'a' && character <= 'z') ||
-        (character >= 'A' && character <= 'Z') ||
-        (character >= '0' && character <= '9') || character == '_' ||
-        character == '-';
+    const bool valid = (character >= 'a' && character <= 'z') ||
+                       (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') ||
+                       character == '_' || character == '-';
     if (!valid) {
       message = "map_id may contain only letters, digits, '_' and '-'";
       return false;
@@ -123,8 +122,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。
   runtime_state_pub_ = create_publisher<RuntimeState>(
       "/robot/runtime_state", rclcpp::QoS(1).reliable().transient_local());
-  keyframe_cloud_pub_ = create_publisher<MapKeyframe>(
-      "/robot/keyframe_cloud", 100);
+  keyframe_cloud_pub_ =
+      create_publisher<MapKeyframe>("/robot/keyframe_cloud", 100);
   current_pose_pub_ = create_publisher<RobotPose>("/robot/current_pose", 20);
   body_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/robot/cloud_body", rclcpp::QoS(20).best_effort());
@@ -389,21 +388,7 @@ void SlamManagerNode::finishMappingCallback(
     return;
   }
 
-  // PGO停止时已将globalmap.pcd保存到staging目录。基于该最终地图
-  // 生成3D-BBS层级体素，使每张地图只在保存时生成一次。
-  std::string bbs_message;
-  if (!bbs_voxel_generator_->generate(active_map_staging_path_, active_map_id_,
-                                      bbs_message)) {
-    response->success = false;
-    response->message =
-        "map save failed: 3D-BBS generation failed: " + bbs_message;
-    enterError(RuntimeState::MAP_ERROR, response->message);
-    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
-    return;
-  }
-  RCLCPP_INFO(get_logger(), "%s", bbs_message.c_str());
-
-  // globalmap和BBS体素都完整后，再将staging原子发布为正式地图。
+  // PGO停止时已将globalmap.pcd保存到staging目录。
   std::string finalize_message;
   if (!map_storage_->finalize(active_map_staging_path_, active_map_id_,
                               finalize_message)) {
@@ -420,14 +405,14 @@ void SlamManagerNode::finishMappingCallback(
   publishMode();
   response->success = true;
   response->message = finalize_message;
-  RCLCPP_INFO(get_logger(), "%s; %s; %s", stop_message.c_str(),
-              bbs_message.c_str(), finalize_message.c_str());
+  RCLCPP_INFO(get_logger(), "%s; %s", stop_message.c_str(),
+              finalize_message.c_str());
 }
 
-void SlamManagerNode::loadMapCallback(
-    const LoadMap::Request::SharedPtr request,
-    LoadMap::Response::SharedPtr response) {
-  // 协议2.4：load_map只检查并记录map_id，不加载PCD、不启动定位算法。
+void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
+                                      LoadMap::Response::SharedPtr response) {
+  // 协议2.4：load_map检查地图并基于当前PCD无条件重新生成BBS，
+  // 但不启动定位算法。
   if (state_machine_.mode() != SlamMode::kIdle) {
     response->success = false;
     response->message =
@@ -471,7 +456,21 @@ void SlamManagerNode::loadMapCallback(
     return;
   }
 
-  // load_map只选择地图，不读取PCD、不发布点云，也不启动算法。
+  // 每次load_map都删除旧体素并基于当前globalmap.pcd重新生成，
+  // 避免APP覆盖或拼接PCD后误用上一版BBS。
+  std::string bbs_message;
+  if (!bbs_voxel_generator_->generate(map_storage_->mapPath(map_id), map_id,
+                                      bbs_message)) {
+    response->success = false;
+    response->message =
+        "load map failed: 3D-BBS generation failed: " + bbs_message;
+    publishMode();
+    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+  RCLCPP_INFO(get_logger(), "%s", bbs_message.c_str());
+
+  // BBS准备完成后才选择地图，不读取/发布PCD，也不启动定位。
   selected_map_id_ = map_id;
   navigation_task_executor_->configureMap(map_storage_->taskPath(map_id),
                                           map_storage_->mapPath(map_id));
@@ -482,7 +481,7 @@ void SlamManagerNode::loadMapCallback(
     has_current_pose_ = false;
   }
   response->success = true;
-  response->message = "map selected: " + selected_map_id_;
+  response->message = "map selected: " + selected_map_id_ + "; " + bbs_message;
   publishMode();
   RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
@@ -527,7 +526,7 @@ void SlamManagerNode::startLocalizationCallback(
     return;
   }
 
-  // BBS体素地图已在finish_mapping保存地图时生成，定位阶段直接加载。
+  // BBS体素地图已在最近一次load_map时重新生成，定位阶段直接加载。
   publishMode();
 
   // 协议使用x/y/z/theta；算法内部仍使用geometry_msgs/Pose四元数。
@@ -932,7 +931,7 @@ void SlamManagerNode::publishMode() {
 }
 
 void SlamManagerNode::publishRuntimeState(uint8_t state, int32_t error_code,
-                                           const std::string &error_message) {
+                                          const std::string &error_message) {
   RuntimeState message;
   message.state = state;
   message.error_code = error_code;
@@ -941,7 +940,7 @@ void SlamManagerNode::publishRuntimeState(uint8_t state, int32_t error_code,
 }
 
 void SlamManagerNode::enterError(int32_t error_code,
-                                  const std::string &error_message) {
+                                 const std::string &error_message) {
   {
     std::lock_guard<std::mutex> lock(runtime_state_mutex_);
     error_code_ = error_code;

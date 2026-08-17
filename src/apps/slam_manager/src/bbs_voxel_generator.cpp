@@ -28,7 +28,7 @@ BbsVoxelGenerator::BbsVoxelGenerator(Config config)
 bool BbsVoxelGenerator::generate(
     const std::filesystem::path &map_directory, const std::string &map_id,
     std::string &message) const {
-  // 协议2.5的前置步骤：重定位Worker启动前生成3D-BBS层级体素地图。
+  // load_map的前置步骤：定位Worker启动前重新生成3D-BBS层级体素地图。
   std::error_code filesystem_error;
   if (!std::filesystem::exists(config_.executable, filesystem_error) ||
       filesystem_error) {
@@ -52,6 +52,15 @@ bool BbsVoxelGenerator::generate(
                   ? "failed to inspect map directory: " +
                         filesystem_error.message()
                   : "map directory does not exist: " + map_directory.string();
+    return false;
+  }
+
+  // 无条件移除上一次生成结果，保证体素一定来自当前PCD。
+  const auto voxel_directory = map_directory / "voxelmaps_coords";
+  std::filesystem::remove_all(voxel_directory, filesystem_error);
+  if (filesystem_error) {
+    message = "failed to remove previous 3D-BBS voxel map: " +
+              filesystem_error.message();
     return false;
   }
 
@@ -80,7 +89,6 @@ bool BbsVoxelGenerator::generate(
     if (wait_result == child_pid) {
       if (WIFEXITED(process_status) && WEXITSTATUS(process_status) == 0) {
         // 子进程返回0后仍需逐项检查输出，避免把不完整体素地图交给定位。
-        const auto voxel_directory = map_directory / "voxelmaps_coords";
         const auto parameters_file = voxel_directory / "voxel_params.txt";
         if (!std::filesystem::is_regular_file(parameters_file,
                                                filesystem_error) ||

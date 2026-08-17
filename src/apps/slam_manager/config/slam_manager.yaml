@@ -12,7 +12,7 @@ slam_manager:
     localization:
       relocalization_timeout_sec: 60.0
       stop_timeout_sec: 10.0
-      # finish_mapping在PGO保存globalmap.pcd后运行该工具，生成voxelmaps_coords。
+      # load_map每次都运行该工具，基于当前globalmap.pcd重新生成voxelmaps_coords。
       bbs:
         saver_executable: "/home/jw/robot_rk3588_ws/env/3d_bbs/test/build/saver"
         min_level_resolution: 0.5
