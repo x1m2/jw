@@ -63,6 +63,9 @@ local_goal_marker visualization_msgs/msg/Marker
 ```
 
 `/obstacle_stop/enabled`采用正向语义：`true`开启停障，`false`关闭停障。
+当前路径点的`EdgePolicy.motion_direction=1`时保持正向跟踪；为`-1`时车头
+对准路径反方向并输出负的`linear.x`。速度绝对值仍受同一`EdgePolicy`的
+边速度和配置最大速度限制。
 
 ## 控制逻辑
 

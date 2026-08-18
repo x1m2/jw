@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -20,7 +21,7 @@
 
 #include "slam_manager/navigation_controller.hpp"
 #include "slam_manager/slam_state_machine.hpp"
-#include "slam_manager/topology_file_writer.hpp"
+#include "slam_manager/task_topology.hpp"
 
 namespace slam_manager {
 
@@ -92,6 +93,8 @@ class NavigationTaskExecutor {
   bool stopWorkers(uint64_t session_id, std::string &message);
   bool waitForGoal(double timeout_sec,
                    const std::function<bool()> &is_canceling);
+  bool waitForStopDuration(double duration_sec,
+                           const std::function<bool()> &is_canceling);
   void fillCurrentPoseFeedback(StartNavigation::Feedback &feedback) const;
   void resetGoalState();
   void releaseOperation();

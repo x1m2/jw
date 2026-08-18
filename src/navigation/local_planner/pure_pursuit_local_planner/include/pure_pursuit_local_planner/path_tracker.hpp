@@ -70,7 +70,7 @@ public:
   double
   computeTargetVelocity(const geometry_msgs::msg::PoseStamped &robot_pose,
                         const geometry_msgs::msg::PointStamped &lookahead_point,
-                        double max_velocity);
+                        double max_velocity, int motion_direction);
 
   /**
    * @brief 发布可视化信息

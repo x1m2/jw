@@ -9,6 +9,7 @@ namespace slam_manager {
 enum class SlamMode : uint8_t {
   kBoot = 0,
   kIdle,
+  kLoadingMap,
   kStartingMapping,
   kMapping,
   kStoppingMapping,
@@ -29,6 +30,8 @@ inline std::string_view toString(SlamMode mode) {
       return "boot";
     case SlamMode::kIdle:
       return "idle";
+    case SlamMode::kLoadingMap:
+      return "loading_map";
     case SlamMode::kStartingMapping:
       return "starting_mapping";
     case SlamMode::kMapping:

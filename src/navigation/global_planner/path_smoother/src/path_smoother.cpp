@@ -79,23 +79,17 @@ void PathSmoother::pathWithPolicyCallback(
     return;
   }
 
-  std::vector<bool> raw_policy = msg->obstacle_stop_enabled;
+  std::vector<navigation_interfaces::msg::EdgePolicy> raw_policy =
+      msg->edge_policies;
   if (raw_policy.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Path policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle stop enabled",
+                 "falling back to the safe default policy",
                  msg->path.poses.size(), raw_policy.size());
-    raw_policy.assign(msg->path.poses.size(), true);
+    const auto default_policy =
+        navigation_interfaces::makeDefaultEdgePolicy(false);
+    raw_policy.assign(msg->path.poses.size(), default_policy);
   }
-  std::vector<bool> raw_avoidance_policy = msg->obstacle_avoidance_enabled;
-  if (raw_avoidance_policy.size() != msg->path.poses.size()) {
-    RCLCPP_ERROR(node_->get_logger(),
-                 "Avoidance policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle_avoidance_enabled=false",
-                 msg->path.poses.size(), raw_avoidance_policy.size());
-    raw_avoidance_policy.assign(msg->path.poses.size(), false);
-  }
-
   rclcpp::Time start_time = node_->now();
 
   // 保存原始路径
@@ -112,16 +106,13 @@ void PathSmoother::pathWithPolicyCallback(
   }
   const bool dynamic_path = msg->dynamic_path;
   const auto publish_path =
-      [this, &path_to_smooth, &raw_policy, &raw_avoidance_policy,
-       dynamic_path](
+      [this, &path_to_smooth, &raw_policy, dynamic_path](
           const nav_msgs::msg::Path &path) {
     smoothed_path_pub_->publish(path);
     navigation_interfaces::msg::PathWithPolicy path_with_policy;
     path_with_policy.path = path;
-    path_with_policy.obstacle_stop_enabled =
+    path_with_policy.edge_policies =
         remapPolicyToSmoothedPath(path_to_smooth, raw_policy, path);
-    path_with_policy.obstacle_avoidance_enabled = remapPolicyToSmoothedPath(
-        path_to_smooth, raw_avoidance_policy, path);
     path_with_policy.dynamic_path = dynamic_path;
     smoothed_path_with_policy_pub_->publish(path_with_policy);
   };
@@ -195,13 +186,17 @@ void PathSmoother::pathWithPolicyCallback(
   }
 }
 
-std::vector<bool> PathSmoother::remapPolicyToSmoothedPath(
-    const nav_msgs::msg::Path &raw_path, const std::vector<bool> &raw_policy,
+std::vector<navigation_interfaces::msg::EdgePolicy>
+PathSmoother::remapPolicyToSmoothedPath(
+    const nav_msgs::msg::Path &raw_path,
+    const std::vector<navigation_interfaces::msg::EdgePolicy> &raw_policy,
     const nav_msgs::msg::Path &smoothed_path) {
-  std::vector<bool> result;
+  std::vector<navigation_interfaces::msg::EdgePolicy> result;
   result.reserve(smoothed_path.poses.size());
   if (raw_path.poses.empty() || raw_policy.size() != raw_path.poses.size()) {
-    result.assign(smoothed_path.poses.size(), false);
+    const auto default_policy =
+        navigation_interfaces::makeDefaultEdgePolicy(false);
+    result.assign(smoothed_path.poses.size(), default_policy);
     return result;
   }
 

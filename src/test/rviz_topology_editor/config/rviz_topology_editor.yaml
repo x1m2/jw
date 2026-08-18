@@ -6,7 +6,8 @@
     # 与按K打点相同的输出。目标点文件会自动生成为
     # generated_map_target_points.txt。
     output_file: "/robotfs/data/slam_data/topology_map/generated_map.txt"
-    connected_topology_file: "/robotfs/data/slam_data/topology_map/connected_topology_map.txt"
+    # RViz直接生成全局规划器读取的统一拓扑文件。
+    connected_topology_file: "/robotfs/data/slam_data/map_0/task/topology_map.json"
     task_file: "/robotfs/data/slam_data/task/test.txt"
 
     frame_id: "map"

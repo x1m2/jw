@@ -36,13 +36,17 @@ public:
 
   bool computeCommand(const geometry_msgs::msg::PoseStamped &robot_pose,
                       const geometry_msgs::msg::PointStamped &lookahead_point,
-                      double target_velocity, bool local_replanning_active,
+                      double target_velocity, double angular_velocity_limit,
+                      int motion_direction,
+                      bool local_replanning_active,
                       std::size_t path_progress_index, int current_path_index,
                       geometry_msgs::msg::Twist &cmd_vel);
 
   // 根据上一控制周期的速度执行限速和加减速约束。
   void applyVelocityLimits(const geometry_msgs::msg::Twist &last_cmd_vel,
-                           double dt, geometry_msgs::msg::Twist &cmd_vel) const;
+                           double dt, double linear_velocity_limit,
+                           double angular_velocity_limit,
+                           geometry_msgs::msg::Twist &cmd_vel) const;
 
   bool
   isTargetOrientationReached(const geometry_msgs::msg::PoseStamped &robot_pose,
@@ -50,6 +54,7 @@ public:
   bool computeOrientationAdjustmentCommand(
       const geometry_msgs::msg::PoseStamped &robot_pose,
       const geometry_msgs::msg::Pose &target_pose,
+      double angular_velocity_limit,
       geometry_msgs::msg::Twist &cmd_vel) const;
 
 private:

@@ -12,6 +12,8 @@ class SlamStateMachine {
   SlamMode mode() const;
 
   bool initialize();
+  bool beginLoadMap();
+  bool loadMapFinished();
   bool beginMapping();
   bool mappingStarted();
   bool beginStopMapping();

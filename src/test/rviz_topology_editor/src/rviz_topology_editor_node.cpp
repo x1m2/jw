@@ -15,6 +15,7 @@
 
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <navigation_interfaces/edge_policy_utils.hpp>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -27,6 +28,8 @@
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+
+#include <nlohmann/json.hpp>
 
 #include "rviz_topology_editor/rviz_topology_editor_node.hpp"
 
@@ -51,8 +54,8 @@ struct EditableEdge {
   int to_id{0};
   double weight{0.0};
   bool bidirectional{true};
-  bool obstacle_stop_enabled{true};
-  bool obstacle_avoidance_enabled{false};
+  navigation_interfaces::msg::EdgePolicy policy{
+      navigation_interfaces::makeDefaultEdgePolicy()};
 };
 
 std::string makeTargetPointsPath(const std::string &output_file) {
@@ -155,7 +158,7 @@ private:
         "/robotfs/data/slam_data/topology_map/generated_map.txt");
     declare_parameter<std::string>(
         "connected_topology_file",
-        "/robotfs/data/slam_data/topology_map/connected_topology_map.txt");
+        "/robotfs/data/slam_data/map_0/task/topology_map.json");
     declare_parameter<std::string>("task_file",
                                    "/robotfs/data/slam_data/task/test.txt");
     declare_parameter<std::string>("frame_id", "map");
@@ -365,9 +368,7 @@ private:
           });
       if (previous != previous_edges.end()) {
         edge.bidirectional = previous->bidirectional;
-        edge.obstacle_stop_enabled = previous->obstacle_stop_enabled;
-        edge.obstacle_avoidance_enabled =
-            previous->obstacle_avoidance_enabled;
+        edge.policy = previous->policy;
       }
       edges_.push_back(edge);
     }
@@ -382,47 +383,42 @@ private:
       return;
     }
 
-    bool reading_edges = false;
-    std::string line;
-    while (std::getline(input, line)) {
-      if (line.find("# Topology Edges") != std::string::npos) {
-        reading_edges = true;
-        continue;
+    try {
+      const nlohmann::json document = nlohmann::json::parse(input);
+      if (document.value("schema_version", 0) != 1 ||
+          document.value("format", "") != "navigation_topology" ||
+          !document.contains("edges") || !document["edges"].is_array()) {
+        throw std::runtime_error("invalid navigation topology JSON schema");
       }
-      const auto first = line.find_first_not_of(" \t\r");
-      if (!reading_edges || first == std::string::npos || line[first] == '#') {
-        continue;
+      const auto &json_edges = document["edges"];
+      for (auto &edge : edges_) {
+        const auto forward = std::find_if(
+            json_edges.begin(), json_edges.end(), [&edge](const auto &item) {
+              return item.value("from_id", -1) == edge.from_id &&
+                     item.value("to_id", -1) == edge.to_id;
+            });
+        if (forward == json_edges.end()) continue;
+        const auto reverse = std::find_if(
+            json_edges.begin(), json_edges.end(), [&edge](const auto &item) {
+              return item.value("from_id", -1) == edge.to_id &&
+                     item.value("to_id", -1) == edge.from_id;
+            });
+        edge.bidirectional = reverse != json_edges.end();
+        edge.policy.obstacle_stop_enabled =
+            forward->value("obstacle_stop_enabled", true);
+        edge.policy.obstacle_avoidance_enabled =
+            forward->value("obstacle_avoidance_enabled", false);
+        edge.policy.linear_velocity =
+            forward->value("linear_velocity", 0.5);
+        edge.policy.angular_velocity =
+            forward->value("angular_velocity", 0.5);
+        edge.policy.motion_direction = forward->value("motion_direction", 1);
+        edge.policy.obstacle_avoidance_distance_m =
+            forward->value("obstacle_avoidance_distance_m", 0.5);
       }
-
-      int edge_id = 0;
-      int from_id = 0;
-      int to_id = 0;
-      double weight = 0.0;
-      std::string type;
-      int bidirectional = 1;
-      int obstacle_stop_enabled = 1;
-      int obstacle_avoidance_enabled = 0;
-      std::istringstream parser(line);
-      if (!(parser >> edge_id >> from_id >> to_id >> weight >> type >>
-            bidirectional)) {
-        RCLCPP_WARN(get_logger(), "Ignore malformed topology edge: %s",
-                    line.c_str());
-        continue;
-      }
-      parser >> obstacle_stop_enabled;
-      parser >> obstacle_avoidance_enabled;
-
-      const auto edge = std::find_if(
-          edges_.begin(), edges_.end(),
-          [from_id, to_id](const EditableEdge &candidate) {
-            return candidate.from_id == from_id && candidate.to_id == to_id;
-          });
-      if (edge == edges_.end()) {
-        continue;
-      }
-      edge->bidirectional = bidirectional == 1;
-      edge->obstacle_stop_enabled = obstacle_stop_enabled == 1;
-      edge->obstacle_avoidance_enabled = obstacle_avoidance_enabled == 1;
+    } catch (const std::exception &error) {
+      throw std::runtime_error("cannot parse existing topology JSON " +
+                               connected_topology_file_ + ": " + error.what());
     }
   }
 
@@ -437,8 +433,9 @@ private:
       policy.edge_id = edge.id;
       policy.from_id = edge.from_id;
       policy.to_id = edge.to_id;
-      policy.obstacle_stop_enabled = edge.obstacle_stop_enabled;
-      policy.obstacle_avoidance_enabled = edge.obstacle_avoidance_enabled;
+      policy.obstacle_stop_enabled = edge.policy.obstacle_stop_enabled;
+      policy.obstacle_avoidance_enabled =
+          edge.policy.obstacle_avoidance_enabled;
       message.edges.push_back(policy);
     }
     edge_policy_pub_->publish(message);
@@ -553,41 +550,58 @@ private:
   }
 
   void writeConnectedTopologyFile(const std::filesystem::path &path) const {
+    nlohmann::json document;
+    document["schema_version"] = 1;
+    document["format"] = "navigation_topology";
+    document["source"] = "rviz_topology_editor";
+    document["frame_id"] = frame_id_;
+    document["nodes"] = nlohmann::json::array();
+    document["edges"] = nlohmann::json::array();
+    for (const auto &point : points_) {
+      const double yaw = std::atan2(
+          2.0 * (point.qw * point.qz + point.qx * point.qy),
+          1.0 - 2.0 * (point.qy * point.qy + point.qz * point.qz));
+      document["nodes"].push_back(
+          {{"id", point.id},
+           {"x", point.x},
+           {"y", point.y},
+           {"z", point.z},
+           {"theta", yaw},
+           {"stop_duration_sec", static_cast<double>(task_wait_sec_)},
+           {"label", point.label}});
+    }
+
+    int json_edge_id = 0;
+    const auto append_edge = [&document, &json_edge_id](
+                                 const EditableEdge &edge, int from_id,
+                                 int to_id) {
+      document["edges"].push_back(
+          {{"id", json_edge_id++},
+           {"from_id", from_id},
+           {"to_id", to_id},
+           {"weight", edge.weight},
+           {"edge_type", "straight"},
+           {"linear_velocity", edge.policy.linear_velocity},
+           {"angular_velocity", edge.policy.angular_velocity},
+           {"motion_direction", edge.policy.motion_direction},
+           {"obstacle_stop_enabled", edge.policy.obstacle_stop_enabled},
+           {"obstacle_avoidance_enabled",
+            edge.policy.obstacle_avoidance_enabled},
+           {"obstacle_avoidance_distance_m",
+            edge.policy.obstacle_avoidance_distance_m}});
+    };
+    for (const auto &edge : edges_) {
+      append_edge(edge, edge.from_id, edge.to_id);
+      if (edge.bidirectional) append_edge(edge, edge.to_id, edge.from_id);
+    }
+
     std::ofstream output(path, std::ios::trunc);
     if (!output.is_open()) {
       throw std::runtime_error("cannot open " + path.string());
     }
-
-    output << "# 拓扑地图文件 (UTF-8编码)\n";
-    output << "# 格式: 节点ID X Y Z 标签\n";
-    output << "# Topology Nodes\n";
-    output << "# 连接方式: 按节点 ID 顺序连接\n";
-    output << "# 新增连接数: " << (points_.empty() ? 0U : points_.size() - 1U)
-           << "\n";
-
-    for (const auto &point : points_) {
-      output << point.id << " " << std::fixed << std::setprecision(6) << point.x
-             << " " << point.y << " " << point.z << " " << point.label << '\n';
-    }
-
-    output << "# 格式: 边ID 起始节点ID 结束节点ID 权重 类型 双向 "
-              "开启停障 开启绕障\n";
-    output << "# Fields: obstacle_stop_enabled obstacle_avoidance_enabled\n";
-    output << "# Topology Edges\n";
-    output << "# 新增连接 (按节点 ID 顺序自动生成)\n";
-
-    for (const auto &edge : edges_) {
-      output << edge.id << " " << edge.from_id << " " << edge.to_id << " "
-             << std::fixed << std::setprecision(6) << edge.weight << " auto "
-             << (edge.bidirectional ? 1 : 0) << " "
-             << (edge.obstacle_stop_enabled ? 1 : 0) << " "
-             << (edge.obstacle_avoidance_enabled ? 1 : 0) << "\n";
-    }
-
+    output << document.dump(2) << '\n';
     output.flush();
-    if (!output) {
-      throw std::runtime_error("failed writing " + path.string());
-    }
+    if (!output) throw std::runtime_error("failed writing " + path.string());
   }
 
   void writeTaskFile(const std::filesystem::path &path) const {
@@ -676,17 +690,17 @@ private:
         line.pose.orientation.w = 1.0;
         line.scale.x = edge_width_;
         line.color.a = 1.0F;
-        if (edge.obstacle_stop_enabled &&
-            !edge.obstacle_avoidance_enabled) {
+        if (edge.policy.obstacle_stop_enabled &&
+            !edge.policy.obstacle_avoidance_enabled) {
           line.color.r = 0.0F;
           line.color.g = 0.7F;
           line.color.b = 1.0F;
-        } else if (edge.obstacle_stop_enabled &&
-                   edge.obstacle_avoidance_enabled) {
+        } else if (edge.policy.obstacle_stop_enabled &&
+                   edge.policy.obstacle_avoidance_enabled) {
           line.color.r = 0.0F;
           line.color.g = 1.0F;
           line.color.b = 0.0F;
-        } else if (edge.obstacle_avoidance_enabled) {
+        } else if (edge.policy.obstacle_avoidance_enabled) {
           line.color.r = 1.0F;
           line.color.g = 0.55F;
           line.color.b = 0.0F;
@@ -727,9 +741,9 @@ private:
         label.color.b = 1.0F;
         label.color.a = 1.0F;
         label.text = "edge" + std::to_string(edge.id) + " STOP:" +
-                     (edge.obstacle_stop_enabled ? "ON" : "OFF") +
+                     (edge.policy.obstacle_stop_enabled ? "ON" : "OFF") +
                      " AVOID:" +
-                     (edge.obstacle_avoidance_enabled ? "ON" : "OFF");
+                     (edge.policy.obstacle_avoidance_enabled ? "ON" : "OFF");
         markers.markers.push_back(label);
       }
     }
@@ -851,15 +865,16 @@ private:
       return;
     }
 
-    edge->obstacle_stop_enabled = request->obstacle_stop_enabled;
-    edge->obstacle_avoidance_enabled = request->obstacle_avoidance_enabled;
+    edge->policy.obstacle_stop_enabled = request->obstacle_stop_enabled;
+    edge->policy.obstacle_avoidance_enabled =
+        request->obstacle_avoidance_enabled;
     show_edges_ = true;
     publishMarkers();
     publishEdgePolicies();
     response->success = true;
     response->message =
         "edge " + std::to_string(edge->id) + " policy applied; click Save "
-        "to write connected_topology_map.txt";
+        "to write topology_map.json";
   }
 
   void saveAll(const std_srvs::srv::Trigger::Request::SharedPtr,

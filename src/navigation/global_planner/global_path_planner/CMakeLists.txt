@@ -14,6 +14,7 @@ find_package(navigation_interfaces REQUIRED)
 find_package(slam_manager REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -42,6 +43,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
 
 target_link_libraries(${PROJECT_NAME}_lib
   ${PCL_LIBRARIES}
+  nlohmann_json::nlohmann_json
 )
 
 add_executable(global_path_planner_node

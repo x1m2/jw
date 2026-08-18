@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <navigation_interfaces/edge_policy_utils.hpp>
 #include <stdexcept>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -620,10 +621,11 @@ bool UwbFollowPlanner::buildFollowPath(
     output.path.poses.push_back(pose);
   }
 
-  output.obstacle_stop_enabled.assign(output.path.poses.size(),
-                                      obstacle_stop_enabled_);
-  output.obstacle_avoidance_enabled.assign(output.path.poses.size(),
-                                           obstacle_avoidance_enabled_);
+  auto follow_policy = navigation_interfaces::makeDefaultEdgePolicy(false);
+  follow_policy.obstacle_stop_enabled = obstacle_stop_enabled_;
+  follow_policy.obstacle_avoidance_enabled = obstacle_avoidance_enabled_;
+  follow_policy.obstacle_avoidance_distance_m = 0.5;
+  output.edge_policies.assign(output.path.poses.size(), follow_policy);
   output.dynamic_path = true;
 
   const auto &path_goal = output.path.poses.back().pose.position;

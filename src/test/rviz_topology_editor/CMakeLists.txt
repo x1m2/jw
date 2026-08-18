@@ -14,6 +14,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(navigation_interfaces REQUIRED)
+find_package(nlohmann_json REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS io)
 find_package(pluginlib REQUIRED)
@@ -46,11 +48,13 @@ target_include_directories(rviz_topology_editor_node PRIVATE
 
 target_link_libraries(rviz_topology_editor_node
   ${PCL_LIBRARIES}
+  nlohmann_json::nlohmann_json
   "${cpp_typesupport_target}"
 )
 
 ament_target_dependencies(rviz_topology_editor_node
   geometry_msgs
+  navigation_interfaces
   pcl_conversions
   rclcpp
   sensor_msgs

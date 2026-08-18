@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
@@ -25,7 +26,7 @@ add_library(${PROJECT_NAME}_core SHARED
   src/navigation_task_executor.cpp
   src/slam_manager_node.cpp
   src/slam_state_machine.cpp
-  src/topology_file_writer.cpp
+  src/task_topology.cpp
   src/worker_client.cpp
 )
 
@@ -33,7 +34,6 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-
 ament_target_dependencies(${PROJECT_NAME}_core
   geometry_msgs
   rclcpp
@@ -45,6 +45,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
   tf2
   tf2_geometry_msgs
 )
+target_link_libraries(${PROJECT_NAME}_core nlohmann_json::nlohmann_json)
 
 add_executable(slam_manager_node src/main.cpp)
 target_link_libraries(slam_manager_node ${PROJECT_NAME}_core)
@@ -74,6 +75,6 @@ ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_include_directories(include)
 ament_export_dependencies(
   geometry_msgs rclcpp rclcpp_action slam_manager_interfaces sensor_msgs std_msgs
-  std_srvs tf2 tf2_geometry_msgs)
+  std_srvs tf2 tf2_geometry_msgs nlohmann_json)
 
 ament_package()

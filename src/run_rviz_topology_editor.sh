@@ -15,7 +15,7 @@ TOPOLOGY_DIR="${DATA_DIR}/topology_map"
 TASK_DIR="${DATA_DIR}/task"
 
 OUTPUT_FILE="${TOPOLOGY_DIR}/generated_map.txt"
-CONNECTED_FILE="${TOPOLOGY_DIR}/connected_topology_map.txt"
+CONNECTED_FILE="${TASK_DIR}/topology_map.json"
 TASK_FILE="${TASK_DIR}/test.txt"
 
 if [ -z "${PCD_FILE}" ]; then

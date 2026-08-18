@@ -60,8 +60,8 @@ def generate_launch_description():
                 'topology_map_file': PathJoinSubstitution([
                     LaunchConfiguration('data_dir'),
                     map_directory,
-                    'topology_map',
-                    'connected_topology_map.txt',
+                    'task',
+                    'topology_map.json',
                 ]),
                 'free_space_pcd_file': PathJoinSubstitution([
                     LaunchConfiguration('data_dir'),

@@ -14,7 +14,8 @@
 - `generated_map.txt`：`id x y z label`
 - `generated_map_target_points.txt`：
   `id x y z qx qy qz qw label`
-- `connected_topology_map.txt`：节点以及相邻ID之间的双向自动边；
+- `task/topology_map.json`：统一`navigation_topology` JSON，供全局规划器
+  直接读取；
 - `task/test.txt`：`目标点ID 等待延时 抵达后发布的数据`
 
 ## 编译
@@ -31,7 +32,7 @@ source install/setup.bash
 ros2 launch rviz_topology_editor rviz_topology_editor.launch.py \
   pcd_file:=/home/jw-zkl/robotics_platform/robot_ws/map/globalmap.pcd \
   output_file:=/home/jw-zkl/robotics_platform/robot_ws/topology_map/generated_map.txt \
-  connected_topology_file:=/home/jw-zkl/robotics_platform/robot_ws/topology_map/connected_topology_map.txt \
+  connected_topology_file:=/home/jw-zkl/robotics_platform/robot_ws/task/topology_map.json \
   task_file:=/home/jw-zkl/robotics_platform/robot_ws/task/test.txt
 ```
 
@@ -47,8 +48,12 @@ ros2 launch rviz_topology_editor rviz_topology_editor.launch.py \
 
 RViz左侧面板可以选择具体边并设置“启用停障”和“启用绕障”。新边默认
 启用停障、不启用主动绕障；点击“应用到当前边”修改内存属性，再点击
-“保存并生成”写入`connected_topology_map.txt`。重新打开编辑器时会恢复
+"保存并生成"写入`topology_map.json`。重新打开编辑器时会恢复
 已保存的边属性。
+
+JSON中的边统一为有向边。GUI中选择“双向”时，保存时自动展开为
+`from_id -> to_id`和`to_id -> from_id`两条边，JSON不再使用
+`bidirectional`字段。
 
 如果 `generated_map_target_points.txt` 已存在，编辑器启动时会按文件
 顺序自动恢复历史点和连边，新点ID从已有最大ID加1开始。只加载不会

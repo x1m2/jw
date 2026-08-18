@@ -11,6 +11,14 @@ bool SlamStateMachine::initialize() {
   return transition(SlamMode::kBoot, SlamMode::kIdle);
 }
 
+bool SlamStateMachine::beginLoadMap() {
+  return transition(SlamMode::kIdle, SlamMode::kLoadingMap);
+}
+
+bool SlamStateMachine::loadMapFinished() {
+  return transition(SlamMode::kLoadingMap, SlamMode::kIdle);
+}
+
 bool SlamStateMachine::beginMapping() {
   return transition(SlamMode::kIdle, SlamMode::kStartingMapping);
 }

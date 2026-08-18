@@ -2,6 +2,8 @@
 #define PATH_SMOOTHER_PATH_SMOOTHER_HPP
 
 #include <rclcpp/rclcpp.hpp>
+#include <navigation_interfaces/edge_policy_utils.hpp>
+#include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
 
 #include <geometry_msgs/msg/point.hpp>
@@ -54,9 +56,10 @@ private:
   // 回调函数
   void pathWithPolicyCallback(
     const navigation_interfaces::msg::PathWithPolicy::SharedPtr msg);
-  std::vector<bool> remapPolicyToSmoothedPath(
+  std::vector<navigation_interfaces::msg::EdgePolicy>
+  remapPolicyToSmoothedPath(
     const nav_msgs::msg::Path & raw_path,
-    const std::vector<bool> & raw_policy,
+    const std::vector<navigation_interfaces::msg::EdgePolicy> & raw_policy,
     const nav_msgs::msg::Path & smoothed_path);
 
   // 路径平滑核心方法

@@ -241,11 +241,12 @@ std::size_t PathTracker::computeCircleLineIntersection(
 double PathTracker::computeTargetVelocity(
     const geometry_msgs::msg::PoseStamped &robot_pose,
     const geometry_msgs::msg::PointStamped &lookahead_point,
-    double max_velocity) {
-  // 计算机器人方向单位向量
+    double max_velocity, int motion_direction) {
+  const int direction = motion_direction == -1 ? -1 : 1;
+  // 倒车时使用机器人后方作为实际运动方向。
   double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
-  double robot_dir_x = std::cos(robot_yaw);
-  double robot_dir_y = std::sin(robot_yaw);
+  double robot_dir_x = direction * std::cos(robot_yaw);
+  double robot_dir_y = direction * std::sin(robot_yaw);
 
   // 计算机器人位置到前瞻点的方向向量
   double dx = lookahead_point.point.x - robot_pose.pose.position.x;
@@ -261,7 +262,9 @@ double PathTracker::computeTargetVelocity(
   double theta = std::atan2(dy, dx);
 
   // 计算方向误差
-  double angle_error = theta - robot_yaw;
+  const double motion_yaw =
+      robot_yaw + (direction == -1 ? M_PI : 0.0);
+  double angle_error = theta - motion_yaw;
   // 标准化角度到[-π, π]
   while (angle_error > M_PI)
     angle_error -= 2.0 * M_PI;

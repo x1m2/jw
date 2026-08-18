@@ -20,6 +20,8 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <navigation_interfaces/msg/avoidance_state.hpp>
+#include <navigation_interfaces/edge_policy_utils.hpp>
+#include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -162,8 +164,7 @@ private:
   bool target_pose_received_;            // 新增：目标位姿接收标志
   int current_path_index_;
   size_t path_progress_index_; // 路径进度索引，防止回头
-  std::vector<bool> obstacle_stop_enabled_policy_;
-  std::vector<bool> obstacle_avoidance_enabled_policy_;
+  std::vector<navigation_interfaces::msg::EdgePolicy> edge_policies_;
   bool published_obstacle_stop_enabled_{true};
   bool has_published_obstacle_stop_policy_{false};
   std::atomic<uint8_t> avoidance_state_{255};
@@ -202,6 +203,7 @@ private:
       navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg);
   void publishCurrentObstacleStopPolicy();
   bool isObstacleAvoidanceEnabled() const;
+  navigation_interfaces::msg::EdgePolicy currentEdgePolicy() const;
 
   /**
    * @brief 代价地图回调函数

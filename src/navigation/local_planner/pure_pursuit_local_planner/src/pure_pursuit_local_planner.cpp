@@ -211,7 +211,8 @@ void PurePursuitLocalPlanner::publishAvoidanceState(
 
   const uint8_t previous = avoidance_state_.exchange(state);
   if (previous == state) return;
-  if (state == navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH &&
+  if (state ==
+          navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH &&
       previous != state) {
     // 只接受进入等待状态之后生成的动态路径，过滤平滑器和DDS队列中的旧帧。
     dynamic_path_accept_after_ns_.store(node_->now().nanoseconds());
@@ -338,6 +339,14 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
 
   // 执行避障决策前先更新当前拓扑段策略。
   updatePathProgress(robot_pose);
+  const auto edge_policy = currentEdgePolicy();
+  const double edge_linear_velocity = edge_policy.velocity_limit_enabled
+                                          ? edge_policy.linear_velocity
+                                          : config_.max_linear_velocity;
+  const double edge_angular_velocity = edge_policy.velocity_limit_enabled
+                                           ? edge_policy.angular_velocity
+                                           : config_.max_angular_velocity;
+  const int motion_direction = edge_policy.motion_direction;
   const bool avoidance_enabled = isObstacleAvoidanceEnabled();
   bool local_tracking =
       local_avoidance_manager_ && local_avoidance_manager_->isTrackingLocal();
@@ -401,7 +410,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     if (target_pose_received_ && controller_ &&
         !controller_->isTargetOrientationReached(robot_pose, target_pose_)) {
       if (controller_->computeOrientationAdjustmentCommand(
-              robot_pose, target_pose_, cmd_vel)) {
+              robot_pose, target_pose_, edge_angular_velocity, cmd_vel)) {
         return true;
       } else {
         cmd_vel = geometry_msgs::msg::Twist();
@@ -464,15 +473,16 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return false;
   }
 
-  double target_velocity = config_.max_linear_velocity;
+  double target_velocity = edge_linear_velocity;
   if (path_tracker_) {
     target_velocity = path_tracker_->computeTargetVelocity(
-        robot_pose, lookahead_point, config_.max_linear_velocity);
+        robot_pose, lookahead_point, edge_linear_velocity, motion_direction);
   }
   if (!controller_ ||
-      !controller_->computeCommand(robot_pose, lookahead_point, target_velocity,
-                                   local_tracking, path_progress_index_,
-                                   current_path_index_, cmd_vel)) {
+      !controller_->computeCommand(
+          robot_pose, lookahead_point, target_velocity, edge_angular_velocity,
+          motion_direction,
+          local_tracking, path_progress_index_, current_path_index_, cmd_vel)) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "Failed to compute pure pursuit command");
     cmd_vel = geometry_msgs::msg::Twist();
@@ -490,7 +500,8 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   }
   // 应用速度限制
   controller_->applyVelocityLimits(
-      last_cmd_vel_, (node_->now() - last_control_time_).seconds(), cmd_vel);
+      last_cmd_vel_, (node_->now() - last_control_time_).seconds(),
+      edge_linear_velocity, edge_angular_velocity, cmd_vel);
 
   // 发布可视化信息
   publishVisualization(lookahead_point);
@@ -594,39 +605,65 @@ void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
     }
   }
 
-  if (msg->obstacle_stop_enabled.size() != msg->path.poses.size()) {
+  edge_policies_ = msg->edge_policies;
+  if (edge_policies_.size() != msg->path.poses.size()) {
     RCLCPP_ERROR(node_->get_logger(),
                  "Path policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle stop enabled",
-                 msg->path.poses.size(), msg->obstacle_stop_enabled.size());
-    obstacle_stop_enabled_policy_.assign(msg->path.poses.size(), true);
-  } else {
-    obstacle_stop_enabled_policy_ = msg->obstacle_stop_enabled;
+                 "falling back to safe defaults",
+                 msg->path.poses.size(), edge_policies_.size());
+    const auto default_policy =
+        navigation_interfaces::makeDefaultEdgePolicy(false);
+    edge_policies_.assign(msg->path.poses.size(), default_policy);
   }
-  if (msg->obstacle_avoidance_enabled.size() != msg->path.poses.size()) {
-    RCLCPP_ERROR(node_->get_logger(),
-                 "Avoidance policy size mismatch: poses=%zu, policies=%zu; "
-                 "falling back to obstacle_avoidance_enabled=false",
-                 msg->path.poses.size(),
-                 msg->obstacle_avoidance_enabled.size());
-    obstacle_avoidance_enabled_policy_.assign(msg->path.poses.size(), false);
-  } else {
-    obstacle_avoidance_enabled_policy_ = msg->obstacle_avoidance_enabled;
+  for (auto &policy : edge_policies_) {
+    if (policy.velocity_limit_enabled &&
+        (!std::isfinite(policy.linear_velocity) ||
+         policy.linear_velocity < 0.0 ||
+         !std::isfinite(policy.angular_velocity) ||
+         policy.angular_velocity < 0.0)) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Invalid EdgePolicy velocity limits; using configured "
+                   "maximums");
+      policy.velocity_limit_enabled = false;
+    }
+    if (policy.velocity_limit_enabled) {
+      policy.linear_velocity =
+          std::min(policy.linear_velocity, config_.max_linear_velocity);
+      policy.angular_velocity =
+          std::min(policy.angular_velocity, config_.max_angular_velocity);
+    }
+    if (policy.motion_direction != 1 && policy.motion_direction != -1) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Invalid EdgePolicy motion_direction=%d; using forward",
+                   static_cast<int>(policy.motion_direction));
+      policy.motion_direction = 1;
+    }
+    if (!std::isfinite(policy.obstacle_avoidance_distance_m) ||
+        policy.obstacle_avoidance_distance_m < 0.0) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Invalid EdgePolicy obstacle avoidance distance; using "
+                   "0.5m");
+      policy.obstacle_avoidance_distance_m = 0.5;
+    }
   }
   setGlobalPath(msg->path, msg->dynamic_path);
   publishCurrentObstacleStopPolicy();
 }
 
 bool PurePursuitLocalPlanner::isObstacleAvoidanceEnabled() const {
-  return path_progress_index_ < obstacle_avoidance_enabled_policy_.size() &&
-         obstacle_avoidance_enabled_policy_[path_progress_index_];
+  return currentEdgePolicy().obstacle_avoidance_enabled;
+}
+
+navigation_interfaces::msg::EdgePolicy
+PurePursuitLocalPlanner::currentEdgePolicy() const {
+  if (path_progress_index_ < edge_policies_.size()) {
+    return edge_policies_[path_progress_index_];
+  }
+  return navigation_interfaces::makeDefaultEdgePolicy(false);
 }
 
 void PurePursuitLocalPlanner::publishCurrentObstacleStopPolicy() {
-  bool enabled = true;
-  if (path_progress_index_ < obstacle_stop_enabled_policy_.size()) {
-    enabled = obstacle_stop_enabled_policy_[path_progress_index_];
-  }
+  const bool enabled = currentEdgePolicy().obstacle_stop_enabled;
   if (has_published_obstacle_stop_policy_ &&
       enabled == published_obstacle_stop_enabled_) {
     return;

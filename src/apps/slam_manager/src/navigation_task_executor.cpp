@@ -1,10 +1,12 @@
 #include "slam_manager/navigation_task_executor.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <future>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -17,7 +19,6 @@ namespace slam_manager {
 
 namespace {
 using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
-
 bool validTaskId(const std::string &task_id, std::string &message) {
   constexpr std::size_t kMaximumIdLength = 64U;
   if (task_id.empty() || task_id.size() > kMaximumIdLength) {
@@ -38,6 +39,7 @@ bool validTaskId(const std::string &task_id, std::string &message) {
   }
   return true;
 }
+
 }
 
 NavigationTaskExecutor::NavigationTaskExecutor(
@@ -145,6 +147,12 @@ bool NavigationTaskExecutor::validateGoal(
 
   std::unordered_set<uint32_t> node_ids;
   for (const auto &node : goal.nodes) {
+    if (node.node_id >
+        static_cast<uint32_t>(std::numeric_limits<int>::max() - 2)) {
+      message = "node_id exceeds planner range: " +
+                std::to_string(node.node_id);
+      return false;
+    }
     if (!node_ids.insert(node.node_id).second) {
       message = "duplicate node_id=" + std::to_string(node.node_id);
       return false;
@@ -230,13 +238,146 @@ void NavigationTaskExecutor::executePatrolAction(
     return;
   }
 
-  // 字符串task_id使用patrol_<task_id>.txt命名；相同ID再次下发时原子更新。
-  topology_file_ = task_directory_ / ("patrol_" + goal->task_id + ".txt");
+  // APP task.json保持不变；topology_map.json是统一的规划器输入。
+  const auto task_json_file = task_directory_ / "task.json";
+  topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
 
-  // APP的nodes替代旧的打点文件，先按数组顺序生成节点和相邻双向边。
+  std::vector<TaskTopologyNode> patrol_nodes;
+  std::vector<bool> skip_navigation(goal->nodes.size(), false);
   std::string topology_message;
-  if (!topology_writer_->write(goal->nodes, topology_message)) {
+  std::error_code filesystem_error;
+  const bool task_json_exists =
+      std::filesystem::exists(task_json_file, filesystem_error);
+  if (filesystem_error) {
+    result->success = false;
+    result->completed_count = 0U;
+    result->message = "failed to inspect patrol JSON: " +
+                      filesystem_error.message();
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
+
+  bool topology_written = false;
+  if (task_json_exists) {
+    TaskTopologyGraph graph;
+    DirectedEdgeIndex directed_edge_indexes;
+    if (!parseTaskJson(task_json_file, graph, directed_edge_indexes,
+                       topology_message)) {
+      result->success = false;
+      result->completed_count = 0U;
+      result->message = topology_message;
+      goal_handle->abort(result);
+      releaseOperation();
+      return;
+    }
+
+    std::unordered_map<uint32_t, std::size_t> graph_node_indexes;
+    std::unordered_set<uint32_t> fallback_node_ids;
+    graph_node_indexes.reserve(graph.nodes.size() + goal->nodes.size());
+    for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
+      graph_node_indexes.emplace(graph.nodes[index].navigation_node.node_id,
+                                 index);
+    }
+
+    patrol_nodes.reserve(goal->nodes.size());
+    for (const auto &action_node : goal->nodes) {
+      const auto json_node_it = graph_node_indexes.find(action_node.node_id);
+      if (json_node_it != graph_node_indexes.end()) {
+        patrol_nodes.push_back(graph.nodes[json_node_it->second]);
+        RCLCPP_INFO(node_->get_logger(),
+                    "Patrol node_id=%u resolved from local JSON",
+                    action_node.node_id);
+      } else {
+        TaskTopologyNode fallback_node;
+        fallback_node.navigation_node = action_node;
+        fallback_node.stop_duration_sec = 0.0;
+        graph_node_indexes.emplace(action_node.node_id, graph.nodes.size());
+        graph.nodes.push_back(fallback_node);
+        patrol_nodes.push_back(fallback_node);
+        fallback_node_ids.insert(action_node.node_id);
+        RCLCPP_WARN(node_->get_logger(),
+                    "Patrol node_id=%u is absent from JSON; using Action pose "
+                    "and default policies",
+                    action_node.node_id);
+      }
+    }
+
+    uint64_t next_edge_id = 0U;
+    for (const auto &edge : graph.edges) {
+      next_edge_id =
+          std::max(next_edge_id, static_cast<uint64_t>(edge.id) + 1U);
+    }
+    for (std::size_t index = 0; index + 1U < patrol_nodes.size(); ++index) {
+      const uint32_t from_id =
+          patrol_nodes[index].navigation_node.node_id;
+      const uint32_t to_id =
+          patrol_nodes[index + 1U].navigation_node.node_id;
+      const TaskTopologyEdge *direct_edge =
+          findDirectEdge(graph, directed_edge_indexes, from_id, to_id);
+      if (direct_edge != nullptr) {
+        if (direct_edge->edge_type == "map_connection") {
+          skip_navigation[index + 1U] = true;
+          RCLCPP_INFO(
+              node_->get_logger(),
+              "Patrol transition %u -> %u is map_connection; node %u "
+              "will be completed without publishing a motion target",
+              from_id, to_id, to_id);
+        }
+        continue;
+      }
+
+      const bool uses_action_fallback =
+          fallback_node_ids.find(from_id) != fallback_node_ids.end() ||
+          fallback_node_ids.find(to_id) != fallback_node_ids.end();
+      if (!uses_action_fallback) {
+        result->success = false;
+        result->completed_count = 0U;
+        result->message =
+            "patrol consecutive nodes require a direct JSON edge: " +
+            std::to_string(from_id) + " -> " + std::to_string(to_id);
+        goal_handle->abort(result);
+        releaseOperation();
+        return;
+      }
+      if (next_edge_id >
+          static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        result->success = false;
+        result->completed_count = 0U;
+        result->message = "cannot allocate a default edge id";
+        goal_handle->abort(result);
+        releaseOperation();
+        return;
+      }
+      TaskTopologyEdge default_edge;
+      default_edge.id = static_cast<uint32_t>(next_edge_id++);
+      default_edge.from_id = from_id;
+      default_edge.to_id = to_id;
+      graph.edges.push_back(default_edge);
+      directed_edge_indexes.emplace(
+          makeDirectedEdgeKey(from_id, to_id), graph.edges.size() - 1U);
+      RCLCPP_WARN(node_->get_logger(),
+                  "Patrol transition %u -> %u uses an Action fallback node; "
+                  "adding a default directed straight edge",
+                  from_id, to_id);
+    }
+    topology_written = topology_writer_->write(graph, topology_message);
+  } else {
+    // 没有JSON时完整保留旧协议：使用Action位姿并按数组顺序生成双向边。
+    patrol_nodes.reserve(goal->nodes.size());
+    for (const auto &action_node : goal->nodes) {
+      TaskTopologyNode node;
+      node.navigation_node = action_node;
+      patrol_nodes.push_back(node);
+    }
+    topology_written = topology_writer_->write(goal->nodes, topology_message);
+    RCLCPP_WARN(node_->get_logger(),
+                "Patrol JSON does not exist, using legacy Action topology: %s",
+                task_json_file.c_str());
+  }
+
+  if (!topology_written) {
     result->success = false;
     result->completed_count = 0U;
     result->message = topology_message;
@@ -274,7 +415,10 @@ void NavigationTaskExecutor::executePatrolAction(
   bool failed = false;
   std::string failure_message;
   do {
-    for (const auto &node : goal->nodes) {
+    for (std::size_t patrol_index = 0U;
+         patrol_index < patrol_nodes.size(); ++patrol_index) {
+      const auto &task_node = patrol_nodes[patrol_index];
+      const auto &node = task_node.navigation_node;
       {
         std::lock_guard<std::mutex> lock(result_mutex_);
         goal_armed_ = false;
@@ -284,6 +428,20 @@ void NavigationTaskExecutor::executePatrolAction(
       if (cancelled || goal_handle->is_canceling()) {
         cancelled = true;
         break;
+      }
+
+      if (skip_navigation[patrol_index]) {
+        if (completed_count < std::numeric_limits<uint32_t>::max()) {
+          ++completed_count;
+        }
+        auto feedback = std::make_shared<StartNavigation::Feedback>();
+        feedback->current_node_id = node.node_id;
+        fillCurrentPoseFeedback(*feedback);
+        feedback->message =
+            "map_connection node completed without motion: " +
+            std::to_string(node.node_id);
+        goal_handle->publish_feedback(feedback);
+        continue;
       }
 
       // 每次只下发一个目标；到达后反馈该APP node_id，再继续下一个节点。
@@ -303,6 +461,29 @@ void NavigationTaskExecutor::executePatrolAction(
               std::to_string(node.node_id);
         }
         break;
+      }
+
+      if (task_node.stop_duration_sec > 0.0) {
+        auto waiting_feedback = std::make_shared<StartNavigation::Feedback>();
+        waiting_feedback->current_node_id = node.node_id;
+        fillCurrentPoseFeedback(*waiting_feedback);
+        waiting_feedback->message =
+            "node reached; waiting " +
+            std::to_string(task_node.stop_duration_sec) + " seconds";
+        goal_handle->publish_feedback(waiting_feedback);
+        if (!waitForStopDuration(
+                task_node.stop_duration_sec,
+                [goal_handle]() { return goal_handle->is_canceling(); })) {
+          std::lock_guard<std::mutex> lock(result_mutex_);
+          cancelled = cancel_requested_ || shutting_down_ ||
+                      goal_handle->is_canceling();
+          if (!cancelled) {
+            failed = true;
+            failure_message = "node wait interrupted at node_id=" +
+                              std::to_string(node.node_id);
+          }
+          break;
+        }
       }
 
       if (completed_count < std::numeric_limits<uint32_t>::max()) {
@@ -403,8 +584,8 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   topology_nodes[1].z = goal->z;
   topology_nodes[1].theta = goal->theta;
 
-  // 单点导航使用固定专用文件，不覆盖APP巡检任务文件。
-  topology_file_ = task_directory_ / "single_point_navigation.txt";
+  // 单点导航同样更新统一规划器输入，不覆盖APP的task.json。
+  topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
   if (!topology_writer_->write(topology_nodes, message)) {
     result->success = false;
@@ -570,6 +751,18 @@ bool NavigationTaskExecutor::waitForGoal(
                       is_canceling();
              }) &&
          goal_reached_;
+}
+
+bool NavigationTaskExecutor::waitForStopDuration(
+    double duration_sec, const std::function<bool()> &is_canceling) {
+  if (duration_sec <= 0.0) return true;
+  std::unique_lock<std::mutex> lock(result_mutex_);
+  const bool interrupted = result_cv_.wait_for(
+      lock, std::chrono::duration<double>(duration_sec),
+      [this, &is_canceling]() {
+        return cancel_requested_ || shutting_down_ || is_canceling();
+      });
+  return !interrupted;
 }
 
 void NavigationTaskExecutor::resetGoalState() {

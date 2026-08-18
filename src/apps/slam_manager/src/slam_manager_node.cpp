@@ -413,7 +413,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
                                       LoadMap::Response::SharedPtr response) {
   // 协议2.4：load_map检查地图并基于当前PCD无条件重新生成BBS，
   // 但不启动定位算法。
-  if (state_machine_.mode() != SlamMode::kIdle) {
+  if (!state_machine_.beginLoadMap()) {
     response->success = false;
     response->message =
         "load map rejected, robot must be idle, current state=" +
@@ -421,11 +421,20 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
     return;
   }
 
-  publishRuntimeState(RuntimeState::LOADING_MAP);
+  // 从进入加载状态到本回调返回期间，其他任务会被状态机拒绝。
+  publishMode();
+  const auto finish_loading = [this]() {
+    if (!state_machine_.loadMapFinished()) {
+      RCLCPP_ERROR(get_logger(),
+                   "load_map failed to leave loading_map state");
+      state_machine_.enterError();
+    }
+    publishMode();
+  };
   const std::string &map_id = request->map_id;
   if (!validMapId(map_id, response->message)) {
     response->success = false;
-    publishMode();
+    finish_loading();
     return;
   }
 
@@ -439,7 +448,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
         filesystem_error
             ? "failed to inspect map: " + filesystem_error.message()
             : "map is incomplete or does not exist: " + map_id;
-    publishMode();
+    finish_loading();
     return;
   }
 
@@ -452,7 +461,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
             ? "failed to inspect map file: " + filesystem_error.message()
             : "globalmap.pcd is not a regular file: " +
                   global_map_path.string();
-    publishMode();
+    finish_loading();
     return;
   }
 
@@ -464,7 +473,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
     response->success = false;
     response->message =
         "load map failed: 3D-BBS generation failed: " + bbs_message;
-    publishMode();
+    finish_loading();
     RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
     return;
   }
@@ -482,7 +491,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
   }
   response->success = true;
   response->message = "map selected: " + selected_map_id_ + "; " + bbs_message;
-  publishMode();
+  finish_loading();
   RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
@@ -892,6 +901,9 @@ void SlamManagerNode::publishMode() {
   // 协议2.13：将更细的内部过渡状态压缩成APP定义的uint8状态。
   uint8_t protocol_state = RuntimeState::IDLE;
   switch (state_machine_.mode()) {
+    case SlamMode::kLoadingMap:
+      protocol_state = RuntimeState::LOADING_MAP;
+      break;
     case SlamMode::kStartingMapping:
     case SlamMode::kMapping:
       protocol_state = RuntimeState::MAPPING;

@@ -6,10 +6,11 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <queue>
 #include <set>
-#include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace global_path_planner {
 
@@ -21,7 +22,7 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   // 声明并读取 ROS2 参数
   this->declare_parameter<std::string>(
       "topology_map_file",
-      "/robotfs/data/slam_data/map_0/topology_map/connected_topology_map.txt");
+      "/robotfs/data/slam_data/map_0/task/topology_map.json");
   this->declare_parameter<std::string>("global_frame", "map");
   this->declare_parameter<std::string>("robot_frame", "base_link");
   this->declare_parameter<std::string>("pose_topic",
@@ -32,6 +33,7 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->declare_parameter<bool>("enable_direct_connection", true);
   this->declare_parameter<double>("direct_connection_threshold", 3.0);
   this->declare_parameter<double>("direct_connection_cost_ratio", 0.9);
+  this->declare_parameter<double>("map_connection_max_distance", 0.2);
   // 边合法性检查相关参数
   this->declare_parameter<double>("robot_height", 0.35);
   this->declare_parameter<int>("edge_sample_count", 100);
@@ -55,6 +57,8 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
                       direct_connection_threshold_);
   this->get_parameter("direct_connection_cost_ratio",
                       direct_connection_cost_ratio_);
+  this->get_parameter("map_connection_max_distance",
+                      map_connection_max_distance_);
   this->get_parameter("robot_height", robot_height_);
   this->get_parameter("edge_sample_count", edge_sample_count_);
   this->get_parameter("safety_sphere_radius", safety_sphere_radius_);
@@ -74,6 +78,8 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   RCLCPP_INFO(this->get_logger(), "全局坐标系: %s", global_frame_.c_str());
   RCLCPP_INFO(this->get_logger(), "机器人坐标系: %s", robot_frame_.c_str());
   RCLCPP_INFO(this->get_logger(), "实时位姿话题: %s", pose_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "地图虚拟连接最大端点距离: %.3f m",
+              map_connection_max_distance_);
   RCLCPP_INFO(this->get_logger(), "机器狗高度: %.2f m", robot_height_);
   RCLCPP_INFO(this->get_logger(), "安全球半径: %.2f m", safety_sphere_radius_);
   RCLCPP_INFO(this->get_logger(), "有效点阈值: %.1f%%",
@@ -90,6 +96,13 @@ GlobalPathPlanner::~GlobalPathPlanner() {
 
 bool GlobalPathPlanner::initialize() {
   RCLCPP_INFO(this->get_logger(), "初始化全局路径规划器...");
+
+  if (!std::isfinite(map_connection_max_distance_) ||
+      map_connection_max_distance_ < 0.0) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "map_connection_max_distance必须是非负有限值");
+    return false;
+  }
 
   // 创建发布器：transient_local 等价于 ROS1
   // latch，便于后启动的订阅者拿到最近一次路径
@@ -144,12 +157,12 @@ bool GlobalPathPlanner::initialize() {
 }
 
 bool GlobalPathPlanner::loadTopologyMap() {
-  RCLCPP_INFO(this->get_logger(), "开始加载拓扑地图文件: %s",
+  RCLCPP_INFO(this->get_logger(), "开始加载拓扑JSON: %s",
               map_file_path_.c_str());
 
   std::ifstream file(map_file_path_.c_str());
   if (!file.is_open()) {
-    RCLCPP_ERROR(this->get_logger(), "无法打开拓扑地图文件: %s",
+    RCLCPP_ERROR(this->get_logger(), "无法打开拓扑JSON: %s",
                  map_file_path_.c_str());
     return false;
   }
@@ -157,80 +170,93 @@ bool GlobalPathPlanner::loadTopologyMap() {
   nodes_.clear();
   edges_.clear();
 
-  std::string line;
-  bool reading_edges = false;
-
-  while (std::getline(file, line)) {
-    // 移除前后空格
-    line.erase(0, line.find_first_not_of(" \t\r\n"));
-    line.erase(line.find_last_not_of(" \t\r\n") + 1);
-
-    // 跳过空行和注释
-    if (line.empty() || line[0] == '#') {
-      if (line.find("Topology Edges") != std::string::npos) {
-        reading_edges = true;
-        RCLCPP_INFO(this->get_logger(), "开始读取边数据");
-      }
-      continue;
+  try {
+    const nlohmann::json document = nlohmann::json::parse(file);
+    if (!document.is_object() || document.value("schema_version", 0) != 1 ||
+        document.value("format", "") != "navigation_topology" ||
+        !document.contains("nodes") || !document["nodes"].is_array() ||
+        !document.contains("edges") || !document["edges"].is_array()) {
+      throw std::runtime_error(
+          "expected schema_version=1, format=navigation_topology, nodes[] and "
+          "edges[]");
+    }
+    const std::string topology_frame = document.value("frame_id", "map");
+    if (topology_frame != global_frame_) {
+      throw std::runtime_error("topology frame_id does not match global_frame");
     }
 
-    std::istringstream iss(line);
-
-    if (!reading_edges) {
-      // 读取节点: ID X Y Z 标签
+    std::unordered_set<int> node_ids;
+    nodes_.reserve(document["nodes"].size());
+    for (const auto &json_node : document["nodes"]) {
       TopologyNode node;
-      if (iss >> node.id >> node.x >> node.y >> node.z) {
-        // 读取剩余部分作为标签
-        std::string remaining;
-        std::getline(iss, remaining);
-        if (!remaining.empty() && remaining[0] == ' ') {
-          remaining = remaining.substr(1);
-        }
-        node.label =
-            remaining.empty() ? "node_" + std::to_string(node.id) : remaining;
-
-        nodes_.push_back(node);
-        RCLCPP_DEBUG(this->get_logger(),
-                     "读取节点: ID=%d, 位置=(%.2f,%.2f,%.2f)", node.id, node.x,
-                     node.y, node.z);
+      node.id = json_node.at("id").get<int>();
+      node.x = json_node.at("x").get<double>();
+      node.y = json_node.at("y").get<double>();
+      node.z = json_node.value("z", 0.0);
+      node.label = json_node.value("label", "node_" + std::to_string(node.id));
+      if (node.id < 0 || node.id > std::numeric_limits<int>::max() - 2 ||
+          !node_ids.insert(node.id).second || !std::isfinite(node.x) ||
+          !std::isfinite(node.y) || !std::isfinite(node.z)) {
+        throw std::runtime_error(
+            "node contains a negative/duplicate id or invalid coordinate");
       }
-    } else {
-      // 读取边: ID 起始ID 结束ID 权重 类型 双向 [停障策略] [绕障策略]
-      TopologyEdge edge;
-      std::string ignored_type;
-      int bidirectional_int;
-      int obstacle_stop_enabled_int = 1;
-      int obstacle_avoidance_enabled_int = 0;
-
-      if (iss >> edge.id >> edge.from_id >> edge.to_id >> edge.weight >>
-          ignored_type >> bidirectional_int) {
-        edge.bidirectional = (bidirectional_int == 1);
-        // 可选字段缺省时保持停障启用、主动绕障关闭。
-        if (iss >> obstacle_stop_enabled_int) {
-          edge.obstacle_stop_enabled = obstacle_stop_enabled_int == 1;
-          if (iss >> obstacle_avoidance_enabled_int) {
-            edge.obstacle_avoidance_enabled =
-                obstacle_avoidance_enabled_int == 1;
-          }
-        }
-        edges_.push_back(edge);
-
-        RCLCPP_DEBUG(this->get_logger(),
-                     "读取边: ID=%d, %d->%d, 权重=%.2f, 双向=%s, "
-                     "启用停障=%s, 启用绕障=%s",
-                     edge.id, edge.from_id, edge.to_id, edge.weight,
-                     edge.bidirectional ? "是" : "否",
-                     edge.obstacle_stop_enabled ? "是" : "否",
-                     edge.obstacle_avoidance_enabled ? "是" : "否");
-      }
+      nodes_.push_back(std::move(node));
     }
+
+    std::unordered_set<int> edge_ids;
+    edges_.reserve(document["edges"].size());
+    for (const auto &json_edge : document["edges"]) {
+      TopologyEdge edge;
+      edge.id = json_edge.at("id").get<int>();
+      edge.from_id = json_edge.at("from_id").get<int>();
+      edge.to_id = json_edge.at("to_id").get<int>();
+      edge.edge_type = json_edge.value("edge_type", "straight");
+      edge.weight = edge.edge_type == "map_connection"
+                        ? 0.0
+                        : json_edge.at("weight").get<double>();
+      edge.bidirectional = false;
+      edge.policy.velocity_limit_enabled = true;
+      edge.policy.linear_velocity = json_edge.value("linear_velocity", 0.5);
+      edge.policy.angular_velocity = json_edge.value("angular_velocity", 0.5);
+      edge.policy.motion_direction = json_edge.value("motion_direction", 1);
+      edge.policy.obstacle_stop_enabled =
+          json_edge.value("obstacle_stop_enabled", true);
+      edge.policy.obstacle_avoidance_enabled =
+          json_edge.value("obstacle_avoidance_enabled", false);
+      edge.policy.obstacle_avoidance_distance_m =
+          json_edge.value("obstacle_avoidance_distance_m", 0.5);
+      if (edge.id < 0 || !edge_ids.insert(edge.id).second) {
+        throw std::runtime_error("edge contains a negative or duplicate id");
+      }
+      if (edge.edge_type == "bezier") {
+        const auto &points = json_edge.at("bezier_control_points");
+        if (!points.is_array() || points.size() != 2U) {
+          throw std::runtime_error(
+              "bezier edge requires exactly two control points");
+        }
+        for (std::size_t index = 0; index < 2U; ++index) {
+          edge.bezier_control_points[index].x =
+              points[index].at("x").get<double>();
+          edge.bezier_control_points[index].y =
+              points[index].at("y").get<double>();
+          edge.bezier_control_points[index].z = points[index].value("z", 0.0);
+        }
+        edge.has_bezier_control_points = true;
+      }
+      edges_.push_back(std::move(edge));
+    }
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(this->get_logger(), "拓扑JSON解析失败: %s", error.what());
+    nodes_.clear();
+    edges_.clear();
+    return false;
   }
 
   if (!rebuildGraphIndexes()) {
     return false;
   }
 
-  RCLCPP_INFO(this->get_logger(), "拓扑地图加载完成: %lu 个节点, %lu 条边",
+  RCLCPP_INFO(this->get_logger(), "拓扑JSON加载完成: %lu 个节点, %lu 条边",
               nodes_.size(), edges_.size());
   return true;
 }
@@ -333,9 +359,7 @@ void GlobalPathPlanner::planAndPublish() {
   global_path_pub_->publish(global_path);
   navigation_interfaces::msg::PathWithPolicy path_with_policy;
   path_with_policy.path = global_path;
-  path_with_policy.obstacle_stop_enabled = last_path_obstacle_stop_policy_;
-  path_with_policy.obstacle_avoidance_enabled =
-      last_path_obstacle_avoidance_policy_;
+  path_with_policy.edge_policies = last_path_edge_policies_;
   path_with_policy.dynamic_path = false;
   global_path_with_policy_pub_->publish(path_with_policy);
   RCLCPP_INFO(this->get_logger(), "发布全局路径，包含 %lu 个路径点",
@@ -756,6 +780,51 @@ bool GlobalPathPlanner::rebuildGraphIndexes() {
                    edge.weight);
       return false;
     }
+    if (edge.edge_type != "straight" && edge.edge_type != "map_connection" &&
+        edge.edge_type != "bezier") {
+      RCLCPP_ERROR(this->get_logger(), "拓扑边%d包含未支持的类型: %s", edge.id,
+                   edge.edge_type.c_str());
+      return false;
+    }
+    if (!std::isfinite(edge.policy.linear_velocity) ||
+        edge.policy.linear_velocity < 0.0 ||
+        !std::isfinite(edge.policy.angular_velocity) ||
+        edge.policy.angular_velocity < 0.0 ||
+        !std::isfinite(edge.policy.obstacle_avoidance_distance_m) ||
+        edge.policy.obstacle_avoidance_distance_m < 0.0 ||
+        (edge.policy.motion_direction != 1 &&
+         edge.policy.motion_direction != -1)) {
+      RCLCPP_ERROR(this->get_logger(), "拓扑边%d包含非法边策略参数", edge.id);
+      return false;
+    }
+    if (edge.edge_type == "bezier" && !edge.has_bezier_control_points) {
+      RCLCPP_ERROR(this->get_logger(), "贝塞尔边%d缺少两个控制点", edge.id);
+      return false;
+    }
+    if (edge.has_bezier_control_points) {
+      for (const auto &point : edge.bezier_control_points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z)) {
+          RCLCPP_ERROR(this->get_logger(), "贝塞尔边%d包含非法控制点", edge.id);
+          return false;
+        }
+      }
+    }
+    if (edge.edge_type == "map_connection") {
+      const TopologyNode &from = nodes_[node_index_.at(edge.from_id)];
+      const TopologyNode &to = nodes_[node_index_.at(edge.to_id)];
+      const double endpoint_distance =
+          std::sqrt((to.x - from.x) * (to.x - from.x) +
+                    (to.y - from.y) * (to.y - from.y) +
+                    (to.z - from.z) * (to.z - from.z));
+      if (endpoint_distance > map_connection_max_distance_) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "map_connection边%d端点距离%.3fm超过限制%.3fm: %d -> %d",
+                     edge.id, endpoint_distance, map_connection_max_distance_,
+                     edge.from_id, edge.to_id);
+        return false;
+      }
+    }
   }
 
   base_adjacency_ = buildAdjacency(edges_);
@@ -858,8 +927,7 @@ void GlobalPathPlanner::inheritEdgePolicy(const TopologyEdge *source,
   if (source == nullptr) {
     return;
   }
-  destination.obstacle_stop_enabled = source->obstacle_stop_enabled;
-  destination.obstacle_avoidance_enabled = source->obstacle_avoidance_enabled;
+  destination.policy = source->policy;
 }
 
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
@@ -1024,8 +1092,7 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
     RCLCPP_WARN(this->get_logger(), "拓扑路径为空，无法构建完整路径");
     return path;
   }
-  last_path_obstacle_stop_policy_.clear();
-  last_path_obstacle_avoidance_policy_.clear();
+  last_path_edge_policies_.clear();
 
   std::vector<geometry_msgs::msg::Point> waypoints;
   waypoints.reserve(topology_path.node_ids.size());
@@ -1056,26 +1123,33 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
     return path;
   }
 
-  // 每个拓扑段继承所选边的停障策略；临时连接边默认启用停障。
-  std::vector<bool> segment_obstacle_stop_enabled;
-  std::vector<bool> segment_obstacle_avoidance_enabled;
-  segment_obstacle_stop_enabled.reserve(topology_path.selected_edges.size());
-  segment_obstacle_avoidance_enabled.reserve(
-      topology_path.selected_edges.size());
+  // 每个拓扑段使用一个完整EdgePolicy；临时连接会继承邻近真实边策略。
+  std::vector<navigation_interfaces::msg::EdgePolicy> segment_policies;
+  segment_policies.reserve(topology_path.selected_edges.size());
   for (const TopologyEdge *edge : topology_path.selected_edges) {
-    segment_obstacle_stop_enabled.push_back(edge->obstacle_stop_enabled);
-    segment_obstacle_avoidance_enabled.push_back(
-        edge->obstacle_avoidance_enabled);
+    segment_policies.push_back(edge->policy);
   }
 
   // 插值生成完整路径
   for (size_t i = 0; i < waypoints.size() - 1; ++i) {
+    if (topology_path.selected_edges[i]->edge_type == "map_connection") {
+      RCLCPP_INFO(this->get_logger(), "跳过map_connection虚拟路径段: %d -> %d",
+                  topology_path.node_ids[i], topology_path.node_ids[i + 1U]);
+      continue;
+    }
+    std::size_t next_motion_segment = i + 1U;
+    while (next_motion_segment < topology_path.selected_edges.size() &&
+           topology_path.selected_edges[next_motion_segment]->edge_type ==
+               "map_connection") {
+      ++next_motion_segment;
+    }
+    // 除map_connection外的edge_type暂不参与路径几何，统一按直线插值。
     std::vector<geometry_msgs::msg::Point> segment =
-        interpolatePath(waypoints[i], waypoints[i + 1], interpolation_points_);
+        interpolatePath(waypoints[i], waypoints[i + 1U], interpolation_points_);
 
     for (size_t j = 0; j < segment.size(); ++j) {
       // 避免重复添加相同的点（除了第一个段）
-      if (i == 0 || j != 0) {
+      if (path.poses.empty() || j != 0) {
         geometry_msgs::msg::PoseStamped pose;
         pose.header = path.header;
         pose.pose.position = segment[j];
@@ -1084,9 +1158,9 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
         if (j < segment.size() - 1) {
           pose.pose.orientation =
               calculateOrientation(segment[j], segment[j + 1]);
-        } else if (i < waypoints.size() - 2) {
-          pose.pose.orientation =
-              calculateOrientation(segment[j], waypoints[i + 2]);
+        } else if (next_motion_segment < topology_path.selected_edges.size()) {
+          pose.pose.orientation = calculateOrientation(
+              segment[j], waypoints[next_motion_segment + 1U]);
         } else {
           // 最后一个点，保持前一个点的朝向
           if (!path.poses.empty()) {
@@ -1100,13 +1174,10 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
         // 拓扑节点边界采用下一段策略，确保进入下一段前完成模式切换。
         const bool at_segment_end = j + 1U == segment.size();
         const std::size_t policy_segment =
-            at_segment_end && i + 1U < segment_obstacle_stop_enabled.size()
-                ? i + 1U
+            at_segment_end && next_motion_segment < segment_policies.size()
+                ? next_motion_segment
                 : i;
-        last_path_obstacle_stop_policy_.push_back(
-            segment_obstacle_stop_enabled[policy_segment]);
-        last_path_obstacle_avoidance_policy_.push_back(
-            segment_obstacle_avoidance_enabled[policy_segment]);
+        last_path_edge_policies_.push_back(segment_policies[policy_segment]);
       }
     }
   }

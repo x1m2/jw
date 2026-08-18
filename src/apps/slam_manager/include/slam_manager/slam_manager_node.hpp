@@ -35,7 +35,7 @@
 #include "slam_manager/mapping_controller.hpp"
 #include "slam_manager/navigation_task_executor.hpp"
 #include "slam_manager/slam_state_machine.hpp"
-#include "slam_manager/topology_file_writer.hpp"
+#include "slam_manager/task_topology.hpp"
 
 namespace slam_manager {
 

@@ -10,6 +10,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <array>
 #include <cmath>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
@@ -17,6 +18,8 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <memory>
+#include <navigation_interfaces/edge_policy_utils.hpp>
+#include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -43,26 +46,30 @@ struct TopologyEdge {
   int from_id;
   int to_id;
   double weight;
+  std::string edge_type;
   bool bidirectional;
-  bool obstacle_stop_enabled;
-  bool obstacle_avoidance_enabled;
+  navigation_interfaces::msg::EdgePolicy policy;
+  bool has_bezier_control_points;
+  std::array<geometry_msgs::msg::Point, 2> bezier_control_points;
 
   TopologyEdge()
       : id(0),
         from_id(0),
         to_id(0),
         weight(0.0),
+        edge_type("straight"),
         bidirectional(false),
-        obstacle_stop_enabled(true),
-        obstacle_avoidance_enabled(false) {}
+        policy(navigation_interfaces::makeDefaultEdgePolicy()),
+        has_bezier_control_points(false) {}
   TopologyEdge(int _id, int _from, int _to, double _weight, bool _bi)
       : id(_id),
         from_id(_from),
         to_id(_to),
         weight(_weight),
+        edge_type("straight"),
         bidirectional(_bi),
-        obstacle_stop_enabled(true),
-        obstacle_avoidance_enabled(false) {}
+        policy(navigation_interfaces::makeDefaultEdgePolicy()),
+        has_bezier_control_points(false) {}
 };
 
 class GlobalPathPlanner : public rclcpp::Node {
@@ -105,6 +112,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   bool enable_direct_connection_;
   double direct_connection_threshold_;
   double direct_connection_cost_ratio_;
+  double map_connection_max_distance_;
   // 边合法性检查参数
   double robot_height_;           // 机器狗高度
   int edge_sample_count_;         // 边采样点数量
@@ -129,8 +137,8 @@ class GlobalPathPlanner : public rclcpp::Node {
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
   bool has_goal_;
-  std::vector<bool> last_path_obstacle_stop_policy_;
-  std::vector<bool> last_path_obstacle_avoidance_policy_;
+  std::vector<navigation_interfaces::msg::EdgePolicy>
+      last_path_edge_policies_;
 
   // 方法
   bool loadTopologyMap();
@@ -146,7 +154,6 @@ class GlobalPathPlanner : public rclcpp::Node {
   std::vector<geometry_msgs::msg::Point> interpolatePath(
       const geometry_msgs::msg::Point& start,
       const geometry_msgs::msg::Point& end, int num_points);
-
   // 工具方法
   double calculateDistance(const geometry_msgs::msg::Point& p1,
                            const geometry_msgs::msg::Point& p2);

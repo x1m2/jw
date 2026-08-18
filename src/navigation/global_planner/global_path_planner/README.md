@@ -1,42 +1,55 @@
-# global_path_planner ROS2
+# global_path_planner
 
-基于拓扑地图的 ROS2 全局路径规划器。
+`global_path_planner`读取统一拓扑JSON，根据机器人当前位置和目标点生成
+全局路径及当前边的导航策略。
 
-## 主要订阅
-
-- `/pose_stamped_localization` (`geometry_msgs/msg/PoseStamped`)：机器人实时定位位姿，参数 `pose_topic` 可配置。
-- `clicked_point` (`geometry_msgs/msg/PointStamped`)：RViz 点击目标点。
-- `/target_points` (`geometry_msgs/msg/Pose`)：任务状态机发布的目标点位姿。
-
-可行域点云不再通过话题订阅，节点启动时直接读取参数 `free_space_pcd_file` 指向的 PCD 文件。
-
-## 主要发布
-
-- `/global_path` (`nav_msgs/msg/Path`)：标准全局路径，用于平滑和可视化。
-- `/global_path_with_policy` (`navigation_interfaces/msg/PathWithPolicy`)：路径以及与路径点对齐的停障策略。
-
-## 拓扑边停障属性
-
-边格式支持两个可选策略字段：
+## 规划流程
 
 ```text
-edge_id from_id to_id weight type bidirectional obstacle_stop_enabled obstacle_avoidance_enabled
-0 0 1 5.0 auto 1 1 0
-1 1 2 6.0 auto 1 0 0
+topology_map.json + globalmap.pcd
+               + /pose_stamped_localization
+               + /target_points
+                         |
+                         v
+              加载节点、边和可行域点云
+                         |
+                         v
+             连接当前位置、目标点与拓扑图
+                         |
+                         v
+                   Dijkstra选边
+                         |
+                         v
+             生成直线路径和当前边策略
+                         |
+              ┌----------┴----------------┐
+              v                           v
+        /global_path          /global_path_with_policy
 ```
 
-- `obstacle_stop_enabled=1`：该拓扑边开启雷达停障。
-- `obstacle_avoidance_enabled=1`：该拓扑边开启PurePursuit主动绕障。
-- 默认为`1 0`，即开启停障、关闭主动绕障。
-- 文件缺少两个字段时仍按停障开启、主动绕障关闭处理。
+默认拓扑文件：
 
-## 编译
-
-```bash
-cd /root/robot_rk3588_ws
-colcon build --packages-select global_path_planner
-source install/setup.bash
+```text
+/robotfs/data/slam_data/<map_id>/task/topology_map.json
 ```
+
+该文件由`slam_manager`或RViz拓扑编辑器生成，规划器只读取
+`schema_version=1`、`format=navigation_topology`格式。
+
+## 边处理规则
+
+- 边是有向边；双向通行需要配置两条方向相反的边。
+- APP导航协议使用相邻节点，因此一次正常导航只执行一条普通边。
+- `straight`和当前尚未实现几何的其他普通类型统一按直线生成路径。
+- `map_connection`以零代价参与Dijkstra，但不生成物理运动路径。
+- `map_connection`两端距离不得超过`map_connection_max_distance`。
+- 普通边的速度、运动方向和停障/绕障参数统一封装为`EdgePolicy`，并通过
+  `PathWithPolicy.edge_policies[]`与路径点逐点对齐。
+- `linear_velocity`、`angular_velocity`最终不会超过Pure Pursuit配置的最大值。
+- `motion_direction=1`输出正线速度，`motion_direction=-1`输出负线速度。
+
+生成的路径交给`path_smoother`平滑；平滑器保持当前边策略不变，最终由
+Pure Pursuit执行。
 
 ## 启动
 
@@ -44,14 +57,8 @@ source install/setup.bash
 ros2 launch global_path_planner global_path_planner.launch.py
 ```
 
-默认拓扑地图路径：
+参数文件：
 
-```bash
-/root/slam_data/topology_map/generated_map.txt
-```
-
-如需修改，请编辑：
-
-```bash
+```text
 config/global_path_planner_params.yaml
 ```

@@ -20,18 +20,10 @@ class KeyboardControl(Node):
     def __init__(self):
         super().__init__('keyboard_control_node')
 
-        self.declare_parameter('linear_scale', 0.45)
         self.declare_parameter('angular_scale', 0.50)
 
-        self.linear_scale = self.get_parameter('linear_scale').value
+        self.linear_speed = 0.55
         self.angular_scale = self.get_parameter('angular_scale').value
-
-        # W 键独立分档：连续按下时 0.5 -> 0.6 -> 0.7。
-        self.forward_min_speed = 0.5
-        self.forward_max_speed = 0.7
-        self.forward_speed_step = 0.1
-        self.forward_speed = self.forward_min_speed
-        self.last_key_was_forward = False
 
         self.linear_x = 0.0
         self.linear_y = 0.0
@@ -92,9 +84,8 @@ class KeyboardControl(Node):
             """
 控制方法
 ---------------------------
-W   : 前进（连续按下速度 0.5 -> 0.6 -> 0.7）
-S   : 后退
-A/D : 左移/右移
+W   : 前进（固定线速度 0.55 m/s）
+S   : 后退（固定线速度 0.55 m/s）
 Q/E : 左转/右转
 空格 : 停止
 ESC : 退出
@@ -127,77 +118,40 @@ CTRL-C : 退出
                     self.get_logger().info('检测到 ESC，退出键盘控制')
                     break
 
-                # 统一转成小写，W/S/A/D 和 w/s/a/d 都能用
+                # 统一转成小写。
                 key = ch.lower()
 
                 self.stop_robot()
 
                 if key == 'w':
-                    previous_speed = self.forward_speed
-                    speed_changed = not self.last_key_was_forward
-
-                    if self.last_key_was_forward:
-                        self.forward_speed = min(
-                            self.forward_speed + self.forward_speed_step,
-                            self.forward_max_speed
-                        )
-                    else:
-                        self.forward_speed = self.forward_min_speed
-
-                    self.linear_x = self.forward_speed
-                    self.last_key_was_forward = True
-
-                    speed_changed = (
-                        speed_changed or
-                        abs(self.forward_speed - previous_speed) > 1e-9
-                    )
-                    if speed_changed:
-                        self.get_logger().info(
-                            f'W 当前线速度: {self.forward_speed:.1f} m/s'
-                        )
+                    self.linear_x = self.linear_speed
 
                 elif key == 's':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
-                    self.linear_x = -self.linear_scale
+                    self.linear_x = -self.linear_speed
 
-                elif key == 'a':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
-                    self.linear_y = -self.linear_scale
-
-                elif key == 'd':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
-                    self.linear_y = self.linear_scale
+                # A/D 侧移键已停用。
+                # elif key == 'a':
+                #     self.linear_y = -self.linear_speed
+                # elif key == 'd':
+                #     self.linear_y = self.linear_speed
 
                 elif key == 'q':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
                     self.angular_z = self.angular_scale
 
                 elif key == 'e':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
                     self.angular_z = -self.angular_scale
 
                 elif ch == ' ':
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
                     self.stop_robot()
 
                 # K 键拓扑打点已停用，保留代码便于必要时恢复。
                 # elif key == 'k':
-                #     self.last_key_was_forward = False
-                #     self.forward_speed = self.forward_min_speed
                 #     msg = Bool()
                 #     msg.data = True
                 #     self.topology_pub.publish(msg)
                 #     self.get_logger().info('发布拓扑节点保存命令')
 
                 else:
-                    self.last_key_was_forward = False
-                    self.forward_speed = self.forward_min_speed
                     continue
 
         finally:

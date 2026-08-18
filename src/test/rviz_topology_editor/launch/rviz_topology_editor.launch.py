@@ -40,8 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "connected_topology_file",
             default_value=(
-                "/robotfs/data/slam_data/topology_map/"
-                "connected_topology_map.txt"
+                "/robotfs/data/slam_data/map_0/task/topology_map.json"
             ),
         ),
         DeclareLaunchArgument(
