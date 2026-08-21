@@ -39,14 +39,17 @@ bool SlamStateMachine::beginLocalization() {
   return transition(SlamMode::kIdle, SlamMode::kStartingLocalization);
 }
 
+bool SlamStateMachine::beginRelocalization() {
+  return transition(SlamMode::kReady, SlamMode::kStartingLocalization);
+}
+
 bool SlamStateMachine::localizationStarted() {
   const SlamMode current = mode();
   // 定位成功信号可能早于 Worker 启动回调到达，因此允许幂等确认。
   if (current == SlamMode::kLocalizing || current == SlamMode::kReady) {
     return true;
   }
-  return transition(SlamMode::kStartingLocalization,
-                    SlamMode::kLocalizing);
+  return transition(SlamMode::kStartingLocalization, SlamMode::kLocalizing);
 }
 
 bool SlamStateMachine::localizationReady() {
@@ -85,8 +88,7 @@ bool SlamStateMachine::resumeNavigation() {
 
 bool SlamStateMachine::beginStopNavigation() {
   std::scoped_lock lock(mutex_);
-  if (mode_ != SlamMode::kNavigating &&
-      mode_ != SlamMode::kNavigationPaused) {
+  if (mode_ != SlamMode::kNavigating && mode_ != SlamMode::kNavigationPaused) {
     return false;
   }
   mode_ = SlamMode::kStoppingNavigation;

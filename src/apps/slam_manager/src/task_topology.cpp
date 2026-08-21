@@ -313,10 +313,12 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
 
   std::error_code filesystem_error;
   const auto parent = output_file_.parent_path();
-  std::filesystem::create_directories(parent, filesystem_error);
-  if (filesystem_error) {
-    message = "failed to create topology directory " + parent.string() + ": " +
-              filesystem_error.message();
+  if (!std::filesystem::is_directory(parent, filesystem_error) ||
+      filesystem_error) {
+    message = filesystem_error
+                  ? "failed to inspect topology directory " + parent.string() +
+                        ": " + filesystem_error.message()
+                  : "topology directory does not exist: " + parent.string();
     return false;
   }
 

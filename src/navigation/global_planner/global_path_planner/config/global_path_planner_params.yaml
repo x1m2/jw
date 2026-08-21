@@ -14,8 +14,6 @@
     # 只有 enable_direct_connection=true 时才主要生效。
     direct_connection_threshold: 3.0
     direct_connection_cost_ratio: 0.9  # 直接连接的权重是距离的多少倍，<1表示给直接连接一个奖励
-    # map_connection是零运动虚拟边；两个端点必须表示同一物理位置。
-    map_connection_max_distance: 0.2
     # 边合法性检查参数（基于可行域点云）
     robot_height: 0.35
     edge_sample_count: 100

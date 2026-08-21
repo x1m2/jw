@@ -1,7 +1,7 @@
 #!/bin/bash
 # kill_robot_ros2_nodes.sh
-# 用于停止 run_slam.sh / run_rviz_topology_editor.sh / run_nav.sh /
-# run_uwb_follow.sh
+# 用于停止 slam_manager_platform_test.launch.py / run_slam.sh /
+# run_rviz_topology_editor.sh / run_nav.sh / run_uwb_follow.sh
 # 启动的 ROS2 节点和相关 Python 脚本
 
 set +e
@@ -132,6 +132,9 @@ kill_from_pid_files() {
 
 kill_known_launches() {
     print_header "[STEP 2] Kill known ros2 launch processes"
+    # Platform测试总入口。先停止launch，让其统一回收Manager和所有Worker子进程。
+    kill_by_pattern "ros2 launch slam_manager_test slam_manager_platform_test.launch.py" "slam_manager platform launch" 30
+
     # 优先通知UWB总控脚本，让它按反向启动顺序自行清理子进程。
     kill_by_pattern "run_uwb_follow[.]sh" "run_uwb_follow workflow" 300
 
@@ -185,6 +188,7 @@ kill_node_executables() {
     kill_by_pattern "livox_lidar_publisher" "livox_lidar_publisher node"
     kill_by_pattern "imu_filter_madgwick" "imu_filter_madgwick executable"
     kill_by_pattern "imu_filter_madgwick_node" "imu_filter_madgwick_node executable"
+    kill_by_pattern "slam_manager_node" "slam_manager executable"
     kill_by_pattern "fastlio_mapping_node" "fast_lio mapping executable"
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"

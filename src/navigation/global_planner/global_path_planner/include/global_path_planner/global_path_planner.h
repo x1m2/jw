@@ -18,10 +18,10 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <memory>
+#include <nav_msgs/msg/path.hpp>
 #include <navigation_interfaces/edge_policy_utils.hpp>
 #include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
-#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -37,7 +37,7 @@ struct TopologyNode {
 
   TopologyNode() : id(0), x(0.0), y(0.0), z(0.0), label("") {}
   TopologyNode(int _id, double _x, double _y, double _z,
-               const std::string& _label)
+               const std::string &_label)
       : id(_id), x(_x), y(_y), z(_z), label(_label) {}
 };
 
@@ -75,18 +75,18 @@ struct TopologyEdge {
 class GlobalPathPlanner : public rclcpp::Node {
  public:
   explicit GlobalPathPlanner(
-      const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
   ~GlobalPathPlanner();
 
   bool initialize();
 
  private:
   using EdgeAdjacency =
-      std::unordered_map<int, std::vector<const TopologyEdge*>>;
+      std::unordered_map<int, std::vector<const TopologyEdge *>>;
 
   struct TopologySearchResult {
     std::vector<int> node_ids;
-    std::vector<const TopologyEdge*> selected_edges;
+    std::vector<const TopologyEdge *> selected_edges;
   };
 
   // ROS2组件
@@ -112,12 +112,11 @@ class GlobalPathPlanner : public rclcpp::Node {
   bool enable_direct_connection_;
   double direct_connection_threshold_;
   double direct_connection_cost_ratio_;
-  double map_connection_max_distance_;
   // 边合法性检查参数
-  double robot_height_;           // 机器狗高度
-  int edge_sample_count_;         // 边采样点数量
-  double safety_sphere_radius_;   // 安全球半径
-  double valid_point_threshold_;  // 有效点阈值百分比
+  double robot_height_;              // 机器狗高度
+  int edge_sample_count_;            // 边采样点数量
+  double safety_sphere_radius_;      // 安全球半径
+  double valid_point_threshold_;     // 有效点阈值百分比
   std::string free_space_pcd_file_;  // 可行域点云 PCD 文件
   bool
       enable_temp_connection_feasibility_check_;  // 是否对临时连接启用可行域检查
@@ -137,8 +136,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
   bool has_goal_;
-  std::vector<navigation_interfaces::msg::EdgePolicy>
-      last_path_edge_policies_;
+  std::vector<navigation_interfaces::msg::EdgePolicy> last_path_edge_policies_;
 
   // 方法
   bool loadTopologyMap();
@@ -152,49 +150,49 @@ class GlobalPathPlanner : public rclcpp::Node {
   nav_msgs::msg::Path planGlobalPath();
   // 路径构建方法
   std::vector<geometry_msgs::msg::Point> interpolatePath(
-      const geometry_msgs::msg::Point& start,
-      const geometry_msgs::msg::Point& end, int num_points);
+      const geometry_msgs::msg::Point &start,
+      const geometry_msgs::msg::Point &end, int num_points);
   // 工具方法
-  double calculateDistance(const geometry_msgs::msg::Point& p1,
-                           const geometry_msgs::msg::Point& p2);
+  double calculateDistance(const geometry_msgs::msg::Point &p1,
+                           const geometry_msgs::msg::Point &p2);
   geometry_msgs::msg::Quaternion calculateOrientation(
-      const geometry_msgs::msg::Point& from,
-      const geometry_msgs::msg::Point& to);
+      const geometry_msgs::msg::Point &from,
+      const geometry_msgs::msg::Point &to);
   bool loadFreeSpaceCloudFromPcd();
 
   // 临时拓扑图相关方法
-  void addTemporaryConnections(std::vector<TopologyEdge>& temp_edges,
+  void addTemporaryConnections(std::vector<TopologyEdge> &temp_edges,
                                int temp_node_id,
-                               const geometry_msgs::msg::Point& position);
+                               const geometry_msgs::msg::Point &position);
   void addGoalTemporaryConnection(
-      std::vector<TopologyEdge>& temp_edges, int goal_node_id,
-      const geometry_msgs::msg::Point& goal_position);
+      std::vector<TopologyEdge> &temp_edges, int goal_node_id,
+      const geometry_msgs::msg::Point &goal_position);
   TopologySearchResult dijkstraSearchInTempGraph(
-      const std::vector<TopologyNode>& temporary_nodes,
-      const EdgeAdjacency& temporary_adjacency, int start_id, int goal_id);
+      const std::vector<TopologyNode> &temporary_nodes,
+      const EdgeAdjacency &temporary_adjacency, int start_id, int goal_id);
   nav_msgs::msg::Path buildCompletePathFromTempGraph(
-      const std::vector<TopologyNode>& temporary_nodes,
-      const TopologySearchResult& topology_path);
+      const std::vector<TopologyNode> &temporary_nodes,
+      const TopologySearchResult &topology_path);
   bool rebuildGraphIndexes();
   EdgeAdjacency buildAdjacency(
-      const std::vector<TopologyEdge>& graph_edges) const;
-  const TopologyNode* findNodeById(
+      const std::vector<TopologyEdge> &graph_edges) const;
+  const TopologyNode *findNodeById(
       int node_id,
-      const std::vector<TopologyNode>* temporary_nodes = nullptr) const;
-  const TopologyEdge* findTopologyEdge(int first_node_id,
+      const std::vector<TopologyNode> *temporary_nodes = nullptr) const;
+  const TopologyEdge *findTopologyEdge(int first_node_id,
                                        int second_node_id) const;
-  const TopologyEdge* findNearestTopologyEdge(
-      const geometry_msgs::msg::Point& position) const;
-  static void inheritEdgePolicy(const TopologyEdge* source,
-                                TopologyEdge& destination);
+  const TopologyEdge *findNearestTopologyEdge(
+      const geometry_msgs::msg::Point &position) const;
+  static void inheritEdgePolicy(const TopologyEdge *source,
+                                TopologyEdge &destination);
 
   // 新的边合法性检查方法
-  bool isEdgeLegal(const TopologyNode& node1, const TopologyNode& node2);
-  bool isPointInFreeSpaceWithRadius(const geometry_msgs::msg::Point& point,
+  bool isEdgeLegal(const TopologyNode &node1, const TopologyNode &node2);
+  bool isPointInFreeSpaceWithRadius(const geometry_msgs::msg::Point &point,
                                     double radius);
   std::vector<geometry_msgs::msg::Point> sampleEdgePoints(
-      const geometry_msgs::msg::Point& start,
-      const geometry_msgs::msg::Point& end, int sample_count);
+      const geometry_msgs::msg::Point &start,
+      const geometry_msgs::msg::Point &end, int sample_count);
 };
 
 }  // namespace global_path_planner

@@ -4,23 +4,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
-#include <mutex>
-#include <string>
-
+#include <functional>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <memory>
+#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <string>
 
+#include "slam_manager/bbs_voxel_generator.hpp"
+#include "slam_manager/localization_controller.hpp"
+#include "slam_manager/map_storage.hpp"
+#include "slam_manager/mapping_controller.hpp"
+#include "slam_manager/navigation_task_executor.hpp"
+#include "slam_manager/slam_state_machine.hpp"
+#include "slam_manager/task_topology.hpp"
 #include "slam_manager_interfaces/action/navigate_to_pose.hpp"
 #include "slam_manager_interfaces/action/start_navigation.hpp"
-#include "slam_manager_interfaces/msg/map_keyframe.hpp"
 #include "slam_manager_interfaces/msg/localization_pose.hpp"
+#include "slam_manager_interfaces/msg/map_keyframe.hpp"
 #include "slam_manager_interfaces/msg/navigation_node.hpp"
 #include "slam_manager_interfaces/msg/robot_pose.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
@@ -28,14 +35,6 @@
 #include "slam_manager_interfaces/srv/load_map.hpp"
 #include "slam_manager_interfaces/srv/start_localization.hpp"
 #include "slam_manager_interfaces/srv/start_mapping.hpp"
-
-#include "slam_manager/localization_controller.hpp"
-#include "slam_manager/bbs_voxel_generator.hpp"
-#include "slam_manager/map_storage.hpp"
-#include "slam_manager/mapping_controller.hpp"
-#include "slam_manager/navigation_task_executor.hpp"
-#include "slam_manager/slam_state_machine.hpp"
-#include "slam_manager/task_topology.hpp"
 
 namespace slam_manager {
 
@@ -74,6 +73,9 @@ class SlamManagerNode : public rclcpp::Node {
   void startLocalizationCallback(
       const StartLocalization::Request::SharedPtr request,
       StartLocalization::Response::SharedPtr response);
+  bool relocalizeForMapConnection(
+      const slam_manager_interfaces::msg::NavigationNode &node,
+      const std::function<bool()> &is_canceling, std::string &message);
   // 协议2.8～2.9：暂停和继续当前导航Action。
   void pauseNavigationCallback(const Trigger::Request::SharedPtr request,
                                Trigger::Response::SharedPtr response);
@@ -121,10 +123,10 @@ class SlamManagerNode : public rclcpp::Node {
   uint64_t session_id_{0U};
   double start_mapping_timeout_sec_{30.0};
   double finish_mapping_timeout_sec_{300.0};
-  double relocalization_timeout_sec_{60.0};
+  double relocalization_timeout_sec_{180.0};
   double localization_stop_timeout_sec_{10.0};
   std::string active_map_id_;
-  std::filesystem::path active_map_staging_path_;
+  std::filesystem::path active_map_path_;
   std::string selected_map_id_;
 
   std::mutex localization_command_mutex_;

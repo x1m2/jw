@@ -5,7 +5,7 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Twist
-# from std_msgs.msg import Bool  # K 键拓扑打点停用期间不需要
+from std_msgs.msg import Bool
 
 import sys
 import termios
@@ -35,14 +35,13 @@ class KeyboardControl(Node):
             10
         )
 
-        # K 键拓扑打点已停用。后续统一在建图完成后使用
-        # rviz_topology_editor 在优化后的 PCD 地图上打点。
-        #
-        # self.topology_pub = self.create_publisher(
-        #     Bool,
-        #     '/topology_node_set',
-        #     10
-        # )
+        # 在线拓扑打点只发布记录触发；当前定位位姿和文件写入统一由
+        # rviz_topology_editor处理，保证与离线打点格式一致。
+        self.topology_pub = self.create_publisher(
+            Bool,
+            '/topology_node_set',
+            10
+        )
 
         self.running = True
 
@@ -87,6 +86,7 @@ class KeyboardControl(Node):
 W   : 前进（固定线速度 0.55 m/s）
 S   : 后退（固定线速度 0.55 m/s）
 Q/E : 左转/右转
+K   : 保存当前纯定位位姿为拓扑节点（需先启动在线打点）
 空格 : 停止
 ESC : 退出
 CTRL-C : 退出
@@ -144,12 +144,13 @@ CTRL-C : 退出
                 elif ch == ' ':
                     self.stop_robot()
 
-                # K 键拓扑打点已停用，保留代码便于必要时恢复。
-                # elif key == 'k':
-                #     msg = Bool()
-                #     msg.data = True
-                #     self.topology_pub.publish(msg)
-                #     self.get_logger().info('发布拓扑节点保存命令')
+                elif key == 'k':
+                    # K键先停车，再触发编辑器抓取最新纯定位位姿并原子保存。
+                    self.publish_stop_once()
+                    msg = Bool()
+                    msg.data = True
+                    self.topology_pub.publish(msg)
+                    self.get_logger().info('已发布在线拓扑节点保存命令')
 
                 else:
                     continue

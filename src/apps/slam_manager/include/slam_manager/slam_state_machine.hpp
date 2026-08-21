@@ -19,6 +19,7 @@ class SlamStateMachine {
   bool beginStopMapping();
   bool mappingStopped();
   bool beginLocalization();
+  bool beginRelocalization();
   bool localizationStarted();
   bool localizationReady();
   bool localizationFailed();

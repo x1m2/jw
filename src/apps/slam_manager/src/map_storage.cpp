@@ -32,18 +32,8 @@ std::filesystem::path MapStorage::mapPath(const std::string &map_id) const {
   return dataPath(map_id) / "map";
 }
 
-std::filesystem::path MapStorage::logPath(const std::string &map_id) const {
-  return dataPath(map_id) / "log";
-}
-
 std::filesystem::path MapStorage::taskPath(const std::string &map_id) const {
   return dataPath(map_id) / "task";
-}
-
-std::filesystem::path MapStorage::stagingPath(
-    const std::string &map_id, uint64_t session_id) const {
-  return root_directory_ / ".staging" /
-         (map_id + "_" + std::to_string(session_id)) / "map";
 }
 
 bool MapStorage::countSavedMaps(std::size_t &count,
@@ -90,7 +80,7 @@ bool MapStorage::countSavedMaps(std::size_t &count,
 
 bool MapStorage::deleteMap(const std::string &map_id,
                            std::string &message) const {
-  // 删除map_id目录时同时删除地图、日志和任务数据。
+  // 删除map_id数据目录；运行日志位于root/log下，不由MapStorage管理。
   const auto target = dataPath(map_id);
   std::error_code filesystem_error;
   const bool exists = std::filesystem::exists(target, filesystem_error);
@@ -121,17 +111,51 @@ bool MapStorage::deleteMap(const std::string &map_id,
   return true;
 }
 
-bool MapStorage::finalize(const std::filesystem::path &staging_path,
+bool MapStorage::finalize(const std::filesystem::path &map_path,
                           const std::string &map_id,
                           std::string &message) const {
-  // 协议2.2：globalmap.pcd是地图保存成功的最低完整性条件。
-  if (map_id.empty() || staging_path.empty()) {
+  // 目录由GUI/launch预先创建；slam_manager只检查并写入保存结果。
+  if (map_id.empty() || map_path.empty()) {
     message = "no active map task";
     return false;
   }
 
-  const auto global_map = staging_path / "globalmap.pcd";
+  const auto expected_map_path = mapPath(map_id);
+  if (map_path != expected_map_path) {
+    message = "unexpected map save path: " + map_path.string();
+    return false;
+  }
+
   std::error_code filesystem_error;
+  if (!std::filesystem::exists(dataPath(map_id), filesystem_error) ||
+      filesystem_error) {
+    message = filesystem_error
+                  ? "failed to inspect map data directory: " +
+                        filesystem_error.message()
+                  : "map data directory does not exist: " +
+                        dataPath(map_id).string();
+    return false;
+  }
+  if (!std::filesystem::is_directory(map_path, filesystem_error) ||
+      filesystem_error) {
+    message = filesystem_error
+                  ? "failed to inspect map directory: " +
+                        filesystem_error.message()
+                  : "map directory does not exist: " + map_path.string();
+    return false;
+  }
+  const auto task_path = taskPath(map_id);
+  if (!std::filesystem::is_directory(task_path, filesystem_error) ||
+      filesystem_error) {
+    message = filesystem_error
+                  ? "failed to inspect task directory: " +
+                        filesystem_error.message()
+                  : "task directory does not exist: " + task_path.string();
+    return false;
+  }
+
+  // globalmap.pcd是地图保存成功的最低完整性条件。
+  const auto global_map = map_path / "globalmap.pcd";
   if (!std::filesystem::exists(global_map, filesystem_error) ||
       filesystem_error) {
     message = filesystem_error
@@ -140,10 +164,19 @@ bool MapStorage::finalize(const std::filesystem::path &staging_path,
                   : "PGO did not produce globalmap.pcd";
     return false;
   }
+  if (!std::filesystem::is_regular_file(global_map, filesystem_error) ||
+      filesystem_error) {
+    message = filesystem_error
+                  ? "failed to inspect globalmap.pcd: " +
+                        filesystem_error.message()
+                  : "globalmap.pcd is not a regular file";
+    return false;
+  }
 
-  std::ofstream manifest(staging_path / "manifest.yaml");
+  // manifest属于地图保存结果文件，可以写入，但不创建任何目录。
+  std::ofstream manifest(map_path / "manifest.yaml");
   if (!manifest.is_open()) {
-    message = "failed to create manifest.yaml";
+    message = "failed to create manifest.yaml in existing map directory";
     return false;
   }
   manifest << "schema_version: 1\n"
@@ -157,53 +190,8 @@ bool MapStorage::finalize(const std::filesystem::path &staging_path,
     return false;
   }
 
-  const auto final_data_path = dataPath(map_id);
-  const auto final_map_path = mapPath(map_id);
-  const bool final_data_exists =
-      std::filesystem::exists(final_data_path, filesystem_error);
-  if (filesystem_error) {
-    message = "failed to inspect existing map: " +
-              filesystem_error.message();
-    return false;
-  }
-  if (final_data_exists) {
-    message = "map data directory appeared after mapping started; publish rejected";
-    return false;
-  }
-
-  std::size_t saved_map_count = 0U;
-  if (!countSavedMaps(saved_map_count, message)) return false;
-  if (saved_map_count >= max_maps_) {
-    message = "map limit reached before finalization: " +
-              std::to_string(saved_map_count) + "/" +
-              std::to_string(max_maps_);
-    return false;
-  }
-
-  // staging_path指向暂存map目录，其父目录是本次完整的map_id数据目录。
-  const auto staging_data_path = staging_path.parent_path();
-  std::filesystem::create_directories(staging_data_path / "log",
-                                      filesystem_error);
-  if (!filesystem_error) {
-    std::filesystem::create_directories(staging_data_path / "task",
-                                        filesystem_error);
-  }
-  if (filesystem_error) {
-    message = "failed to create map log/task directories: " +
-              filesystem_error.message();
-    return false;
-  }
-
-  // 同一文件系统内原子发布整个map_id目录，保证map、log、task同时可见。
-  std::filesystem::rename(staging_data_path, final_data_path,
-                          filesystem_error);
-  if (filesystem_error) {
-    message = "failed to publish saved map: " + filesystem_error.message();
-    return false;
-  }
-
   message = "map saved: map_id=" + map_id +
-            ", map_path=" + (final_map_path / "globalmap.pcd").string();
+            ", map_path=" + global_map.string();
   return true;
 }
 

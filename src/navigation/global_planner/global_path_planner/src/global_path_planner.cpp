@@ -33,7 +33,6 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->declare_parameter<bool>("enable_direct_connection", true);
   this->declare_parameter<double>("direct_connection_threshold", 3.0);
   this->declare_parameter<double>("direct_connection_cost_ratio", 0.9);
-  this->declare_parameter<double>("map_connection_max_distance", 0.2);
   // 边合法性检查相关参数
   this->declare_parameter<double>("robot_height", 0.35);
   this->declare_parameter<int>("edge_sample_count", 100);
@@ -57,8 +56,6 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
                       direct_connection_threshold_);
   this->get_parameter("direct_connection_cost_ratio",
                       direct_connection_cost_ratio_);
-  this->get_parameter("map_connection_max_distance",
-                      map_connection_max_distance_);
   this->get_parameter("robot_height", robot_height_);
   this->get_parameter("edge_sample_count", edge_sample_count_);
   this->get_parameter("safety_sphere_radius", safety_sphere_radius_);
@@ -78,8 +75,6 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   RCLCPP_INFO(this->get_logger(), "全局坐标系: %s", global_frame_.c_str());
   RCLCPP_INFO(this->get_logger(), "机器人坐标系: %s", robot_frame_.c_str());
   RCLCPP_INFO(this->get_logger(), "实时位姿话题: %s", pose_topic_.c_str());
-  RCLCPP_INFO(this->get_logger(), "地图虚拟连接最大端点距离: %.3f m",
-              map_connection_max_distance_);
   RCLCPP_INFO(this->get_logger(), "机器狗高度: %.2f m", robot_height_);
   RCLCPP_INFO(this->get_logger(), "安全球半径: %.2f m", safety_sphere_radius_);
   RCLCPP_INFO(this->get_logger(), "有效点阈值: %.1f%%",
@@ -96,13 +91,6 @@ GlobalPathPlanner::~GlobalPathPlanner() {
 
 bool GlobalPathPlanner::initialize() {
   RCLCPP_INFO(this->get_logger(), "初始化全局路径规划器...");
-
-  if (!std::isfinite(map_connection_max_distance_) ||
-      map_connection_max_distance_ < 0.0) {
-    RCLCPP_ERROR(this->get_logger(),
-                 "map_connection_max_distance必须是非负有限值");
-    return false;
-  }
 
   // 创建发布器：transient_local 等价于 ROS1
   // latch，便于后启动的订阅者拿到最近一次路径
@@ -810,21 +798,6 @@ bool GlobalPathPlanner::rebuildGraphIndexes() {
         }
       }
     }
-    if (edge.edge_type == "map_connection") {
-      const TopologyNode &from = nodes_[node_index_.at(edge.from_id)];
-      const TopologyNode &to = nodes_[node_index_.at(edge.to_id)];
-      const double endpoint_distance =
-          std::sqrt((to.x - from.x) * (to.x - from.x) +
-                    (to.y - from.y) * (to.y - from.y) +
-                    (to.z - from.z) * (to.z - from.z));
-      if (endpoint_distance > map_connection_max_distance_) {
-        RCLCPP_ERROR(this->get_logger(),
-                     "map_connection边%d端点距离%.3fm超过限制%.3fm: %d -> %d",
-                     edge.id, endpoint_distance, map_connection_max_distance_,
-                     edge.from_id, edge.to_id);
-        return false;
-      }
-    }
   }
 
   base_adjacency_ = buildAdjacency(edges_);
@@ -836,6 +809,8 @@ GlobalPathPlanner::EdgeAdjacency GlobalPathPlanner::buildAdjacency(
   EdgeAdjacency adjacency;
   adjacency.reserve(nodes_.size() + 2U);
   for (const auto &edge : graph_edges) {
+    // map_connection由slam_manager执行重定位，不属于可行驶的几何边。
+    if (edge.edge_type == "map_connection") continue;
     adjacency[edge.from_id].push_back(&edge);
     if (edge.bidirectional && edge.to_id != edge.from_id) {
       adjacency[edge.to_id].push_back(&edge);
@@ -887,6 +862,7 @@ const TopologyEdge *GlobalPathPlanner::findNearestTopologyEdge(
   double nearest_distance_squared = std::numeric_limits<double>::infinity();
 
   for (const auto &edge : edges_) {
+    if (edge.edge_type == "map_connection") continue;
     const TopologyNode *from_node = findNodeById(edge.from_id);
     const TopologyNode *to_node = findNodeById(edge.to_id);
     if (from_node == nullptr || to_node == nullptr) {

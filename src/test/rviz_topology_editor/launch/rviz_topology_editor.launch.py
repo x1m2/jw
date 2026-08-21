@@ -18,6 +18,8 @@ def generate_launch_description():
     output_file = LaunchConfiguration("output_file")
     connected_topology_file = LaunchConfiguration("connected_topology_file")
     task_file = LaunchConfiguration("task_file")
+    online_record_enabled = LaunchConfiguration("online_record_enabled")
+    online_task_id = LaunchConfiguration("online_task_id")
     use_rviz = LaunchConfiguration("rviz")
 
     return LaunchDescription([
@@ -47,6 +49,8 @@ def generate_launch_description():
             "task_file",
             default_value="/robotfs/data/slam_data/task/test.txt",
         ),
+        DeclareLaunchArgument("online_record_enabled", default_value="false"),
+        DeclareLaunchArgument("online_task_id", default_value=""),
         DeclareLaunchArgument("rviz", default_value="true"),
         Node(
             package="rviz_topology_editor",
@@ -60,6 +64,8 @@ def generate_launch_description():
                     "output_file": output_file,
                     "connected_topology_file": connected_topology_file,
                     "task_file": task_file,
+                    "online_record_enabled": online_record_enabled,
+                    "online_task_id": online_task_id,
                 },
             ],
         ),

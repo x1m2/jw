@@ -38,7 +38,23 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     robot_param = find_robot_param(get_package_share_directory('fast_lio'))
 
-    # 与run_slam.sh保持一致：启动MID360s驱动，为FastLIO提供点云和IMU。
+    # ROS_LOG_DIR 由 GUI 在启动本 launch 时统一注入。
+    # 这里不再创建新的时间戳目录，保证 GUI、launch、各节点属于同一次会话。
+    workflow_log_dir = os.environ.get('WORKFLOW_LOG_DIR', '')
+    ros_log_dir = os.environ.get('ROS_LOG_DIR', '')
+    if workflow_log_dir:
+        os.makedirs(workflow_log_dir, exist_ok=True)
+        print(f'[INFO] WORKFLOW_LOG_DIR={workflow_log_dir}', flush=True)
+    else:
+        print('[WARN] WORKFLOW_LOG_DIR 未设置', flush=True)
+
+    if ros_log_dir:
+        os.makedirs(ros_log_dir, exist_ok=True)
+        print(f'[INFO] ROS_LOG_DIR={ros_log_dir}', flush=True)
+    else:
+        print('[WARN] ROS_LOG_DIR 未设置，将使用 ROS 2 默认日志目录', flush=True)
+
+    # 与 run_slam.sh 保持一致：启动 MID360s 驱动，为 FastLIO 提供点云和 IMU。
     livox_driver = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             package_file(
@@ -50,7 +66,7 @@ def generate_launch_description():
     runtime = Node(
         package='slam_manager',
         executable='slam_manager_node',
-        output='screen',
+        output='both',
         parameters=[
             package_file('slam_manager', 'config', 'slam_manager.yaml'),
             {
@@ -64,26 +80,28 @@ def generate_launch_description():
     pgo_worker = Node(
         package='pgo_sc',
         executable='pgo_sc_node',
-        output='screen',
+        output='both',
         parameters=[
             package_file('pgo_sc', 'config', 'config.yaml'),
             {'runtime_profile': 'platform', 'use_sim_time': use_sim_time},
         ],
     )
+
     fast_lio_worker = Node(
         package='fast_lio',
         executable='fastlio_mapping_node',
-        output='screen',
+        output='both',
         parameters=[
             package_file('fast_lio', 'config', 'mid360.yaml'),
             robot_param,
             {'runtime_profile': 'platform', 'use_sim_time': use_sim_time},
         ],
     )
+
     localization_worker = Node(
         package='fastlio_localization',
         executable='fastlio_localization_ros2',
-        output='screen',
+        output='both',
         prefix=['stdbuf -o L'],
         parameters=[
             package_file('fastlio_localization', 'config', 'ros2_param.yaml'),
@@ -116,7 +134,8 @@ def generate_launch_description():
             description='Map storage root used by slam_manager',
         ),
         DeclareLaunchArgument(
-            'use_sim_time', default_value='false',
+            'use_sim_time',
+            default_value='false',
             description='Use /clock when testing with a rosbag',
         ),
         livox_driver,

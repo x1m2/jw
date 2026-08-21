@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
+#include "slam_manager/pose_utils.hpp"
 #include "slam_manager_interfaces/msg/navigation_node.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
-#include "slam_manager/pose_utils.hpp"
 
 namespace slam_manager {
 
@@ -22,16 +22,15 @@ using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
 bool validTaskId(const std::string &task_id, std::string &message) {
   constexpr std::size_t kMaximumIdLength = 64U;
   if (task_id.empty() || task_id.size() > kMaximumIdLength) {
-    message = "task_id must contain 1 to " +
-              std::to_string(kMaximumIdLength) + " characters";
+    message = "task_id must contain 1 to " + std::to_string(kMaximumIdLength) +
+              " characters";
     return false;
   }
   for (const char character : task_id) {
-    const bool valid =
-        (character >= 'a' && character <= 'z') ||
-        (character >= 'A' && character <= 'Z') ||
-        (character >= '0' && character <= '9') || character == '_' ||
-        character == '-';
+    const bool valid = (character >= 'a' && character <= 'z') ||
+                       (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') ||
+                       character == '_' || character == '-';
     if (!valid) {
       message = "task_id may contain only letters, digits, '_' and '-'";
       return false;
@@ -40,11 +39,10 @@ bool validTaskId(const std::string &task_id, std::string &message) {
   return true;
 }
 
-}
+}  // namespace
 
 NavigationTaskExecutor::NavigationTaskExecutor(
-    rclcpp::Node *node,
-    rclcpp::CallbackGroup::SharedPtr worker_callback_group,
+    rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr worker_callback_group,
     SlamStateMachine *state_machine, TopologyFileWriter *topology_writer,
     Config config, Callbacks callbacks)
     : node_(node),
@@ -54,15 +52,16 @@ NavigationTaskExecutor::NavigationTaskExecutor(
       config_(config),
       callbacks_(std::move(callbacks)) {
   if (!node_ || !state_machine_ || !topology_writer_ ||
-      config_.control_timeout_sec <= 0.0 ||
-      config_.worker_timeout_sec <= 0.0 ||
-      config_.goal_timeout_sec <= 0.0 || !callbacks_.publish_mode ||
+      config_.control_timeout_sec <= 0.0 || config_.worker_timeout_sec <= 0.0 ||
+      config_.goal_timeout_sec <= 0.0 ||
+      !std::isfinite(config_.skip_first_target_threshold) ||
+      config_.skip_first_target_threshold < 0.0 || !callbacks_.publish_mode ||
       !callbacks_.publish_runtime_state || !callbacks_.enter_error ||
-      !callbacks_.get_current_pose) {
+      !callbacks_.get_current_pose || !callbacks_.relocalize) {
     throw std::invalid_argument("invalid navigation task executor config");
   }
-  target_pose_pub_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-      "/target_points", 10);
+  target_pose_pub_ =
+      node_->create_publisher<geometry_msgs::msg::Pose>("/target_points", 10);
 }
 
 NavigationTaskExecutor::~NavigationTaskExecutor() {
@@ -87,8 +86,8 @@ void NavigationTaskExecutor::fillCurrentPoseFeedback(
   feedback.theta = pose_utils::yaw(current_pose.pose.orientation);
 }
 
-bool NavigationTaskExecutor::validatePose(
-    const geometry_msgs::msg::Pose &pose, std::string &message) const {
+bool NavigationTaskExecutor::validatePose(const geometry_msgs::msg::Pose &pose,
+                                          std::string &message) const {
   const auto &position = pose.position;
   const auto &orientation = pose.orientation;
   if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
@@ -108,8 +107,9 @@ bool NavigationTaskExecutor::validatePose(
   return true;
 }
 
-bool NavigationTaskExecutor::validatePoseFields(
-    double x, double y, double z, double theta, std::string &message) const {
+bool NavigationTaskExecutor::validatePoseFields(double x, double y, double z,
+                                                double theta,
+                                                std::string &message) const {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
       !std::isfinite(theta)) {
     message = "x/y/z/theta contain non-finite values";
@@ -118,8 +118,9 @@ bool NavigationTaskExecutor::validatePoseFields(
   return true;
 }
 
-slam_manager_interfaces::msg::NavigationNode NavigationTaskExecutor::nodeFromPose(
-    uint32_t node_id, const geometry_msgs::msg::Pose &pose) {
+slam_manager_interfaces::msg::NavigationNode
+NavigationTaskExecutor::nodeFromPose(uint32_t node_id,
+                                     const geometry_msgs::msg::Pose &pose) {
   slam_manager_interfaces::msg::NavigationNode node;
   node.node_id = node_id;
   node.x = pose.position.x;
@@ -129,8 +130,8 @@ slam_manager_interfaces::msg::NavigationNode NavigationTaskExecutor::nodeFromPos
   return node;
 }
 
-bool NavigationTaskExecutor::validateGoal(
-    const StartNavigation::Goal &goal, std::string &message) const {
+bool NavigationTaskExecutor::validateGoal(const StartNavigation::Goal &goal,
+                                          std::string &message) const {
   // APP节点ID用于反馈，必须唯一；四自由度位姿必须都是有限值。
   if (!validTaskId(goal.task_id, message)) {
     return false;
@@ -149,8 +150,8 @@ bool NavigationTaskExecutor::validateGoal(
   for (const auto &node : goal.nodes) {
     if (node.node_id >
         static_cast<uint32_t>(std::numeric_limits<int>::max() - 2)) {
-      message = "node_id exceeds planner range: " +
-                std::to_string(node.node_id);
+      message =
+          "node_id exceeds planner range: " + std::to_string(node.node_id);
       return false;
     }
     if (!node_ids.insert(node.node_id).second) {
@@ -165,8 +166,8 @@ bool NavigationTaskExecutor::validateGoal(
   return true;
 }
 
-bool NavigationTaskExecutor::validateGoal(
-    const NavigateToPose::Goal &goal, std::string &message) const {
+bool NavigationTaskExecutor::validateGoal(const NavigateToPose::Goal &goal,
+                                          std::string &message) const {
   return validatePoseFields(goal.x, goal.y, goal.z, goal.theta, message);
 }
 
@@ -199,15 +200,13 @@ void NavigationTaskExecutor::startPatrolAction(
     const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
     uint64_t session_id) {
   if (execution_thread_.joinable()) execution_thread_.join();
-  execution_thread_ =
-      std::thread(&NavigationTaskExecutor::executePatrolAction, this,
-                  goal_handle, session_id);
+  execution_thread_ = std::thread(&NavigationTaskExecutor::executePatrolAction,
+                                  this, goal_handle, session_id);
 }
 
 void NavigationTaskExecutor::startNavigateToPoseAction(
     const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
-    const geometry_msgs::msg::PoseStamped &current_pose,
-    uint64_t session_id) {
+    const geometry_msgs::msg::PoseStamped &current_pose, uint64_t session_id) {
   if (execution_thread_.joinable()) execution_thread_.join();
   execution_thread_ =
       std::thread(&NavigationTaskExecutor::executeNavigateToPoseAction, this,
@@ -238,13 +237,13 @@ void NavigationTaskExecutor::executePatrolAction(
     return;
   }
 
-  // APP task.json保持不变；topology_map.json是统一的规划器输入。
-  const auto task_json_file = task_directory_ / "task.json";
+  // 按Action Goal中的task_id读取当前地图专属的巡检任务JSON。
+  const auto task_json_file = task_directory_ / (goal->task_id + ".json");
   topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
 
   std::vector<TaskTopologyNode> patrol_nodes;
-  std::vector<bool> skip_navigation(goal->nodes.size(), false);
+  std::vector<bool> requires_relocalization(goal->nodes.size(), false);
   std::string topology_message;
   std::error_code filesystem_error;
   const bool task_json_exists =
@@ -252,8 +251,8 @@ void NavigationTaskExecutor::executePatrolAction(
   if (filesystem_error) {
     result->success = false;
     result->completed_count = 0U;
-    result->message = "failed to inspect patrol JSON: " +
-                      filesystem_error.message();
+    result->message =
+        "failed to inspect patrol JSON: " + filesystem_error.message();
     goal_handle->abort(result);
     releaseOperation();
     return;
@@ -310,20 +309,17 @@ void NavigationTaskExecutor::executePatrolAction(
           std::max(next_edge_id, static_cast<uint64_t>(edge.id) + 1U);
     }
     for (std::size_t index = 0; index + 1U < patrol_nodes.size(); ++index) {
-      const uint32_t from_id =
-          patrol_nodes[index].navigation_node.node_id;
-      const uint32_t to_id =
-          patrol_nodes[index + 1U].navigation_node.node_id;
+      const uint32_t from_id = patrol_nodes[index].navigation_node.node_id;
+      const uint32_t to_id = patrol_nodes[index + 1U].navigation_node.node_id;
       const TaskTopologyEdge *direct_edge =
           findDirectEdge(graph, directed_edge_indexes, from_id, to_id);
       if (direct_edge != nullptr) {
         if (direct_edge->edge_type == "map_connection") {
-          skip_navigation[index + 1U] = true;
-          RCLCPP_INFO(
-              node_->get_logger(),
-              "Patrol transition %u -> %u is map_connection; node %u "
-              "will be completed without publishing a motion target",
-              from_id, to_id, to_id);
+          requires_relocalization[index + 1U] = true;
+          RCLCPP_INFO(node_->get_logger(),
+                      "Patrol transition %u -> %u is map_connection; node %u "
+                      "will be used as a relocalization pose",
+                      from_id, to_id, to_id);
         }
         continue;
       }
@@ -355,8 +351,8 @@ void NavigationTaskExecutor::executePatrolAction(
       default_edge.from_id = from_id;
       default_edge.to_id = to_id;
       graph.edges.push_back(default_edge);
-      directed_edge_indexes.emplace(
-          makeDirectedEdgeKey(from_id, to_id), graph.edges.size() - 1U);
+      directed_edge_indexes.emplace(makeDirectedEdgeKey(from_id, to_id),
+                                    graph.edges.size() - 1U);
       RCLCPP_WARN(node_->get_logger(),
                   "Patrol transition %u -> %u uses an Action fallback node; "
                   "adding a default directed straight edge",
@@ -364,17 +360,13 @@ void NavigationTaskExecutor::executePatrolAction(
     }
     topology_written = topology_writer_->write(graph, topology_message);
   } else {
-    // 没有JSON时完整保留旧协议：使用Action位姿并按数组顺序生成双向边。
-    patrol_nodes.reserve(goal->nodes.size());
-    for (const auto &action_node : goal->nodes) {
-      TaskTopologyNode node;
-      node.navigation_node = action_node;
-      patrol_nodes.push_back(node);
-    }
-    topology_written = topology_writer_->write(goal->nodes, topology_message);
-    RCLCPP_WARN(node_->get_logger(),
-                "Patrol JSON does not exist, using legacy Action topology: %s",
-                task_json_file.c_str());
+    result->success = false;
+    result->completed_count = 0U;
+    result->message = "task JSON does not exist for task_id=" + goal->task_id +
+                      ": " + task_json_file.string();
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
   }
 
   if (!topology_written) {
@@ -411,12 +403,58 @@ void NavigationTaskExecutor::executePatrolAction(
   state_machine_->navigationStarted();
   callbacks_.publish_mode();
 
+  std::size_t first_patrol_index = 0U;
+  if (config_.enable_skip_first_target && patrol_nodes.size() >= 2U) {
+    geometry_msgs::msg::PoseStamped current_pose;
+    if (callbacks_.get_current_pose(current_pose)) {
+      const auto &first_node = patrol_nodes.front().navigation_node;
+      const double first_node_distance = std::hypot(
+          current_pose.pose.position.x - first_node.x,
+          current_pose.pose.position.y - first_node.y);
+      if (first_node_distance <= config_.skip_first_target_threshold) {
+        first_patrol_index = 1U;
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "[SKIP_FIRST_TARGET] Current pose is near first node_id=%u: "
+            "distance=%.3f <= %.3f m; starting from second node_id=%u",
+            first_node.node_id, first_node_distance,
+            config_.skip_first_target_threshold,
+            patrol_nodes[first_patrol_index].navigation_node.node_id);
+
+        auto feedback = std::make_shared<StartNavigation::Feedback>();
+        feedback->current_node_id = first_node.node_id;
+        fillCurrentPoseFeedback(*feedback);
+        feedback->message =
+            "first node skipped: distance=" +
+            std::to_string(first_node_distance) + " m, threshold=" +
+            std::to_string(config_.skip_first_target_threshold) + " m";
+        goal_handle->publish_feedback(feedback);
+      } else {
+        RCLCPP_INFO(node_->get_logger(),
+                    "[START_FROM_FIRST_TARGET] Current pose is %.3f m from "
+                    "first node_id=%u, above threshold %.3f m",
+                    first_node_distance, first_node.node_id,
+                    config_.skip_first_target_threshold);
+      }
+    } else {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[SKIP_FIRST_NO_POSE] Current pose is unavailable; starting "
+                  "from the first patrol node");
+    }
+  }
+
   bool cancelled = false;
   bool failed = false;
+  int32_t failure_error_code = RuntimeState::NAVIGATION_ERROR;
   std::string failure_message;
+  bool first_patrol_round = true;
   do {
-    for (std::size_t patrol_index = 0U;
-         patrol_index < patrol_nodes.size(); ++patrol_index) {
+    const std::size_t round_start_index =
+        first_patrol_round ? first_patrol_index : 0U;
+    first_patrol_round = false;
+    for (std::size_t patrol_index = round_start_index;
+         patrol_index < patrol_nodes.size();
+         ++patrol_index) {
       const auto &task_node = patrol_nodes[patrol_index];
       const auto &node = task_node.navigation_node;
       {
@@ -430,16 +468,131 @@ void NavigationTaskExecutor::executePatrolAction(
         break;
       }
 
-      if (skip_navigation[patrol_index]) {
-        if (completed_count < std::numeric_limits<uint32_t>::max()) {
-          ++completed_count;
-        }
+      if (requires_relocalization[patrol_index]) {
         auto feedback = std::make_shared<StartNavigation::Feedback>();
         feedback->current_node_id = node.node_id;
         fillCurrentPoseFeedback(*feedback);
         feedback->message =
-            "map_connection node completed without motion: " +
+            "map_connection: stopping navigation before "
+            "relocalizing at node " +
             std::to_string(node.node_id);
+        goal_handle->publish_feedback(feedback);
+
+        if (!state_machine_->beginStopNavigation()) {
+          failed = true;
+          failure_message =
+              "cannot stop navigation for map_connection at node_id=" +
+              std::to_string(node.node_id);
+          break;
+        }
+        callbacks_.publish_mode();
+
+        std::string transition_message;
+        if (!stopWorkers(session_id, transition_message)) {
+          failed = true;
+          failure_message = "failed to stop navigation for map_connection: " +
+                            transition_message;
+          break;
+        }
+        if (!state_machine_->navigationStopped()) {
+          failed = true;
+          failure_message =
+              "navigation state transition failed before relocalization";
+          break;
+        }
+        callbacks_.publish_mode();
+
+        {
+          std::lock_guard<std::mutex> lock(result_mutex_);
+          cancelled = cancel_requested_ || shutting_down_ ||
+                      goal_handle->is_canceling();
+        }
+        if (cancelled) break;
+
+        feedback = std::make_shared<StartNavigation::Feedback>();
+        feedback->current_node_id = node.node_id;
+        fillCurrentPoseFeedback(*feedback);
+        feedback->message = "map_connection: relocalizing at node " +
+                            std::to_string(node.node_id);
+        goal_handle->publish_feedback(feedback);
+
+        if (!callbacks_.relocalize(
+                node,
+                [this, goal_handle]() {
+                  std::lock_guard<std::mutex> lock(result_mutex_);
+                  return cancel_requested_ || shutting_down_ ||
+                         goal_handle->is_canceling();
+                },
+                transition_message)) {
+          {
+            std::lock_guard<std::mutex> lock(result_mutex_);
+            cancelled = cancel_requested_ || shutting_down_ ||
+                        goal_handle->is_canceling();
+          }
+          if (!cancelled) {
+            failed = true;
+            failure_error_code = RuntimeState::RELOCALIZATION_ERROR;
+            failure_message =
+                "map_connection relocalization failed at node_id=" +
+                std::to_string(node.node_id) + ": " + transition_message;
+          }
+          break;
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(result_mutex_);
+          cancelled = cancel_requested_ || shutting_down_ ||
+                      goal_handle->is_canceling();
+        }
+        if (cancelled) break;
+
+        if (!state_machine_->beginNavigation()) {
+          failed = true;
+          failure_message =
+              "cannot restart navigation after map_connection at node_id=" +
+              std::to_string(node.node_id);
+          break;
+        }
+        callbacks_.publish_mode();
+        if (!startWorkers(session_id, transition_message)) {
+          failed = true;
+          failure_message =
+              "failed to restart navigation after map_connection: " +
+              transition_message;
+          break;
+        }
+        if (!state_machine_->navigationStarted()) {
+          failed = true;
+          failure_message =
+              "navigation state transition failed after relocalization";
+          break;
+        }
+        callbacks_.publish_mode();
+
+        if (task_node.stop_duration_sec > 0.0 &&
+            !waitForStopDuration(task_node.stop_duration_sec, [goal_handle]() {
+              return goal_handle->is_canceling();
+            })) {
+          std::lock_guard<std::mutex> lock(result_mutex_);
+          cancelled = cancel_requested_ || shutting_down_ ||
+                      goal_handle->is_canceling();
+          if (!cancelled) {
+            failed = true;
+            failure_message =
+                "node wait interrupted at map_connection node_id=" +
+                std::to_string(node.node_id);
+          }
+          break;
+        }
+
+        if (completed_count < std::numeric_limits<uint32_t>::max()) {
+          ++completed_count;
+        }
+        feedback = std::make_shared<StartNavigation::Feedback>();
+        feedback->current_node_id = node.node_id;
+        fillCurrentPoseFeedback(*feedback);
+        feedback->message = "map_connection relocalization completed at node " +
+                            std::to_string(node.node_id);
         goal_handle->publish_feedback(feedback);
         continue;
       }
@@ -447,18 +600,16 @@ void NavigationTaskExecutor::executePatrolAction(
       // 每次只下发一个目标；到达后反馈该APP node_id，再继续下一个节点。
       target_pose_pub_->publish(
           pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta));
-      if (!waitForGoal(config_.goal_timeout_sec,
-                       [goal_handle]() {
-                         return goal_handle->is_canceling();
-                       })) {
+      if (!waitForGoal(config_.goal_timeout_sec, [goal_handle]() {
+            return goal_handle->is_canceling();
+          })) {
         std::lock_guard<std::mutex> lock(result_mutex_);
-        cancelled = cancel_requested_ || shutting_down_ ||
-                    goal_handle->is_canceling();
+        cancelled =
+            cancel_requested_ || shutting_down_ || goal_handle->is_canceling();
         if (!cancelled) {
           failed = true;
           failure_message =
-              "navigation timeout at node_id=" +
-              std::to_string(node.node_id);
+              "navigation timeout at node_id=" + std::to_string(node.node_id);
         }
         break;
       }
@@ -471,9 +622,9 @@ void NavigationTaskExecutor::executePatrolAction(
             "node reached; waiting " +
             std::to_string(task_node.stop_duration_sec) + " seconds";
         goal_handle->publish_feedback(waiting_feedback);
-        if (!waitForStopDuration(
-                task_node.stop_duration_sec,
-                [goal_handle]() { return goal_handle->is_canceling(); })) {
+        if (!waitForStopDuration(task_node.stop_duration_sec, [goal_handle]() {
+              return goal_handle->is_canceling();
+            })) {
           std::lock_guard<std::mutex> lock(result_mutex_);
           cancelled = cancel_requested_ || shutting_down_ ||
                       goal_handle->is_canceling();
@@ -492,8 +643,7 @@ void NavigationTaskExecutor::executePatrolAction(
       auto feedback = std::make_shared<StartNavigation::Feedback>();
       feedback->current_node_id = node.node_id;
       fillCurrentPoseFeedback(*feedback);
-      feedback->message =
-          "node completed: " + std::to_string(node.node_id);
+      feedback->message = "node completed: " + std::to_string(node.node_id);
       goal_handle->publish_feedback(feedback);
     }
   } while (goal->loop && !cancelled && !failed);
@@ -522,7 +672,7 @@ void NavigationTaskExecutor::executePatrolAction(
   } else if (failed) {
     result->success = false;
     result->message = failure_message;
-    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, failure_message);
+    callbacks_.enter_error(failure_error_code, failure_message);
     goal_handle->abort(result);
   } else {
     result->success = true;
@@ -543,17 +693,15 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
 
   if (task_directory_.empty()) {
     result->success = false;
-    result->message =
-        "navigation map is not configured; call load_map first";
+    result->message = "navigation map is not configured; call load_map first";
     goal_handle->abort(result);
     releaseOperation();
     return;
   }
   if (current_pose.header.frame_id != "map") {
     result->success = false;
-    result->message =
-        "current pose frame is '" + current_pose.header.frame_id +
-        "', expected 'map'";
+    result->message = "current pose frame is '" + current_pose.header.frame_id +
+                      "', expected 'map'";
     goal_handle->abort(result);
     releaseOperation();
     return;
@@ -642,9 +790,9 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   goal_handle->publish_feedback(feedback);
   target_pose_pub_->publish(target_pose);
 
-  const bool reached =
-      waitForGoal(config_.goal_timeout_sec,
-                  [goal_handle]() { return goal_handle->is_canceling(); });
+  const bool reached = waitForGoal(config_.goal_timeout_sec, [goal_handle]() {
+    return goal_handle->is_canceling();
+  });
   bool cancelled = false;
   {
     std::lock_guard<std::mutex> lock(result_mutex_);
@@ -669,9 +817,8 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
     goal_handle->canceled(result);
   } else if (!reached || !stopped) {
     result->success = false;
-    result->message =
-        !reached ? "navigation timed out"
-                 : "navigation completed but " + stop_message;
+    result->message = !reached ? "navigation timed out"
+                               : "navigation completed but " + stop_message;
     callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
     goal_handle->abort(result);
   } else {
@@ -707,11 +854,11 @@ bool NavigationTaskExecutor::startWorkers(uint64_t session_id,
   using Result = std::pair<bool, std::string>;
   auto completion = std::make_shared<std::promise<Result>>();
   auto future = completion->get_future();
-  controller_.start(
-      session_id, topology_file_.string(), map_directory_.string(),
-      [completion](bool success, const std::string &detail) {
-        completion->set_value({success, detail});
-      });
+  controller_.start(session_id, topology_file_.string(),
+                    map_directory_.string(),
+                    [completion](bool success, const std::string &detail) {
+                      completion->set_value({success, detail});
+                    });
   if (future.wait_for(std::chrono::duration<double>(
           config_.worker_timeout_sec)) != std::future_status::ready) {
     message = "navigation workers start timed out";
@@ -727,10 +874,10 @@ bool NavigationTaskExecutor::stopWorkers(uint64_t session_id,
   using Result = std::pair<bool, std::string>;
   auto completion = std::make_shared<std::promise<Result>>();
   auto future = completion->get_future();
-  controller_.stop(
-      session_id, [completion](bool success, const std::string &detail) {
-        completion->set_value({success, detail});
-      });
+  controller_.stop(session_id,
+                   [completion](bool success, const std::string &detail) {
+                     completion->set_value({success, detail});
+                   });
   if (future.wait_for(std::chrono::duration<double>(
           config_.worker_timeout_sec)) != std::future_status::ready) {
     message = "navigation workers stop timed out";
@@ -744,12 +891,11 @@ bool NavigationTaskExecutor::stopWorkers(uint64_t session_id,
 bool NavigationTaskExecutor::waitForGoal(
     double timeout_sec, const std::function<bool()> &is_canceling) {
   std::unique_lock<std::mutex> lock(result_mutex_);
-  return result_cv_.wait_for(
-             lock, std::chrono::duration<double>(timeout_sec),
-             [this, &is_canceling]() {
-               return goal_reached_ || cancel_requested_ || shutting_down_ ||
-                      is_canceling();
-             }) &&
+  return result_cv_.wait_for(lock, std::chrono::duration<double>(timeout_sec),
+                             [this, &is_canceling]() {
+                               return goal_reached_ || cancel_requested_ ||
+                                      shutting_down_ || is_canceling();
+                             }) &&
          goal_reached_;
 }
 

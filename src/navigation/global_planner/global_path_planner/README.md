@@ -41,8 +41,9 @@ topology_map.json + globalmap.pcd
 - 边是有向边；双向通行需要配置两条方向相反的边。
 - APP导航协议使用相邻节点，因此一次正常导航只执行一条普通边。
 - `straight`和当前尚未实现几何的其他普通类型统一按直线生成路径。
-- `map_connection`以零代价参与Dijkstra，但不生成物理运动路径。
-- `map_connection`两端距离不得超过`map_connection_max_distance`。
+- `map_connection`不加入物理规划邻接表，也不生成路径；其两端允许在统一
+  `map`坐标中相距较远，由`slam_manager`到达前一个节点后使用后一个节点
+  位姿执行重定位。
 - 普通边的速度、运动方向和停障/绕障参数统一封装为`EdgePolicy`，并通过
   `PathWithPolicy.edge_policies[]`与路径点逐点对齐。
 - `linear_velocity`、`angular_velocity`最终不会超过Pure Pursuit配置的最大值。

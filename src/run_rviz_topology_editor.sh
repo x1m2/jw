@@ -11,6 +11,8 @@ WORKSPACE_DIR="$(dirname "${SCRIPT_DIR}")"
 DATA_DIR="${1:-${DATA_DIR:-/robotfs/data/slam_data/map_0}}"
 PCD_FILE="${2:-}"
 USE_RVIZ="${3:-true}"
+ONLINE_RECORD_ENABLED="${4:-false}"
+ONLINE_TASK_ID="${5:-}"
 TOPOLOGY_DIR="${DATA_DIR}/topology_map"
 TASK_DIR="${DATA_DIR}/task"
 
@@ -49,12 +51,32 @@ echo "[INFO] PCD: ${PCD_FILE}"
 echo "[INFO] 原始拓扑: ${OUTPUT_FILE}"
 echo "[INFO] 连边拓扑: ${CONNECTED_FILE}"
 echo "[INFO] 状态机任务: ${TASK_FILE}"
-echo "[INFO] 打点完成后，在RViz左侧点击“保存并生成”"
+if [ "${ONLINE_RECORD_ENABLED}" = "true" ]; then
+    if [ -z "${ONLINE_TASK_ID}" ]; then
+        echo "[ERROR] 在线打点模式必须提供 task_id"
+        exit 1
+    fi
+    echo "[INFO] 在线打点: 按K记录 /pose_stamped_localization"
+    echo "[INFO] 在线任务: ${TASK_DIR}/${ONLINE_TASK_ID}.json"
+    echo "[INFO] 每次按K都会立即保存全部输出文件"
+else
+    echo "[INFO] 打点完成后，在RViz左侧点击“保存并生成”"
+fi
+
+LAUNCH_ARGUMENTS=(
+    "rviz:=${USE_RVIZ}"
+    "pcd_file:=${PCD_FILE}"
+    "output_file:=${OUTPUT_FILE}"
+    "connected_topology_file:=${CONNECTED_FILE}"
+    "task_file:=${TASK_FILE}"
+)
+if [ "${ONLINE_RECORD_ENABLED}" = "true" ]; then
+    LAUNCH_ARGUMENTS+=(
+        "online_record_enabled:=true"
+        "online_task_id:=${ONLINE_TASK_ID}"
+    )
+fi
 
 exec ros2 launch rviz_topology_editor \
     rviz_topology_editor.launch.py \
-    rviz:="${USE_RVIZ}" \
-    pcd_file:="${PCD_FILE}" \
-    output_file:="${OUTPUT_FILE}" \
-    connected_topology_file:="${CONNECTED_FILE}" \
-    task_file:="${TASK_FILE}"
+    "${LAUNCH_ARGUMENTS[@]}"

@@ -24,13 +24,19 @@ find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TopologyEdgePolicy.msg"
   "msg/TopologyEdgePolicyArray.msg"
+  "msg/TopologyNodePolicy.msg"
+  "msg/TopologyNodePolicyArray.msg"
+  "srv/LoadTopology.srv"
+  "srv/SaveTopology.srv"
   "srv/SetTopologyEdgePolicy.srv"
+  "srv/SetTopologyNodePolicy.srv"
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target
@@ -58,6 +64,7 @@ ament_target_dependencies(rviz_topology_editor_node
   pcl_conversions
   rclcpp
   sensor_msgs
+  std_msgs
   std_srvs
   visualization_msgs
 )

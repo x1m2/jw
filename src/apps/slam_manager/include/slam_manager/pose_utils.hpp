@@ -2,6 +2,7 @@
 
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
+#include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -24,6 +25,13 @@ inline geometry_msgs::msg::Pose fromXyzTheta(double x, double y, double z,
 inline double yaw(
     const geometry_msgs::msg::Quaternion &orientation) {
   return tf2::getYaw(orientation);
+}
+
+inline void rpy(const geometry_msgs::msg::Quaternion &orientation,
+                double &roll, double &pitch, double &yaw_angle) {
+  tf2::Quaternion quaternion;
+  tf2::fromMsg(orientation, quaternion);
+  tf2::Matrix3x3(quaternion).getRPY(roll, pitch, yaw_angle);
 }
 
 }  // namespace slam_manager::pose_utils

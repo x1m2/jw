@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
       # 机器人外形尺寸，单位m。
-      robot_width: 0.80
+      robot_width: 0.70
       robot_length: 1.10
 
       # 雷达坐标系在base_link中的位姿：平移单位m，旋转单位rad。

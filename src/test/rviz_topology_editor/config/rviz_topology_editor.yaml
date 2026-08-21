@@ -18,7 +18,7 @@
     # true时将显示点云压到z=0，适合RViz的2D Goal Pose。
     flatten_cloud_for_display: false
 
-    # 大地图中拓扑点、ID文字和连线的显示尺寸，单位均为米。
+    # RViz显示节点箭头、节点ID和拓扑边线，不显示停留时间或边策略文字。
     marker_arrow_length: 2.0       # 箭头的长度
     marker_arrow_width: 0.4        # 箭头杆和箭头头部的宽度
     marker_text_scale: 1.0         # ID文字大小
@@ -28,6 +28,13 @@
     # false：点击只进入编辑列表，点击RViz“保存并生成”后统一落盘。
     # true：每次点击额外保存原始点文件；连边和任务文件仍由保存按钮生成。
     auto_save_raw_points: false
+
+    # 在线模式由launch参数开启；K键触发后抓取最新纯定位位姿并立即保存。
+    online_record_enabled: false
+    online_task_id: ""
+    online_pose_topic: "/pose_stamped_localization"
+    online_trigger_topic: "/topology_node_set"
+    online_pose_max_age_sec: 1.0
 
     # 状态机任务文件每个点的默认参数。
     task_wait_sec: 0

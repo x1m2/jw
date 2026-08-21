@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -23,8 +24,14 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rviz_topology_editor/msg/topology_edge_policy.hpp>
 #include <rviz_topology_editor/msg/topology_edge_policy_array.hpp>
+#include <rviz_topology_editor/msg/topology_node_policy.hpp>
+#include <rviz_topology_editor/msg/topology_node_policy_array.hpp>
+#include <rviz_topology_editor/srv/load_topology.hpp>
+#include <rviz_topology_editor/srv/save_topology.hpp>
 #include <rviz_topology_editor/srv/set_topology_edge_policy.hpp>
+#include <rviz_topology_editor/srv/set_topology_node_policy.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -45,6 +52,7 @@ struct SavedPoint {
   double qy{0.0};
   double qz{0.0};
   double qw{1.0};
+  double stop_duration_sec{0.0};
   std::string label;
 };
 
@@ -54,6 +62,7 @@ struct EditableEdge {
   int to_id{0};
   double weight{0.0};
   bool bidirectional{true};
+  std::string edge_type{"straight"};
   navigation_interfaces::msg::EdgePolicy policy{
       navigation_interfaces::makeDefaultEdgePolicy()};
 };
@@ -102,23 +111,31 @@ public:
     original_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     display_cloud_ = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     loadPcd();
-    loadExistingPoints();
-    rebuildSequentialEdges();
-    loadExistingEdgePolicies();
 
     auto static_qos = rclcpp::QoS(1).transient_local().reliable();
     cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(cloud_topic_,
                                                                  static_qos);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
         marker_topic_, static_qos);
-    edge_policy_pub_ =
-        create_publisher<msg::TopologyEdgePolicyArray>(
-            "~/edge_policies", static_qos);
+    edge_policy_pub_ = create_publisher<msg::TopologyEdgePolicyArray>(
+        "~/edge_policies", static_qos);
+    node_policy_pub_ = create_publisher<msg::TopologyNodePolicyArray>(
+        "~/node_policies", static_qos);
 
     goal_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         goal_topic_, rclcpp::QoS(10),
         std::bind(&RvizTopologyEditor::goalCallback, this,
                   std::placeholders::_1));
+    if (online_record_enabled_) {
+      online_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+          online_pose_topic_, rclcpp::QoS(20),
+          std::bind(&RvizTopologyEditor::onlinePoseCallback, this,
+                    std::placeholders::_1));
+      online_trigger_sub_ = create_subscription<std_msgs::msg::Bool>(
+          online_trigger_topic_, rclcpp::QoS(10),
+          std::bind(&RvizTopologyEditor::onlineTriggerCallback, this,
+                    std::placeholders::_1));
+    }
 
     undo_service_ = create_service<std_srvs::srv::Trigger>(
         "~/undo_last", std::bind(&RvizTopologyEditor::undoLast, this,
@@ -126,17 +143,24 @@ public:
     clear_service_ = create_service<std_srvs::srv::Trigger>(
         "~/clear", std::bind(&RvizTopologyEditor::clearPoints, this,
                              std::placeholders::_1, std::placeholders::_2));
-    save_service_ = create_service<std_srvs::srv::Trigger>(
+    load_service_ = create_service<srv::LoadTopology>(
+        "~/load", std::bind(&RvizTopologyEditor::loadTopology, this,
+                            std::placeholders::_1, std::placeholders::_2));
+    save_service_ = create_service<srv::SaveTopology>(
         "~/save", std::bind(&RvizTopologyEditor::saveAll, this,
                             std::placeholders::_1, std::placeholders::_2));
-    set_edge_policy_service_ =
-        create_service<srv::SetTopologyEdgePolicy>(
-            "~/set_edge_policy",
-            std::bind(&RvizTopologyEditor::setEdgePolicy, this,
-                      std::placeholders::_1, std::placeholders::_2));
+    set_node_policy_service_ = create_service<srv::SetTopologyNodePolicy>(
+        "~/set_node_policy",
+        std::bind(&RvizTopologyEditor::setNodePolicy, this,
+                  std::placeholders::_1, std::placeholders::_2));
+    set_edge_policy_service_ = create_service<srv::SetTopologyEdgePolicy>(
+        "~/set_edge_policy",
+        std::bind(&RvizTopologyEditor::setEdgePolicy, this,
+                  std::placeholders::_1, std::placeholders::_2));
 
     publishCloud();
     publishMarkers();
+    publishNodePolicies();
     publishEdgePolicies();
 
     RCLCPP_INFO(get_logger(), "RViz topology editor ready");
@@ -147,6 +171,8 @@ public:
     RCLCPP_INFO(get_logger(), "Connected topology: %s",
                 connected_topology_file_.c_str());
     RCLCPP_INFO(get_logger(), "Task file: %s", task_file_.c_str());
+    RCLCPP_INFO(get_logger(),
+                "Editor starts empty; use the RViz panel to load a task_id");
   }
 
 private:
@@ -175,6 +201,13 @@ private:
     declare_parameter<double>("marker_text_height_offset", 1.2);
     declare_parameter<double>("edge_width", 0.15);
     declare_parameter<bool>("auto_save_raw_points", false);
+    declare_parameter<bool>("online_record_enabled", false);
+    declare_parameter<std::string>("online_task_id", "");
+    declare_parameter<std::string>("online_pose_topic",
+                                   "/pose_stamped_localization");
+    declare_parameter<std::string>("online_trigger_topic",
+                                   "/topology_node_set");
+    declare_parameter<double>("online_pose_max_age_sec", 1.0);
     declare_parameter<int64_t>("task_wait_sec", 0);
     declare_parameter<int64_t>("task_publish_data", 1);
   }
@@ -192,14 +225,20 @@ private:
     marker_topic_ = get_parameter("marker_topic").as_string();
     flatten_cloud_for_display_ =
         get_parameter("flatten_cloud_for_display").as_bool();
-    marker_arrow_length_ =
-        get_parameter("marker_arrow_length").as_double();
+    marker_arrow_length_ = get_parameter("marker_arrow_length").as_double();
     marker_arrow_width_ = get_parameter("marker_arrow_width").as_double();
     marker_text_scale_ = get_parameter("marker_text_scale").as_double();
     marker_text_height_offset_ =
         get_parameter("marker_text_height_offset").as_double();
     edge_width_ = get_parameter("edge_width").as_double();
     auto_save_raw_points_ = get_parameter("auto_save_raw_points").as_bool();
+    online_record_enabled_ =
+        get_parameter("online_record_enabled").as_bool();
+    online_task_id_ = get_parameter("online_task_id").as_string();
+    online_pose_topic_ = get_parameter("online_pose_topic").as_string();
+    online_trigger_topic_ = get_parameter("online_trigger_topic").as_string();
+    online_pose_max_age_sec_ =
+        get_parameter("online_pose_max_age_sec").as_double();
     task_wait_sec_ = get_parameter("task_wait_sec").as_int();
     task_publish_data_ = get_parameter("task_publish_data").as_int();
   }
@@ -217,6 +256,26 @@ private:
       throw std::invalid_argument(
           "marker sizes and edge_width must be positive; "
           "marker_text_height_offset must be non-negative");
+    }
+    if (task_wait_sec_ < 0) {
+      throw std::invalid_argument("task_wait_sec must be non-negative");
+    }
+    if (online_record_enabled_ && online_task_id_.empty()) {
+      throw std::invalid_argument(
+          "online_task_id must not be empty when online recording is enabled");
+    }
+    if (online_record_enabled_ &&
+        (online_task_id_.size() > 64U ||
+         !std::all_of(online_task_id_.begin(), online_task_id_.end(),
+                      [](const unsigned char character) {
+                        return std::isalnum(character) || character == '_' ||
+                               character == '-';
+                      }))) {
+      throw std::invalid_argument(
+          "online_task_id must contain 1 to 64 letters, digits, '_' or '-'");
+    }
+    if (online_pose_max_age_sec_ <= 0.0) {
+      throw std::invalid_argument("online_pose_max_age_sec must be positive");
     }
   }
 
@@ -256,8 +315,9 @@ private:
     }
     if (!std::filesystem::is_regular_file(target_path, filesystem_error) ||
         filesystem_error) {
-      throw std::runtime_error("existing target points is not a regular file: " +
-                               target_points_file_);
+      throw std::runtime_error(
+          "existing target points is not a regular file: " +
+          target_points_file_);
     }
 
     std::ifstream input(target_path);
@@ -282,17 +342,17 @@ private:
       std::istringstream parser(line);
       if (!(parser >> point.id >> point.x >> point.y >> point.z >> point.qx >>
             point.qy >> point.qz >> point.qw)) {
-        throw std::runtime_error(
-            "invalid target point at line " + std::to_string(line_number) +
-            " in " + target_points_file_);
+        throw std::runtime_error("invalid target point at line " +
+                                 std::to_string(line_number) + " in " +
+                                 target_points_file_);
       }
       std::getline(parser, point.label);
       const auto label_first = point.label.find_first_not_of(" \t\r");
       const auto label_last = point.label.find_last_not_of(" \t\r");
       if (label_first == std::string::npos) {
-        throw std::runtime_error(
-            "missing target point label at line " +
-            std::to_string(line_number) + " in " + target_points_file_);
+        throw std::runtime_error("missing target point label at line " +
+                                 std::to_string(line_number) + " in " +
+                                 target_points_file_);
       }
       point.label =
           point.label.substr(label_first, label_last - label_first + 1U);
@@ -306,17 +366,17 @@ private:
           !std::isfinite(point.z) || !std::isfinite(point.qx) ||
           !std::isfinite(point.qy) || !std::isfinite(point.qz) ||
           !std::isfinite(point.qw)) {
-        throw std::runtime_error(
-            "non-finite target point value at line " +
-            std::to_string(line_number) + " in " + target_points_file_);
+        throw std::runtime_error("non-finite target point value at line " +
+                                 std::to_string(line_number) + " in " +
+                                 target_points_file_);
       }
       const double quaternion_norm =
           std::sqrt(point.qx * point.qx + point.qy * point.qy +
                     point.qz * point.qz + point.qw * point.qw);
       if (quaternion_norm < 1e-6) {
-        throw std::runtime_error(
-            "zero target point quaternion at line " +
-            std::to_string(line_number) + " in " + target_points_file_);
+        throw std::runtime_error("zero target point quaternion at line " +
+                                 std::to_string(line_number) + " in " +
+                                 target_points_file_);
       }
       point.qx /= quaternion_norm;
       point.qy /= quaternion_norm;
@@ -338,8 +398,9 @@ private:
     points_ = std::move(loaded_points);
     next_id_ = maximum_id + 1;
     show_edges_ = !points_.empty();
-    RCLCPP_INFO(get_logger(), "Loaded %zu existing target points from %s; "
-                              "next id=%d",
+    RCLCPP_INFO(get_logger(),
+                "Loaded %zu existing target points from %s; "
+                "next id=%d",
                 points_.size(), target_points_file_.c_str(), next_id_);
   }
 
@@ -360,21 +421,22 @@ private:
       edge.to_id = to.id;
       edge.weight = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-      const auto previous = std::find_if(
-          previous_edges.begin(), previous_edges.end(),
-          [&edge](const EditableEdge &candidate) {
-            return candidate.from_id == edge.from_id &&
-                   candidate.to_id == edge.to_id;
-          });
+      const auto previous =
+          std::find_if(previous_edges.begin(), previous_edges.end(),
+                       [&edge](const EditableEdge &candidate) {
+                         return candidate.from_id == edge.from_id &&
+                                candidate.to_id == edge.to_id;
+                       });
       if (previous != previous_edges.end()) {
         edge.bidirectional = previous->bidirectional;
+        edge.edge_type = previous->edge_type;
         edge.policy = previous->policy;
       }
       edges_.push_back(edge);
     }
   }
 
-  void loadExistingEdgePolicies() {
+  void loadExistingTopologyPolicies() {
     std::ifstream input(connected_topology_file_);
     if (!input.is_open()) {
       RCLCPP_INFO(get_logger(),
@@ -387,8 +449,24 @@ private:
       const nlohmann::json document = nlohmann::json::parse(input);
       if (document.value("schema_version", 0) != 1 ||
           document.value("format", "") != "navigation_topology" ||
+          !document.contains("nodes") || !document["nodes"].is_array() ||
           !document.contains("edges") || !document["edges"].is_array()) {
         throw std::runtime_error("invalid navigation topology JSON schema");
+      }
+      const auto &json_nodes = document["nodes"];
+      for (auto &point : points_) {
+        const auto node = std::find_if(
+            json_nodes.begin(), json_nodes.end(), [&point](const auto &item) {
+              return item.value("id", -1) == point.id;
+            });
+        if (node == json_nodes.end())
+          continue;
+        const double stop_duration_sec = node->value("stop_duration_sec", 0.0);
+        if (!std::isfinite(stop_duration_sec) || stop_duration_sec < 0.0) {
+          throw std::runtime_error("invalid stop_duration_sec for node " +
+                                   std::to_string(point.id));
+        }
+        point.stop_duration_sec = stop_duration_sec;
       }
       const auto &json_edges = document["edges"];
       for (auto &edge : edges_) {
@@ -397,29 +475,60 @@ private:
               return item.value("from_id", -1) == edge.from_id &&
                      item.value("to_id", -1) == edge.to_id;
             });
-        if (forward == json_edges.end()) continue;
+        if (forward == json_edges.end())
+          continue;
         const auto reverse = std::find_if(
             json_edges.begin(), json_edges.end(), [&edge](const auto &item) {
               return item.value("from_id", -1) == edge.to_id &&
                      item.value("to_id", -1) == edge.from_id;
             });
         edge.bidirectional = reverse != json_edges.end();
+        edge.edge_type = forward->value("edge_type", "straight");
+        if (edge.edge_type != "straight" &&
+            edge.edge_type != "map_connection") {
+          RCLCPP_WARN(get_logger(),
+                      "Edge %d type '%s' is not editable in RViz; using "
+                      "straight",
+                      edge.id, edge.edge_type.c_str());
+          edge.edge_type = "straight";
+        }
         edge.policy.obstacle_stop_enabled =
             forward->value("obstacle_stop_enabled", true);
         edge.policy.obstacle_avoidance_enabled =
             forward->value("obstacle_avoidance_enabled", false);
-        edge.policy.linear_velocity =
-            forward->value("linear_velocity", 0.5);
-        edge.policy.angular_velocity =
-            forward->value("angular_velocity", 0.5);
+        edge.policy.linear_velocity = forward->value("linear_velocity", 0.5);
+        edge.policy.angular_velocity = forward->value("angular_velocity", 0.5);
         edge.policy.motion_direction = forward->value("motion_direction", 1);
         edge.policy.obstacle_avoidance_distance_m =
             forward->value("obstacle_avoidance_distance_m", 0.5);
+        if (!std::isfinite(edge.policy.linear_velocity) ||
+            edge.policy.linear_velocity < 0.0 ||
+            !std::isfinite(edge.policy.angular_velocity) ||
+            edge.policy.angular_velocity < 0.0 ||
+            (edge.policy.motion_direction != 1 &&
+             edge.policy.motion_direction != -1)) {
+          throw std::runtime_error("invalid motion policy for edge " +
+                                   std::to_string(edge.id));
+        }
       }
     } catch (const std::exception &error) {
       throw std::runtime_error("cannot parse existing topology JSON " +
                                connected_topology_file_ + ": " + error.what());
     }
+  }
+
+  void publishNodePolicies() {
+    if (!node_policy_pub_)
+      return;
+    msg::TopologyNodePolicyArray message;
+    message.nodes.reserve(points_.size());
+    for (const auto &point : points_) {
+      msg::TopologyNodePolicy policy;
+      policy.node_id = point.id;
+      policy.stop_duration_sec = point.stop_duration_sec;
+      message.nodes.push_back(policy);
+    }
+    node_policy_pub_->publish(message);
   }
 
   void publishEdgePolicies() {
@@ -433,6 +542,10 @@ private:
       policy.edge_id = edge.id;
       policy.from_id = edge.from_id;
       policy.to_id = edge.to_id;
+      policy.edge_type = edge.edge_type;
+      policy.linear_velocity = edge.policy.linear_velocity;
+      policy.angular_velocity = edge.policy.angular_velocity;
+      policy.motion_direction = edge.policy.motion_direction;
       policy.obstacle_stop_enabled = edge.policy.obstacle_stop_enabled;
       policy.obstacle_avoidance_enabled =
           edge.policy.obstacle_avoidance_enabled;
@@ -469,6 +582,7 @@ private:
     point.qy = message->pose.orientation.y;
     point.qz = message->pose.orientation.z;
     point.qw = message->pose.orientation.w;
+    point.stop_duration_sec = static_cast<double>(task_wait_sec_);
     point.label = std::to_string(point.id) + "号";
 
     const double quaternion_norm =
@@ -504,12 +618,85 @@ private:
     }
 
     publishMarkers();
+    publishNodePolicies();
     publishEdgePolicies();
     RCLCPP_INFO(get_logger(),
                 "Added point id=%d label=%s xyz=(%.3f, %.3f, %.3f), "
                 "pending save=%s",
                 point.id, point.label.c_str(), point.x, point.y, point.z,
                 auto_save_raw_points_ ? "no" : "yes");
+  }
+
+  void onlinePoseCallback(
+      const geometry_msgs::msg::PoseStamped::SharedPtr message) {
+    if (!message || message->header.frame_id != frame_id_) {
+      return;
+    }
+    latest_online_pose_ = *message;
+    latest_online_pose_received_at_ = now();
+    has_latest_online_pose_ = true;
+  }
+
+  void onlineTriggerCallback(const std_msgs::msg::Bool::SharedPtr message) {
+    if (!message || !message->data || !online_record_enabled_) {
+      return;
+    }
+    if (!has_latest_online_pose_) {
+      RCLCPP_ERROR(get_logger(),
+                   "Online point rejected: no localization pose received on %s",
+                   online_pose_topic_.c_str());
+      return;
+    }
+    const double pose_age =
+        (now() - latest_online_pose_received_at_).seconds();
+    if (pose_age > online_pose_max_age_sec_) {
+      RCLCPP_ERROR(get_logger(),
+                   "Online point rejected: localization pose is %.3fs old",
+                   pose_age);
+      return;
+    }
+
+    const auto previous_points = points_;
+    const auto previous_edges = edges_;
+    const int previous_next_id = next_id_;
+    const bool previous_show_edges = show_edges_;
+    try {
+      auto pose = std::make_shared<geometry_msgs::msg::PoseStamped>(
+          latest_online_pose_);
+      const auto &orientation = pose->pose.orientation;
+      const double yaw = std::atan2(
+          2.0 * (orientation.w * orientation.z +
+                 orientation.x * orientation.y),
+          1.0 - 2.0 * (orientation.y * orientation.y +
+                       orientation.z * orientation.z));
+      pose->pose.orientation.x = 0.0;
+      pose->pose.orientation.y = 0.0;
+      pose->pose.orientation.z = std::sin(yaw * 0.5);
+      pose->pose.orientation.w = std::cos(yaw * 0.5);
+      goalCallback(pose);
+      if (next_id_ == previous_next_id) {
+        throw std::runtime_error("failed to append current localization pose");
+      }
+      const auto task_json_path =
+          std::filesystem::path(connected_topology_file_).parent_path() /
+          (online_task_id_ + ".json");
+      saveAllOutputs(task_json_path);
+      show_edges_ = true;
+      publishMarkers();
+      RCLCPP_INFO(get_logger(),
+                  "Online point id=%d saved from %s to %s",
+                  previous_next_id, online_pose_topic_.c_str(),
+                  task_json_path.c_str());
+    } catch (const std::exception &error) {
+      points_ = previous_points;
+      edges_ = previous_edges;
+      next_id_ = previous_next_id;
+      show_edges_ = previous_show_edges;
+      publishMarkers();
+      publishNodePolicies();
+      publishEdgePolicies();
+      RCLCPP_ERROR(get_logger(), "Online point save failed: %s", error.what());
+    }
   }
 
   void writeTopologyFile(const std::filesystem::path &path) const {
@@ -558,29 +745,29 @@ private:
     document["nodes"] = nlohmann::json::array();
     document["edges"] = nlohmann::json::array();
     for (const auto &point : points_) {
-      const double yaw = std::atan2(
-          2.0 * (point.qw * point.qz + point.qx * point.qy),
-          1.0 - 2.0 * (point.qy * point.qy + point.qz * point.qz));
+      const double yaw =
+          std::atan2(2.0 * (point.qw * point.qz + point.qx * point.qy),
+                     1.0 - 2.0 * (point.qy * point.qy + point.qz * point.qz));
       document["nodes"].push_back(
           {{"id", point.id},
            {"x", point.x},
            {"y", point.y},
            {"z", point.z},
            {"theta", yaw},
-           {"stop_duration_sec", static_cast<double>(task_wait_sec_)},
+           {"stop_duration_sec", point.stop_duration_sec},
            {"label", point.label}});
     }
 
     int json_edge_id = 0;
-    const auto append_edge = [&document, &json_edge_id](
-                                 const EditableEdge &edge, int from_id,
-                                 int to_id) {
+    const auto append_edge = [&document,
+                              &json_edge_id](const EditableEdge &edge,
+                                             int from_id, int to_id) {
       document["edges"].push_back(
           {{"id", json_edge_id++},
            {"from_id", from_id},
            {"to_id", to_id},
            {"weight", edge.weight},
-           {"edge_type", "straight"},
+           {"edge_type", edge.edge_type},
            {"linear_velocity", edge.policy.linear_velocity},
            {"angular_velocity", edge.policy.angular_velocity},
            {"motion_direction", edge.policy.motion_direction},
@@ -592,7 +779,8 @@ private:
     };
     for (const auto &edge : edges_) {
       append_edge(edge, edge.from_id, edge.to_id);
-      if (edge.bidirectional) append_edge(edge, edge.to_id, edge.from_id);
+      if (edge.bidirectional)
+        append_edge(edge, edge.to_id, edge.from_id);
     }
 
     std::ofstream output(path, std::ios::trunc);
@@ -601,7 +789,8 @@ private:
     }
     output << document.dump(2) << '\n';
     output.flush();
-    if (!output) throw std::runtime_error("failed writing " + path.string());
+    if (!output)
+      throw std::runtime_error("failed writing " + path.string());
   }
 
   void writeTaskFile(const std::filesystem::path &path) const {
@@ -613,8 +802,9 @@ private:
     output << "# 任务列表 (UTF-8编码)\n";
     output << "# 格式：目标点ID 等待延时 抵达后发布的数据\n";
     for (const auto &point : points_) {
-      output << point.id << " " << task_wait_sec_ << " " << task_publish_data_
-             << '\n';
+      // 旧任务状态机的等待字段为整数；JSON保留精确的小数秒配置。
+      output << point.id << " " << std::llround(point.stop_duration_sec) << " "
+             << task_publish_data_ << '\n';
     }
 
     output.flush();
@@ -640,20 +830,20 @@ private:
     replaceFile(target_temporary, target_path);
   }
 
-  void saveAllOutputs() const {
+  void saveAllOutputs(
+      const std::filesystem::path &connected_topology_path) const {
     saveRawPointFiles();
-    ensureParentDirectory(connected_topology_file_);
+    ensureParentDirectory(connected_topology_path);
     ensureParentDirectory(task_file_);
 
-    const std::filesystem::path connected_path(connected_topology_file_);
     const std::filesystem::path task_path(task_file_);
-    const auto connected_temporary =
-        std::filesystem::path(connected_topology_file_ + ".tmp");
+    const auto connected_temporary = std::filesystem::path(
+        connected_topology_path.string() + ".tmp");
     const auto task_temporary = std::filesystem::path(task_file_ + ".tmp");
 
     writeConnectedTopologyFile(connected_temporary);
     writeTaskFile(task_temporary);
-    replaceFile(connected_temporary, connected_path);
+    replaceFile(connected_temporary, connected_topology_path);
     replaceFile(task_temporary, task_path);
   }
 
@@ -668,14 +858,14 @@ private:
 
     if (show_edges_ && !edges_.empty()) {
       for (const auto &edge : edges_) {
-        const auto from = std::find_if(
-            points_.begin(), points_.end(), [&edge](const SavedPoint &point) {
-              return point.id == edge.from_id;
-            });
-        const auto to = std::find_if(
-            points_.begin(), points_.end(), [&edge](const SavedPoint &point) {
-              return point.id == edge.to_id;
-            });
+        const auto from = std::find_if(points_.begin(), points_.end(),
+                                       [&edge](const SavedPoint &point) {
+                                         return point.id == edge.from_id;
+                                       });
+        const auto to = std::find_if(points_.begin(), points_.end(),
+                                     [&edge](const SavedPoint &point) {
+                                       return point.id == edge.to_id;
+                                     });
         if (from == points_.end() || to == points_.end()) {
           continue;
         }
@@ -713,8 +903,7 @@ private:
         geometry_msgs::msg::Point from_point;
         from_point.x = from->x;
         from_point.y = from->y;
-        from_point.z =
-            flatten_cloud_for_display_ ? 0.05 : from->z + 0.05;
+        from_point.z = flatten_cloud_for_display_ ? 0.05 : from->z + 0.05;
         geometry_msgs::msg::Point to_point;
         to_point.x = to->x;
         to_point.y = to->y;
@@ -723,28 +912,6 @@ private:
         line.points.push_back(to_point);
         markers.markers.push_back(line);
 
-        visualization_msgs::msg::Marker label;
-        label.header = line.header;
-        label.ns = "rviz_topology_edge_policies";
-        label.id = edge.id;
-        label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-        label.action = visualization_msgs::msg::Marker::ADD;
-        label.pose.position.x = (from->x + to->x) * 0.5;
-        label.pose.position.y = (from->y + to->y) * 0.5;
-        label.pose.position.z =
-            (flatten_cloud_for_display_ ? 0.05 : (from->z + to->z) * 0.5) +
-            0.3;
-        label.pose.orientation.w = 1.0;
-        label.scale.z = marker_text_scale_ * 0.55;
-        label.color.r = 1.0F;
-        label.color.g = 1.0F;
-        label.color.b = 1.0F;
-        label.color.a = 1.0F;
-        label.text = "edge" + std::to_string(edge.id) + " STOP:" +
-                     (edge.policy.obstacle_stop_enabled ? "ON" : "OFF") +
-                     " AVOID:" +
-                     (edge.policy.obstacle_avoidance_enabled ? "ON" : "OFF");
-        markers.markers.push_back(label);
       }
     }
 
@@ -787,7 +954,7 @@ private:
       label.color.r = 1.0F;
       label.color.g = 0.0F;
       label.color.b = 0.0F;
-      label.text = point.label;
+      label.text = std::to_string(point.id);
       markers.markers.push_back(label);
     }
 
@@ -813,6 +980,7 @@ private:
         saveRawPointFiles();
       }
       publishMarkers();
+      publishNodePolicies();
       publishEdgePolicies();
       response->success = true;
       response->message = "removed point id=" + std::to_string(removed_id) +
@@ -838,6 +1006,7 @@ private:
         saveRawPointFiles();
       }
       publishMarkers();
+      publishNodePolicies();
       publishEdgePolicies();
       response->success = true;
       response->message =
@@ -851,20 +1020,68 @@ private:
     }
   }
 
-  void setEdgePolicy(
-      const srv::SetTopologyEdgePolicy::Request::SharedPtr request,
-      srv::SetTopologyEdgePolicy::Response::SharedPtr response) {
+  void
+  setNodePolicy(const srv::SetTopologyNodePolicy::Request::SharedPtr request,
+                srv::SetTopologyNodePolicy::Response::SharedPtr response) {
+    if (!std::isfinite(request->stop_duration_sec) ||
+        request->stop_duration_sec < 0.0) {
+      response->success = false;
+      response->message = "stop_duration_sec must be finite and non-negative";
+      return;
+    }
+    const auto point = std::find_if(
+        points_.begin(), points_.end(),
+        [request](const auto &item) { return item.id == request->node_id; });
+    if (point == points_.end()) {
+      response->success = false;
+      response->message = "node not found: " + std::to_string(request->node_id);
+      return;
+    }
+
+    point->stop_duration_sec = request->stop_duration_sec;
+    publishMarkers();
+    publishNodePolicies();
+    response->success = true;
+    response->message =
+        "node " + std::to_string(point->id) +
+        " stop duration applied; click Save to write topology_map.json";
+  }
+
+  void
+  setEdgePolicy(const srv::SetTopologyEdgePolicy::Request::SharedPtr request,
+                srv::SetTopologyEdgePolicy::Response::SharedPtr response) {
     const auto edge =
         std::find_if(edges_.begin(), edges_.end(), [request](const auto &item) {
           return item.id == request->edge_id;
         });
     if (edge == edges_.end()) {
       response->success = false;
-      response->message = "edge not found: " +
-                          std::to_string(request->edge_id);
+      response->message = "edge not found: " + std::to_string(request->edge_id);
       return;
     }
 
+    if (request->edge_type != "straight" &&
+        request->edge_type != "map_connection") {
+      response->success = false;
+      response->message = "edge_type must be straight or map_connection";
+      return;
+    }
+    if (!std::isfinite(request->linear_velocity) ||
+        request->linear_velocity < 0.0 ||
+        !std::isfinite(request->angular_velocity) ||
+        request->angular_velocity < 0.0 ||
+        (request->motion_direction != 1 && request->motion_direction != -1)) {
+      response->success = false;
+      response->message =
+          "velocities must be finite and non-negative; motion_direction must "
+          "be 1 or -1";
+      return;
+    }
+
+    edge->edge_type = request->edge_type;
+    edge->policy.linear_velocity = request->linear_velocity;
+    edge->policy.angular_velocity = request->angular_velocity;
+    edge->policy.motion_direction = request->motion_direction;
     edge->policy.obstacle_stop_enabled = request->obstacle_stop_enabled;
     edge->policy.obstacle_avoidance_enabled =
         request->obstacle_avoidance_enabled;
@@ -872,25 +1089,185 @@ private:
     publishMarkers();
     publishEdgePolicies();
     response->success = true;
-    response->message =
-        "edge " + std::to_string(edge->id) + " policy applied; click Save "
-        "to write topology_map.json";
+    response->message = "edge " + std::to_string(edge->id) +
+                        " policy applied; click Save "
+                        "to write topology_map.json";
   }
 
-  void saveAll(const std_srvs::srv::Trigger::Request::SharedPtr,
-               std_srvs::srv::Trigger::Response::SharedPtr response) {
+  void loadTopology(const srv::LoadTopology::Request::SharedPtr request,
+                    srv::LoadTopology::Response::SharedPtr response) {
     try {
-      saveAllOutputs();
+      if (request->task_id.empty() || request->task_id.size() > 64U ||
+          !std::all_of(request->task_id.begin(), request->task_id.end(),
+                       [](const unsigned char character) {
+                         return std::isalnum(character) || character == '_' ||
+                                character == '-';
+                       })) {
+        throw std::invalid_argument(
+            "task_id must contain 1 to 64 letters, digits, '_' or '-'");
+      }
+
+      const auto task_json_path =
+          std::filesystem::path(connected_topology_file_).parent_path() /
+          (request->task_id + ".json");
+      std::ifstream input(task_json_path);
+      if (!input.is_open()) {
+        throw std::runtime_error("cannot open " + task_json_path.string());
+      }
+      const nlohmann::json document = nlohmann::json::parse(input);
+      if (document.value("schema_version", 0) != 1 ||
+          document.value("format", "") != "navigation_topology" ||
+          !document.contains("nodes") || !document["nodes"].is_array() ||
+          !document.contains("edges") || !document["edges"].is_array()) {
+        throw std::runtime_error("invalid navigation topology JSON schema");
+      }
+      const std::string task_frame = document.value("frame_id", frame_id_);
+      if (task_frame != frame_id_) {
+        throw std::runtime_error("task frame_id is '" + task_frame +
+                                 "', expected '" + frame_id_ + "'");
+      }
+
+      std::vector<SavedPoint> loaded_points;
+      std::unordered_set<int> loaded_ids;
+      int maximum_id = -1;
+      for (const auto &item : document["nodes"]) {
+        SavedPoint point;
+        point.id = item.at("id").get<int>();
+        point.x = item.at("x").get<double>();
+        point.y = item.at("y").get<double>();
+        point.z = item.at("z").get<double>();
+        const double yaw = item.at("theta").get<double>();
+        point.stop_duration_sec = item.value("stop_duration_sec", 0.0);
+        point.label = item.value("label", "point_" + std::to_string(point.id));
+        if (point.id < 0 || !loaded_ids.insert(point.id).second) {
+          throw std::runtime_error("negative or duplicate node id");
+        }
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z) || !std::isfinite(yaw) ||
+            !std::isfinite(point.stop_duration_sec) ||
+            point.stop_duration_sec < 0.0) {
+          throw std::runtime_error("node contains invalid numeric value");
+        }
+        point.qz = std::sin(yaw * 0.5);
+        point.qw = std::cos(yaw * 0.5);
+        maximum_id = std::max(maximum_id, point.id);
+        loaded_points.push_back(std::move(point));
+      }
+      if (loaded_points.empty()) {
+        throw std::runtime_error("task contains no nodes");
+      }
+      if (maximum_id == std::numeric_limits<int>::max()) {
+        throw std::runtime_error("task node id limit reached");
+      }
+
+      std::vector<EditableEdge> loaded_edges;
+      loaded_edges.reserve(loaded_points.size() - 1U);
+      const auto &json_edges = document["edges"];
+      for (std::size_t index = 0; index + 1U < loaded_points.size(); ++index) {
+        const auto &from = loaded_points[index];
+        const auto &to = loaded_points[index + 1U];
+        const double dx = to.x - from.x;
+        const double dy = to.y - from.y;
+        const double dz = to.z - from.z;
+
+        EditableEdge edge;
+        edge.id = static_cast<int>(index);
+        edge.from_id = from.id;
+        edge.to_id = to.id;
+        edge.weight = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const auto forward = std::find_if(
+            json_edges.begin(), json_edges.end(), [&edge](const auto &item) {
+              return item.value("from_id", -1) == edge.from_id &&
+                     item.value("to_id", -1) == edge.to_id;
+            });
+        const auto reverse = std::find_if(
+            json_edges.begin(), json_edges.end(), [&edge](const auto &item) {
+              return item.value("from_id", -1) == edge.to_id &&
+                     item.value("to_id", -1) == edge.from_id;
+            });
+        if (forward != json_edges.end()) {
+          edge.bidirectional = reverse != json_edges.end();
+          edge.edge_type = forward->value("edge_type", "straight");
+          edge.policy.obstacle_stop_enabled =
+              forward->value("obstacle_stop_enabled", true);
+          edge.policy.obstacle_avoidance_enabled =
+              forward->value("obstacle_avoidance_enabled", false);
+          edge.policy.linear_velocity =
+              forward->value("linear_velocity", 0.5);
+          edge.policy.angular_velocity =
+              forward->value("angular_velocity", 0.5);
+          edge.policy.motion_direction =
+              forward->value("motion_direction", 1);
+          edge.policy.obstacle_avoidance_distance_m =
+              forward->value("obstacle_avoidance_distance_m", 0.5);
+        }
+        if (edge.edge_type != "straight" &&
+            edge.edge_type != "map_connection") {
+          throw std::runtime_error("unsupported edge_type");
+        }
+        if (!std::isfinite(edge.policy.linear_velocity) ||
+            edge.policy.linear_velocity < 0.0 ||
+            !std::isfinite(edge.policy.angular_velocity) ||
+            edge.policy.angular_velocity < 0.0 ||
+            !std::isfinite(edge.policy.obstacle_avoidance_distance_m) ||
+            edge.policy.obstacle_avoidance_distance_m < 0.0 ||
+            (edge.policy.motion_direction != 1 &&
+             edge.policy.motion_direction != -1)) {
+          throw std::runtime_error("edge contains invalid policy value");
+        }
+        loaded_edges.push_back(std::move(edge));
+      }
+
+      points_ = std::move(loaded_points);
+      edges_ = std::move(loaded_edges);
+      next_id_ = maximum_id + 1;
+      show_edges_ = true;
+      if (online_record_enabled_) {
+        // 在线继续编辑时，后续K键保存回刚刚显式加载的同一个任务。
+        online_task_id_ = request->task_id;
+      }
+      publishMarkers();
+      publishNodePolicies();
+      publishEdgePolicies();
+      response->success = true;
+      response->message = "task_id=" + request->task_id +
+                          ", points=" + std::to_string(points_.size()) +
+                          ", edges=" + std::to_string(edges_.size());
+      RCLCPP_INFO(get_logger(), "Loaded task topology: %s",
+                  task_json_path.c_str());
+    } catch (const std::exception &error) {
+      response->success = false;
+      response->message = error.what();
+      RCLCPP_ERROR(get_logger(), "Load task failed: %s", error.what());
+    }
+  }
+
+  void saveAll(const srv::SaveTopology::Request::SharedPtr request,
+               srv::SaveTopology::Response::SharedPtr response) {
+    try {
+      if (request->task_id.empty() || request->task_id.size() > 64U ||
+          !std::all_of(request->task_id.begin(), request->task_id.end(),
+                       [](const unsigned char character) {
+                         return std::isalnum(character) || character == '_' ||
+                                character == '-';
+                       })) {
+        throw std::invalid_argument(
+            "task_id must contain 1 to 64 letters, digits, '_' or '-'");
+      }
+      const auto task_json_path =
+          std::filesystem::path(connected_topology_file_).parent_path() /
+          (request->task_id + ".json");
+      saveAllOutputs(task_json_path);
       const auto edge_count = edges_.size();
       response->success = true;
       response->message = "points=" + std::to_string(points_.size()) +
                           ", edges=" + std::to_string(edge_count) +
-                          ", task=" + task_file_;
+                          ", json=" + task_json_path.string();
       show_edges_ = true;
       publishMarkers();
       RCLCPP_INFO(get_logger(),
                   "Save completed: points=%zu edges=%zu topology=%s task=%s",
-                  points_.size(), edge_count, connected_topology_file_.c_str(),
+                  points_.size(), edge_count, task_json_path.c_str(),
                   task_file_.c_str());
     } catch (const std::exception &error) {
       response->success = false;
@@ -911,6 +1288,14 @@ private:
 
   bool flatten_cloud_for_display_{true};
   bool auto_save_raw_points_{false};
+  bool online_record_enabled_{false};
+  std::string online_task_id_;
+  std::string online_pose_topic_;
+  std::string online_trigger_topic_;
+  double online_pose_max_age_sec_{1.0};
+  bool has_latest_online_pose_{false};
+  geometry_msgs::msg::PoseStamped latest_online_pose_;
+  rclcpp::Time latest_online_pose_received_at_{0, 0, RCL_ROS_TIME};
   bool show_edges_{false};
   double marker_arrow_length_{2.0};
   double marker_arrow_width_{0.4};
@@ -929,12 +1314,18 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_pub_;
-  rclcpp::Publisher<msg::TopologyEdgePolicyArray>::SharedPtr
-      edge_policy_pub_;
+  rclcpp::Publisher<msg::TopologyEdgePolicyArray>::SharedPtr edge_policy_pub_;
+  rclcpp::Publisher<msg::TopologyNodePolicyArray>::SharedPtr node_policy_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+      online_pose_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr online_trigger_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr undo_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_service_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_service_;
+  rclcpp::Service<srv::LoadTopology>::SharedPtr load_service_;
+  rclcpp::Service<srv::SaveTopology>::SharedPtr save_service_;
+  rclcpp::Service<srv::SetTopologyNodePolicy>::SharedPtr
+      set_node_policy_service_;
   rclcpp::Service<srv::SetTopologyEdgePolicy>::SharedPtr
       set_edge_policy_service_;
 };

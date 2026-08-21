@@ -1,0 +1,2 @@
+int32 node_id
+float64 stop_duration_sec

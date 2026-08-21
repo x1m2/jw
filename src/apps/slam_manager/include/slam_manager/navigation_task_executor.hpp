@@ -4,24 +4,22 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <memory>
 #include <mutex>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <geometry_msgs/msg/pose.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
-
-#include "slam_manager_interfaces/action/navigate_to_pose.hpp"
-#include "slam_manager_interfaces/action/start_navigation.hpp"
-#include "slam_manager_interfaces/msg/navigation_node.hpp"
-
 #include "slam_manager/navigation_controller.hpp"
 #include "slam_manager/slam_state_machine.hpp"
 #include "slam_manager/task_topology.hpp"
+#include "slam_manager_interfaces/action/navigate_to_pose.hpp"
+#include "slam_manager_interfaces/action/start_navigation.hpp"
+#include "slam_manager_interfaces/msg/navigation_node.hpp"
 
 namespace slam_manager {
 
@@ -39,6 +37,8 @@ class NavigationTaskExecutor {
     double control_timeout_sec{3.0};
     double worker_timeout_sec{30.0};
     double goal_timeout_sec{300.0};
+    bool enable_skip_first_target{true};
+    double skip_first_target_threshold{0.8};
   };
 
   struct Callbacks {
@@ -46,6 +46,9 @@ class NavigationTaskExecutor {
     std::function<void(uint8_t)> publish_runtime_state;
     std::function<void(int32_t, const std::string &)> enter_error;
     std::function<bool(geometry_msgs::msg::PoseStamped &)> get_current_pose;
+    std::function<bool(const slam_manager_interfaces::msg::NavigationNode &,
+                       const std::function<bool()> &, std::string &)>
+        relocalize;
   };
 
   NavigationTaskExecutor(rclcpp::Node *node,
@@ -69,8 +72,7 @@ class NavigationTaskExecutor {
       uint64_t session_id);
   void startNavigateToPoseAction(
       const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
-      const geometry_msgs::msg::PoseStamped &current_pose,
-      uint64_t session_id);
+      const geometry_msgs::msg::PoseStamped &current_pose, uint64_t session_id);
   void cancel();
 
   void onNavigationState(bool reached);

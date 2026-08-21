@@ -51,7 +51,7 @@ WS_ZIP="${WS_ZIP:-${WS}.zip}"
 SRC_DIR="${WS}/src"
 # 默认第三方源码
 THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-${WS}/env}"
-PARALLEL_WORKERS="${PARALLEL_WORKERS:-2}"
+PARALLEL_WORKERS="${PARALLEL_WORKERS:-3}"
 FORCE_THIRD_PARTY="${FORCE_THIRD_PARTY:-0}"
 ROS_DISTRO="${ROS_DISTRO:-humble}"
 TZ_VALUE="${TZ_VALUE:-Asia/Shanghai}"
@@ -555,7 +555,7 @@ build_workspace() {
   info "第一阶段：编译工作空间，跳过 quatro/fast_lio/pgo_sc/localization_sc"
   colcon build --symlink-install \
     --parallel-workers "${PARALLEL_WORKERS}" \
-    --packages-skip quatro fast_lio pgo_sc localization_sc \
+    --packages-skip  slam_manager_test quatro   fastlio_localization uwb_follow_planner bbs3d dual_radar_traversable_extractor fast_lio pgo_sc localization_sc \
     --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
@@ -566,10 +566,10 @@ build_workspace() {
     source "${WS}/install/setup.bash"
   fi
 
-  info "第二阶段：单线程编译 fast_lio/localization_sc/pgo_sc"
+  info "第二阶段：单线程编译 "
   colcon build --symlink-install \
     --parallel-workers 1 \
-    --packages-select fast_lio localization_sc pgo_sc \
+    --packages-select fast_lio fastlio_localization pgo_sc slam_manager_test\
     --cmake-args -DCMAKE_BUILD_TYPE=Release
 
   if [[ ! -f "${WS}/install/setup.bash" ]]; then
