@@ -555,7 +555,7 @@ build_workspace() {
   info "第一阶段：编译工作空间，跳过 quatro/fast_lio/pgo_sc/localization_sc"
   colcon build --symlink-install \
     --parallel-workers "${PARALLEL_WORKERS}" \
-    --packages-skip  slam_manager_test quatro   fastlio_localization uwb_follow_planner bbs3d dual_radar_traversable_extractor fast_lio pgo_sc localization_sc \
+    --packages-skip  slam_manager_test quatro   fastlio_localization uwb_follow_planner bbs3d dual_radar_traversable_extractor fast_lio pgo_sc \
     --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
