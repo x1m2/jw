@@ -17,8 +17,8 @@
 #include <tf2_ros/transform_listener.hpp>
 #include <thread>
 
-#include "pure_pursuit_local_planner/avoidance_path_planner.hpp"
-#include "pure_pursuit_local_planner/costmap_types.hpp"
+#include "pure_pursuit/avoidance_path_planner.hpp"
+#include "pure_pursuit/costmap_types.hpp"
 
 namespace pure_pursuit_local_planner {
 

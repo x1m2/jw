@@ -22,8 +22,8 @@ def find_robot_param(package_share):
 
 
 def generate_launch_description():
-    pkg_share = FindPackageShare('pure_pursuit_local_planner')
-    package_share = get_package_share_directory('pure_pursuit_local_planner')
+    pkg_share = FindPackageShare('pure_pursuit')
+    package_share = get_package_share_directory('pure_pursuit')
 
     config_file = LaunchConfiguration('config_file')
     robot_param_file = LaunchConfiguration('robot_param_file')
@@ -82,8 +82,8 @@ def generate_launch_description():
         ),
 
         Node(
-            package='pure_pursuit_local_planner',
-            executable='pure_pursuit_local_planner_node',
+            package='pure_pursuit',
+            executable='pure_pursuit_node',
             output='screen',
             parameters=[
                 config_file,
@@ -93,10 +93,6 @@ def generate_launch_description():
                     'use_sim_time': use_sim_time,
                     'global_frame': global_frame,
                 }
-            ],
-            remappings=[
-                ('/local_costmap', '/local_costmap/costmap'),
-
             ],
         ),
 

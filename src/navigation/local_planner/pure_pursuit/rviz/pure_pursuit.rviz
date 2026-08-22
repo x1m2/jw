@@ -151,7 +151,7 @@ Visualization Manager:
       Radius: 0.03
       Shaft Diameter: 0.1
       Shaft Length: 0.1
-      Topic: /pure_pursuit_local_planner/local_path
+      Topic: /pure_pursuit/local_path
       Unreliable: false
       Value: true
     - Alpha: 1
@@ -174,12 +174,12 @@ Visualization Manager:
       Radius: 0.02
       Shaft Diameter: 0.05
       Shaft Length: 0.05
-      Topic: /pure_pursuit_local_planner/local_trajectory
+      Topic: /pure_pursuit/local_trajectory
       Unreliable: false
       Value: true
     - Class: rviz/MarkerArray
       Enabled: true
-      Marker Topic: /pure_pursuit_local_planner/obstacle_markers
+      Marker Topic: /pure_pursuit/obstacle_markers
       Name: Obstacle Markers
       Namespaces:
         {}
@@ -187,7 +187,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /pure_pursuit_local_planner/lookahead_point
+      Marker Topic: /pure_pursuit/lookahead_point
       Name: Lookahead Point
       Namespaces:
         {}
@@ -195,7 +195,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /pure_pursuit_local_planner/path_markers
+      Marker Topic: /pure_pursuit/path_markers
       Name: Path Markers
       Namespaces:
         {}
@@ -203,7 +203,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /pure_pursuit_local_planner/lookahead_marker
+      Marker Topic: /pure_pursuit/lookahead_marker
       Name: Lookahead Marker
       Namespaces:
         {}
@@ -211,7 +211,7 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
-      Marker Topic: /pure_pursuit_local_planner/velocity_arrow
+      Marker Topic: /pure_pursuit/velocity_arrow
       Name: Velocity Arrow
       Namespaces:
         {}

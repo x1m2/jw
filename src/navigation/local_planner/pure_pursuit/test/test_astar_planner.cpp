@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "pure_pursuit_local_planner/astar_planner.hpp"
+#include "pure_pursuit/astar_planner.hpp"
 
 namespace pure_pursuit_local_planner {
 namespace {

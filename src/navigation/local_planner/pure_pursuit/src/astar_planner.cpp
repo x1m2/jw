@@ -1,11 +1,11 @@
-#include "pure_pursuit_local_planner/astar_planner.hpp"
+#include "pure_pursuit/astar_planner.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 
 
-#include "pure_pursuit_local_planner/param_utils.hpp"
+#include "pure_pursuit/param_utils.hpp"
 
 namespace pure_pursuit_local_planner {
 

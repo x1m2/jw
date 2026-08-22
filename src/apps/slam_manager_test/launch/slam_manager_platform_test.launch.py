@@ -121,8 +121,8 @@ def generate_launch_description():
         ),
         include_launch('path_smoother', 'path_smoother.launch.py', platform_args),
         include_launch(
-            'pure_pursuit_local_planner',
-            'pure_pursuit_local_planner.launch.py',
+            'pure_pursuit',
+            'pure_pursuit.launch.py',
             {**platform_args, 'launch_rviz': 'false'},
         ),
     ]

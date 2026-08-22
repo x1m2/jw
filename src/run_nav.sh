@@ -326,7 +326,7 @@ start_bg PATH_SMOOTHER_PID "path_smoother" \
 
 start_bg PURE_PURSUIT_PID "pure_pursuit" \
     "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
-    ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
+    ros2 launch pure_pursuit pure_pursuit.launch.py
 
 # start_bg DUAL_RADAR_EXTRACTOR_PID "dual_radar_extractor" \
 #     "${NAV_LOG_DIR}/dual_radar_extractor_$(log_time).log" 3 \

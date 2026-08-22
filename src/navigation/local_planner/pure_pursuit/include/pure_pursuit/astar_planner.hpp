@@ -16,7 +16,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "pure_pursuit_local_planner/costmap_types.hpp"
+#include "pure_pursuit/costmap_types.hpp"
 
 namespace pure_pursuit_local_planner {
 

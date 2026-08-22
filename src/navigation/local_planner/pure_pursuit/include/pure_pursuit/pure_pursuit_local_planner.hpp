@@ -36,10 +36,10 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "pure_pursuit_local_planner/front_obstacle_detector.hpp"
-#include "pure_pursuit_local_planner/local_avoidance_manager.hpp"
-#include "pure_pursuit_local_planner/path_tracker.hpp"
-#include "pure_pursuit_local_planner/pure_pursuit_controller.hpp"
+#include "pure_pursuit/front_obstacle_detector.hpp"
+#include "pure_pursuit/local_avoidance_manager.hpp"
+#include "pure_pursuit/path_tracker.hpp"
+#include "pure_pursuit/pure_pursuit_controller.hpp"
 
 namespace pure_pursuit_local_planner {
 

@@ -1,8 +1,8 @@
-#include "pure_pursuit_local_planner/pure_pursuit_local_planner.hpp"
+#include "pure_pursuit/pure_pursuit_local_planner.hpp"
 
 #include <limits>
 
-#include "pure_pursuit_local_planner/param_utils.hpp"
+#include "pure_pursuit/param_utils.hpp"
 
 namespace pure_pursuit_local_planner {
 
@@ -146,14 +146,14 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
           });
 
   costmap_sub_ = node_->create_subscription<nav_msgs::msg::OccupancyGrid>(
-      "/local_costmap", rclcpp::QoS(10),
+      "/costmap", rclcpp::QoS(10),
       [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
         this->costmapCallback(msg);
       });
 
   if (config_.use_smoothed_path) {
     smoothed_local_path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
-        "/pure_pursuit_local_planner/smoothed_local_path", rclcpp::QoS(10),
+        "/pure_pursuit/smoothed_local_path", rclcpp::QoS(10),
         [this](nav_msgs::msg::Path::ConstSharedPtr msg) {
           this->smoothedLocalPathCallback(msg);
         });

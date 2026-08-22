@@ -11,7 +11,7 @@ range/bearing measurements and FAST-LIO2 mapping odometry.
   -> uwb_follow_planner
   -> /global_path_with_policy
   -> path_smoother
-  -> pure_pursuit_local_planner
+  -> pure_pursuit
 ```
 
 Do not run `global_path_planner` concurrently in follow mode: both nodes use
@@ -65,7 +65,7 @@ Pure Pursuit, and local costmap to use `odom` as their global frame. `pgo_sc`,
 
 During local avoidance, the planner keeps receiving and filtering UWB data but
 stops publishing reference paths. After the robot reaches the second side goal,
-`pure_pursuit_local_planner` publishes `WAITING_DYNAMIC_PATH`; the planner then
+`pure_pursuit` publishes `WAITING_DYNAMIC_PATH`; the planner then
 publishes a fresh path based on the latest person position. Delayed
 dynamic paths generated before this state are rejected by the local planner.
 

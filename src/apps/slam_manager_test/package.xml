@@ -27,7 +27,7 @@
   <exec_depend>costmap_2d</exec_depend>
   <exec_depend>global_path_planner</exec_depend>
   <exec_depend>path_smoother</exec_depend>
-  <exec_depend>pure_pursuit_local_planner</exec_depend>
+  <exec_depend>pure_pursuit</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

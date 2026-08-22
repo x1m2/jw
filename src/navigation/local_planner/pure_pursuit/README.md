@@ -1,4 +1,4 @@
-# pure_pursuit_local_planner
+# pure_pursuit
 
 ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路径和局部 costmap，输出 `/cmd_vel_planned`，并通过 `/nav_state` 告诉状态机当前目标点是否完成。最终 `/cmd_vel` 由 `obstacle_stop` 做安全检查后发布。
 
@@ -6,25 +6,18 @@ ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路
 
 ```text
 /livox/lidar
-  -> costmap_2d -> /local_costmap/costmap
+  -> costmap_2d -> /costmap
 
 /pose_stamped_localization + /target_points
   -> global_path_planner -> /global_path
   -> path_smoother       -> /smoothed_global_path
 
-pure_pursuit_local_planner
-  <- /smoothed_global_path
-  <- /local_costmap/costmap
+pure_pursuit
+  <- /smoothed_global_path_with_policy
+  <- /costmap
   <- /target_points
   -> /cmd_vel_planned -> obstacle_stop -> /cmd_vel
   -> /nav_state
-```
-
-`pure_pursuit_local_planner.launch.py` 里做了 remap：
-
-```text
-/global_path   -> /smoothed_global_path
-/local_costmap -> /local_costmap/costmap
 ```
 
 ## 启动
@@ -38,7 +31,7 @@ pure_pursuit_local_planner
 单独启动本节点：
 
 ```bash
-ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
+ros2 launch pure_pursuit pure_pursuit.launch.py
 ```
 
 ## 主要话题
@@ -47,7 +40,7 @@ ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py
 
 ```text
 /smoothed_global_path_with_policy navigation_interfaces/msg/PathWithPolicy
-/local_costmap    nav_msgs/msg/OccupancyGrid
+/costmap          nav_msgs/msg/OccupancyGrid
 /target_points    geometry_msgs/msg/Pose
 ```
 

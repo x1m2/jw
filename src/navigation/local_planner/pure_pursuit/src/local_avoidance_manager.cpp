@@ -1,11 +1,11 @@
-#include "pure_pursuit_local_planner/local_avoidance_manager.hpp"
+#include "pure_pursuit/local_avoidance_manager.hpp"
 
 #include <limits>
 #include <iterator>
 #include <tf2/utils.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
-#include "pure_pursuit_local_planner/param_utils.hpp"
+#include "pure_pursuit/param_utils.hpp"
 
 namespace pure_pursuit_local_planner {
 

@@ -1,13 +1,13 @@
 #include <stdexcept>
 
-#include "pure_pursuit_local_planner/pure_pursuit_local_planner.hpp"
+#include "pure_pursuit/pure_pursuit_local_planner.hpp"
 #include "slam_manager/managed_worker.hpp"
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   auto worker = std::make_shared<
       slam_manager::ManagedWorker>("pure_pursuit_worker", []() {
-    auto node = std::make_shared<rclcpp::Node>("pure_pursuit_local_planner");
+    auto node = std::make_shared<rclcpp::Node>("pure_pursuit");
     auto planner =
         std::make_shared<pure_pursuit_local_planner::PurePursuitLocalPlanner>();
     if (!planner->initialize(node)) {

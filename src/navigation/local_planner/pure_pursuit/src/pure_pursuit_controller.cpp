@@ -1,4 +1,4 @@
-#include "pure_pursuit_local_planner/pure_pursuit_controller.hpp"
+#include "pure_pursuit/pure_pursuit_controller.hpp"
 
 #include <algorithm>
 #include <cmath>

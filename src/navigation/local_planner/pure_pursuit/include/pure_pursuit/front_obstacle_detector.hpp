@@ -16,8 +16,8 @@
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
 
-#include "pure_pursuit_local_planner/costmap_types.hpp"
-#include "pure_pursuit_local_planner/avoidance_types.hpp"
+#include "pure_pursuit/costmap_types.hpp"
+#include "pure_pursuit/avoidance_types.hpp"
 
 namespace pure_pursuit_local_planner {
 

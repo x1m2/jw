@@ -9,9 +9,9 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-#include "pure_pursuit_local_planner/astar_planner.hpp"
-#include "pure_pursuit_local_planner/avoidance_types.hpp"
-#include "pure_pursuit_local_planner/costmap_types.hpp"
+#include "pure_pursuit/astar_planner.hpp"
+#include "pure_pursuit/avoidance_types.hpp"
+#include "pure_pursuit/costmap_types.hpp"
 
 namespace pure_pursuit_local_planner {
 

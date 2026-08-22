@@ -1,10 +1,10 @@
-#include "pure_pursuit_local_planner/front_obstacle_detector.hpp"
+#include "pure_pursuit/front_obstacle_detector.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
-#include "pure_pursuit_local_planner/param_utils.hpp"
+#include "pure_pursuit/param_utils.hpp"
 
 namespace pure_pursuit_local_planner {
 

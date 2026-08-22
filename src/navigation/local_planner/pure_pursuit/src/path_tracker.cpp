@@ -1,4 +1,4 @@
-#include "pure_pursuit_local_planner/path_tracker.hpp"
+#include "pure_pursuit/path_tracker.hpp"
 
 #include <algorithm>
 #include <cmath>

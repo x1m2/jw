@@ -73,9 +73,6 @@ def generate_launch_description():
                     'runtime_profile': runtime_profile,
                     'global_frame': global_frame,
                 }
-            ],
-            remappings=[
-                ('/costmap', '/local_costmap/costmap'),
             ]
         ),
     ])

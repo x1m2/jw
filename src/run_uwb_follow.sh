@@ -135,7 +135,7 @@ start_bg "Path Smoother" "${FOLLOW_LOG_DIR}/path_smoother_$(log_time).log" 1 \
     ros2 launch path_smoother path_smoother.launch.py
 
 start_bg "Pure Pursuit" "${FOLLOW_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
-    ros2 launch pure_pursuit_local_planner pure_pursuit_local_planner.launch.py \
+    ros2 launch pure_pursuit pure_pursuit.launch.py \
     global_frame:=odom
 
 start_bg "UWB Follow Planner" "${FOLLOW_LOG_DIR}/uwb_follow_planner_$(log_time).log" 1 \

@@ -151,7 +151,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/lookahead_point
+            Value: /pure_pursuit/lookahead_point
           Name: Lookahead Point
           Namespaces: {}
           Queue Size: 10
@@ -196,7 +196,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/local_path_astar
+            Value: /pure_pursuit/local_path_astar
           Value: true
         - Alpha: 1
           Buffer Length: 1
@@ -213,7 +213,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/local_trajectory
+            Value: /pure_pursuit/local_trajectory
           Value: true
         - Class: rviz_default_plugins/MarkerArray
           Enabled: true
@@ -222,7 +222,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/astar_markers
+            Value: /pure_pursuit/astar_markers
           Name: AStar Start and Goal
           Namespaces: {}
           Queue Size: 10
@@ -234,7 +234,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/local_goal_marker
+            Value: /pure_pursuit/local_goal_marker
           Name: Avoidance Goal
           Namespaces: {}
           Queue Size: 10
@@ -246,7 +246,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/front_detection_area
+            Value: /pure_pursuit/front_detection_area
           Name: Front Detection Area
           Namespaces: {}
           Queue Size: 10
@@ -270,7 +270,7 @@ Visualization Manager:
             Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /pure_pursuit_local_planner/velocity_arrow
+            Value: /pure_pursuit/velocity_arrow
           Name: Velocity Arrow
           Namespaces: {}
           Queue Size: 10

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>pure_pursuit_local_planner</name>
+  <name>pure_pursuit</name>
   <version>1.0.0</version>
   <description>Pure Pursuit local planner with obstacle avoidance for ROS 2.</description>
 

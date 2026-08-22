@@ -1,4 +1,4 @@
-#include "pure_pursuit_local_planner/avoidance_path_planner.hpp"
+#include "pure_pursuit/avoidance_path_planner.hpp"
 
 #include <algorithm>
 #include <cmath>
