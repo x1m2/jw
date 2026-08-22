@@ -17,7 +17,7 @@ find_package(std_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
-add_library(${PROJECT_NAME}_core SHARED
+add_library(${PROJECT_NAME}_core STATIC
   src/bbs_voxel_generator.cpp
   src/localization_controller.cpp
   src/map_storage.cpp
