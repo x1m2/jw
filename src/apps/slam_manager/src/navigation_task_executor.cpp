@@ -162,6 +162,12 @@ bool NavigationTaskExecutor::validateGoal(const StartNavigation::Goal &goal,
       message = "node_id=" + std::to_string(node.node_id) + ": " + message;
       return false;
     }
+    if (!std::isfinite(node.stop_duration_sec) ||
+        node.stop_duration_sec < 0.0) {
+      message = "node_id=" + std::to_string(node.node_id) +
+                ": stop_duration_sec must be finite and non-negative";
+      return false;
+    }
   }
   return true;
 }
@@ -242,7 +248,7 @@ void NavigationTaskExecutor::executePatrolAction(
   topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
 
-  std::vector<TaskTopologyNode> patrol_nodes;
+  std::vector<slam_manager_interfaces::msg::NavigationNode> patrol_nodes;
   std::vector<bool> requires_relocalization(goal->nodes.size(), false);
   std::string topology_message;
   std::error_code filesystem_error;
@@ -276,8 +282,7 @@ void NavigationTaskExecutor::executePatrolAction(
     std::unordered_set<uint32_t> fallback_node_ids;
     graph_node_indexes.reserve(graph.nodes.size() + goal->nodes.size());
     for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
-      graph_node_indexes.emplace(graph.nodes[index].navigation_node.node_id,
-                                 index);
+      graph_node_indexes.emplace(graph.nodes[index].node_id, index);
     }
 
     patrol_nodes.reserve(goal->nodes.size());
@@ -289,9 +294,7 @@ void NavigationTaskExecutor::executePatrolAction(
                     "Patrol node_id=%u resolved from local JSON",
                     action_node.node_id);
       } else {
-        TaskTopologyNode fallback_node;
-        fallback_node.navigation_node = action_node;
-        fallback_node.stop_duration_sec = 0.0;
+        const auto fallback_node = action_node;
         graph_node_indexes.emplace(action_node.node_id, graph.nodes.size());
         graph.nodes.push_back(fallback_node);
         patrol_nodes.push_back(fallback_node);
@@ -309,8 +312,8 @@ void NavigationTaskExecutor::executePatrolAction(
           std::max(next_edge_id, static_cast<uint64_t>(edge.id) + 1U);
     }
     for (std::size_t index = 0; index + 1U < patrol_nodes.size(); ++index) {
-      const uint32_t from_id = patrol_nodes[index].navigation_node.node_id;
-      const uint32_t to_id = patrol_nodes[index + 1U].navigation_node.node_id;
+      const uint32_t from_id = patrol_nodes[index].node_id;
+      const uint32_t to_id = patrol_nodes[index + 1U].node_id;
       const TaskTopologyEdge *direct_edge =
           findDirectEdge(graph, directed_edge_indexes, from_id, to_id);
       if (direct_edge != nullptr) {
@@ -407,7 +410,7 @@ void NavigationTaskExecutor::executePatrolAction(
   if (config_.enable_skip_first_target && patrol_nodes.size() >= 2U) {
     geometry_msgs::msg::PoseStamped current_pose;
     if (callbacks_.get_current_pose(current_pose)) {
-      const auto &first_node = patrol_nodes.front().navigation_node;
+      const auto &first_node = patrol_nodes.front();
       const double first_node_distance = std::hypot(
           current_pose.pose.position.x - first_node.x,
           current_pose.pose.position.y - first_node.y);
@@ -419,7 +422,7 @@ void NavigationTaskExecutor::executePatrolAction(
             "distance=%.3f <= %.3f m; starting from second node_id=%u",
             first_node.node_id, first_node_distance,
             config_.skip_first_target_threshold,
-            patrol_nodes[first_patrol_index].navigation_node.node_id);
+            patrol_nodes[first_patrol_index].node_id);
 
         auto feedback = std::make_shared<StartNavigation::Feedback>();
         feedback->current_node_id = first_node.node_id;
@@ -455,8 +458,7 @@ void NavigationTaskExecutor::executePatrolAction(
     for (std::size_t patrol_index = round_start_index;
          patrol_index < patrol_nodes.size();
          ++patrol_index) {
-      const auto &task_node = patrol_nodes[patrol_index];
-      const auto &node = task_node.navigation_node;
+      const auto &node = patrol_nodes[patrol_index];
       {
         std::lock_guard<std::mutex> lock(result_mutex_);
         goal_armed_ = false;
@@ -569,8 +571,8 @@ void NavigationTaskExecutor::executePatrolAction(
         }
         callbacks_.publish_mode();
 
-        if (task_node.stop_duration_sec > 0.0 &&
-            !waitForStopDuration(task_node.stop_duration_sec, [goal_handle]() {
+        if (node.stop_duration_sec > 0.0 &&
+            !waitForStopDuration(node.stop_duration_sec, [goal_handle]() {
               return goal_handle->is_canceling();
             })) {
           std::lock_guard<std::mutex> lock(result_mutex_);
@@ -614,15 +616,15 @@ void NavigationTaskExecutor::executePatrolAction(
         break;
       }
 
-      if (task_node.stop_duration_sec > 0.0) {
+      if (node.stop_duration_sec > 0.0) {
         auto waiting_feedback = std::make_shared<StartNavigation::Feedback>();
         waiting_feedback->current_node_id = node.node_id;
         fillCurrentPoseFeedback(*waiting_feedback);
         waiting_feedback->message =
             "node reached; waiting " +
-            std::to_string(task_node.stop_duration_sec) + " seconds";
+            std::to_string(node.stop_duration_sec) + " seconds";
         goal_handle->publish_feedback(waiting_feedback);
-        if (!waitForStopDuration(task_node.stop_duration_sec, [goal_handle]() {
+        if (!waitForStopDuration(node.stop_duration_sec, [goal_handle]() {
               return goal_handle->is_canceling();
             })) {
           std::lock_guard<std::mutex> lock(result_mutex_);

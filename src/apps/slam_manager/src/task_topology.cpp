@@ -114,21 +114,20 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
             "JSON node id exceeds planner range: " + std::to_string(raw_id);
         return false;
       }
-      TaskTopologyNode node;
-      node.navigation_node.node_id = static_cast<uint32_t>(raw_id);
-      node.navigation_node.x = json_node.at("x").get<double>();
-      node.navigation_node.y = json_node.at("y").get<double>();
-      node.navigation_node.z = json_node.at("z").get<double>();
-      node.navigation_node.theta = json_node.at("theta").get<double>();
-      node.stop_duration_sec = json_node.value("stop_duration_sec", 0.0);
-      if (!node_ids.insert(node.navigation_node.node_id).second) {
+      slam_manager_interfaces::msg::NavigationNode node;
+      node.node_id = static_cast<uint32_t>(raw_id);
+      node.x = json_node.at("x").get<double>();
+      node.y = json_node.at("y").get<double>();
+      node.z = json_node.at("z").get<double>();
+      node.theta = json_node.at("theta").get<double>();
+      node.stop_duration_sec =
+          json_node.value("stop_duration_sec", 0.0);
+      if (!node_ids.insert(node.node_id).second) {
         message = "duplicate JSON node id=" + std::to_string(raw_id);
         return false;
       }
-      if (!std::isfinite(node.navigation_node.x) ||
-          !std::isfinite(node.navigation_node.y) ||
-          !std::isfinite(node.navigation_node.z) ||
-          !std::isfinite(node.navigation_node.theta) ||
+      if (!std::isfinite(node.x) || !std::isfinite(node.y) ||
+          !std::isfinite(node.z) || !std::isfinite(node.theta) ||
           !finiteNonNegative(node.stop_duration_sec)) {
         message = "JSON node contains an invalid pose or stop duration: id=" +
                   std::to_string(raw_id);
@@ -277,13 +276,8 @@ bool TopologyFileWriter::write(
     return false;
   }
   TaskTopologyGraph graph;
-  graph.nodes.reserve(nodes.size());
+  graph.nodes = nodes;
   graph.edges.reserve(nodes.size() > 1U ? (nodes.size() - 1U) * 2U : 0U);
-  for (const auto &navigation_node : nodes) {
-    TaskTopologyNode node;
-    node.navigation_node = navigation_node;
-    graph.nodes.push_back(node);
-  }
   uint32_t edge_id = 0U;
   for (std::size_t index = 0; index + 1U < nodes.size(); ++index) {
     TaskTopologyEdge forward;
@@ -327,11 +321,9 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
       nodes_by_id;
   nodes_by_id.reserve(graph.nodes.size());
   for (const auto &node : graph.nodes) {
-    if (!nodes_by_id
-             .emplace(node.navigation_node.node_id, &node.navigation_node)
-             .second) {
+    if (!nodes_by_id.emplace(node.node_id, &node).second) {
       message = "duplicate runtime node id=" +
-                std::to_string(node.navigation_node.node_id);
+                std::to_string(node.node_id);
       return false;
     }
   }
@@ -343,15 +335,14 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
   document["frame_id"] = "map";
   document["nodes"] = nlohmann::json::array();
   document["edges"] = nlohmann::json::array();
-  for (const auto &node : graph.nodes) {
-    const auto &navigation_node = node.navigation_node;
+  for (const auto &navigation_node : graph.nodes) {
     document["nodes"].push_back(
         {{"id", navigation_node.node_id},
          {"x", navigation_node.x},
          {"y", navigation_node.y},
          {"z", navigation_node.z},
          {"theta", navigation_node.theta},
-         {"stop_duration_sec", node.stop_duration_sec}});
+         {"stop_duration_sec", navigation_node.stop_duration_sec}});
   }
   for (const auto &edge : graph.edges) {
     const auto from_it = nodes_by_id.find(edge.from_id);

@@ -14,12 +14,15 @@ class MapStorage {
 
   const std::filesystem::path &rootDirectory() const;
   std::size_t maxMaps() const;
-  // map_id本身就是数据目录名（例如map_0），目录由上层GUI/launch创建。
+  // map_id本身就是数据目录名，不额外添加map_前缀。
   std::filesystem::path dataPath(const std::string &map_id) const;
   std::filesystem::path mapPath(const std::string &map_id) const;
   std::filesystem::path taskPath(const std::string &map_id) const;
 
   bool countSavedMaps(std::size_t &count, std::string &message) const;
+  // 开始建图前准备空目录：同名目录存在时整体覆盖，否则新建。
+  bool prepareForMapping(const std::string &map_id,
+                         std::string &message) const;
   bool deleteMap(const std::string &map_id, std::string &message) const;
   bool finalize(const std::filesystem::path &map_path,
                 const std::string &map_id, std::string &message) const;

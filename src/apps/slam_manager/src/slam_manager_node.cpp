@@ -23,9 +23,8 @@ bool finitePoseFields(double x, double y, double z, double theta) {
 
 bool validMapId(const std::string &map_id, std::string &message) {
   constexpr std::size_t kMaximumIdLength = 64U;
-  if (map_id.size() <= 4U || map_id.size() > kMaximumIdLength ||
-      map_id.rfind("map_", 0U) != 0U) {
-    message = "map_id must use format map_<name> and contain at most " +
+  if (map_id.empty() || map_id.size() > kMaximumIdLength) {
+    message = "map_id must contain 1 to " +
               std::to_string(kMaximumIdLength) + " characters";
     return false;
   }
@@ -38,6 +37,11 @@ bool validMapId(const std::string &map_id, std::string &message) {
       message = "map_id may contain only letters, digits, '_' and '-'";
       return false;
     }
+  }
+  // root/log专用于运行日志，不能被同名地图覆盖或删除。
+  if (map_id == "log") {
+    message = "map_id 'log' is reserved for runtime logs";
+    return false;
   }
   return true;
 }
@@ -239,7 +243,7 @@ SlamManagerNode::~SlamManagerNode() = default;
 void SlamManagerNode::startMappingCallback(
     const StartMapping::Request::SharedPtr request,
     StartMapping::Response::SharedPtr response) {
-  // 协议2.1：APP提供完整地图目录标识（例如map_0）。
+  // 协议2.1：APP提供字符串map_id，该字符串直接作为目录名。
   const std::string &map_id = request->map_id;
   if (!validMapId(map_id, response->message)) {
     response->success = false;
@@ -291,17 +295,15 @@ void SlamManagerNode::startMappingCallback(
     return;
   }
 
-  // 同名地图复用统一删除逻辑，旧目录在新建图开始前整体移除。
-  // if (map_exists) {
-  //   std::string delete_message;
-  //   if (!map_storage_->deleteMap(map_id, delete_message)) {
-  //     response->success = false;
-  //     response->message = "failed to replace existing map: " +
-  //     delete_message; enterError(RuntimeState::MAP_ERROR, response->message);
-  //     return;
-  //   }
-  //   RCLCPP_INFO(get_logger(), "%s", delete_message.c_str());
-  // }
+  // slam_manager统一负责目录准备：同名map_id直接覆盖，新map_id直接创建。
+  std::string prepare_message;
+  if (!map_storage_->prepareForMapping(map_id, prepare_message)) {
+    response->success = false;
+    response->message = "failed to prepare map directory: " + prepare_message;
+    enterError(RuntimeState::MAP_ERROR, response->message);
+    return;
+  }
+  RCLCPP_INFO(get_logger(), "%s", prepare_message.c_str());
 
   // 开始新建图后，之前由load_map记录的地图选择失效。
   if (!selected_map_id_.empty()) {
@@ -314,7 +316,7 @@ void SlamManagerNode::startMappingCallback(
   active_map_id_ = map_id;
   active_map_path_ = map_storage_->mapPath(active_map_id_);
 
-  // map/task目录由GUI/launch预先创建；slam_manager只检查，不创建目录。
+  // map/task目录已由slam_manager创建，启动Worker前再做完整性检查。
   std::error_code directory_error;
   const auto task_path = map_storage_->taskPath(active_map_id_);
   if (!std::filesystem::is_directory(final_data_path, directory_error) ||
@@ -420,7 +422,7 @@ void SlamManagerNode::finishMappingCallback(
     return;
   }
 
-  // PGO停止时已将globalmap.pcd保存到GUI预先创建的map目录。
+  // PGO停止时已将globalmap.pcd保存到start_mapping创建的map目录。
   std::string finalize_message;
   if (!map_storage_->finalize(active_map_path_, active_map_id_,
                               finalize_message)) {

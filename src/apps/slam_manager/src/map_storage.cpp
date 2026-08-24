@@ -78,6 +78,45 @@ bool MapStorage::countSavedMaps(std::size_t &count,
   return true;
 }
 
+bool MapStorage::prepareForMapping(const std::string &map_id,
+                                   std::string &message) const {
+  const auto target = dataPath(map_id);
+  std::error_code filesystem_error;
+  const bool replacing = std::filesystem::exists(target, filesystem_error);
+  if (filesystem_error) {
+    message = "failed to inspect map directory: " +
+              filesystem_error.message();
+    return false;
+  }
+
+  if (replacing) {
+    std::filesystem::remove_all(target, filesystem_error);
+    if (filesystem_error) {
+      message = "failed to clear existing map directory: " +
+                filesystem_error.message();
+      return false;
+    }
+  }
+
+  std::filesystem::create_directories(mapPath(map_id), filesystem_error);
+  if (filesystem_error) {
+    message = "failed to create map directory: " +
+              filesystem_error.message();
+    return false;
+  }
+  std::filesystem::create_directories(taskPath(map_id), filesystem_error);
+  if (filesystem_error) {
+    message = "failed to create task directory: " +
+              filesystem_error.message();
+    return false;
+  }
+
+  message = std::string(replacing ? "map directory replaced: "
+                                  : "map directory created: ") +
+            target.string();
+  return true;
+}
+
 bool MapStorage::deleteMap(const std::string &map_id,
                            std::string &message) const {
   // 删除map_id数据目录；运行日志位于root/log下，不由MapStorage管理。
@@ -114,7 +153,7 @@ bool MapStorage::deleteMap(const std::string &map_id,
 bool MapStorage::finalize(const std::filesystem::path &map_path,
                           const std::string &map_id,
                           std::string &message) const {
-  // 目录由GUI/launch预先创建；slam_manager只检查并写入保存结果。
+  // 目录由start_mapping预先创建，此处检查并写入保存结果。
   if (map_id.empty() || map_path.empty()) {
     message = "no active map task";
     return false;

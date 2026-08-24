@@ -27,15 +27,15 @@ LaserMappingNode::LaserMappingNode(const rclcpp::NodeOptions &options)
   path.header.stamp = this->get_clock()->now();
   path.header.frame_id = "odom";
   initializeComponents();
-  initializeFiles();
+  // initializeFiles();
   initializeSubscribersAndPublishers();
   RCLCPP_INFO(this->get_logger(), "Node init finished.");
 }
 //--------------------init-------------------------//
 LaserMappingNode::~LaserMappingNode() {
-  fout_out.close();
-  fout_pre.close();
-  fclose(fp);
+  // fout_out.close();
+  // fout_pre.close();
+  // fclose(fp);
 }
 
 void LaserMappingNode::readParameters() {
@@ -169,19 +169,19 @@ void LaserMappingNode::initializeComponents() {
 }
 
 void LaserMappingNode::initializeFiles() {
-  /*** debug record ***/
-  // FILE *fp;
-  string pos_log_dir = root_dir + "/Log/pos_log.txt";
-  fp = fopen(pos_log_dir.c_str(), "w");
+  // /*** debug record ***/
+  // // FILE *fp;
+  // string pos_log_dir = root_dir + "/Log/pos_log.txt";
+  // fp = fopen(pos_log_dir.c_str(), "w");
 
-  // ofstream fout_pre, fout_out, fout_dbg;
-  fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), ios::out);
-  fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), ios::out);
-  fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"), ios::out);
-  if (fout_pre && fout_out)
-    cout << "~~~~" << ROOT_DIR << " file opened" << endl;
-  else
-    cout << "~~~~" << ROOT_DIR << " doesn't exist" << endl;
+  // // ofstream fout_pre, fout_out, fout_dbg;
+  // fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), ios::out);
+  // fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), ios::out);
+  // fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"), ios::out);
+  // if (fout_pre && fout_out)
+  //   cout << "~~~~" << ROOT_DIR << " file opened" << endl;
+  // else
+  //   cout << "~~~~" << ROOT_DIR << " doesn't exist" << endl;
 }
 
 void LaserMappingNode::initializeSubscribersAndPublishers() {
@@ -521,13 +521,14 @@ void LaserMappingNode::timer_callback() {
     feats_down_world->resize(feats_down_size);
 
     V3D ext_euler = SO3ToEuler(state_point.offset_R_L_I);
-    fout_pre << setw(20) << Measures.lidar_beg_time - first_lidar_time << " "
-             << euler_cur.transpose() << " " << state_point.pos.transpose()
-             << " " << ext_euler.transpose() << " "
-             << state_point.offset_T_L_I.transpose() << " "
-             << state_point.vel.transpose() << " " << state_point.bg.transpose()
-             << " " << state_point.ba.transpose() << " " << state_point.grav
-             << endl;
+    // fout_pre << setw(20) << Measures.lidar_beg_time - first_lidar_time << " "
+    //          << euler_cur.transpose() << " " << state_point.pos.transpose()
+    //          << " " << ext_euler.transpose() << " "
+    //          << state_point.offset_T_L_I.transpose() << " "
+    //          << state_point.vel.transpose() << " " <<
+    //          state_point.bg.transpose()
+    //          << " " << state_point.ba.transpose() << " " << state_point.grav
+    //          << endl;
 
     if (0)  // If you need to see map point, change to "if(1)"
     {
@@ -612,15 +613,17 @@ void LaserMappingNode::timer_callback() {
           t1 - t0, aver_time_match, aver_time_solve, t3 - t1, t5 - t3,
           aver_time_consu, aver_time_icp, aver_time_const_H_time);
       ext_euler = SO3ToEuler(state_point.offset_R_L_I);
-      fout_out << setw(20) << Measures.lidar_beg_time - first_lidar_time << " "
-               << euler_cur.transpose() << " " << state_point.pos.transpose()
-               << " " << ext_euler.transpose() << " "
-               << state_point.offset_T_L_I.transpose() << " "
-               << state_point.vel.transpose() << " "
-               << state_point.bg.transpose() << " "
-               << state_point.ba.transpose() << " " << state_point.grav << " "
-               << feats_undistort->points.size() << endl;
-      dump_lio_state_to_log(fp);
+      // fout_out << setw(20) << Measures.lidar_beg_time - first_lidar_time << "
+      // "
+      //          << euler_cur.transpose() << " " << state_point.pos.transpose()
+      //          << " " << ext_euler.transpose() << " "
+      //          << state_point.offset_T_L_I.transpose() << " "
+      //          << state_point.vel.transpose() << " "
+      //          << state_point.bg.transpose() << " "
+      //          << state_point.ba.transpose() << " " << state_point.grav << "
+      //          "
+      //          << feats_undistort->points.size() << endl;
+      // dump_lio_state_to_log(fp);
     }
   }
   {

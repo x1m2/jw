@@ -160,7 +160,7 @@ class LaserMappingNode : public rclcpp::Node {
          aver_time_incre = 0, aver_time_solve = 0, aver_time_const_H_time = 0;
   double epsi[23] = {0.001};
 
-  FILE *fp;
+  //   FILE *fp{nullptr};
   ofstream fout_pre, fout_out, fout_dbg;
 
   float res_last[100000] = {0.0};

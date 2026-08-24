@@ -1,6 +1,6 @@
 slam_manager:
   ros__parameters:
-    # APP传完整map_id（例如map_0）；目录为 <root>/<map_id>/{map,log,task}/。
+    # APP传字符串map_id（例如floor_1），直接对应 <root>/<map_id>/。
     map_storage:
       root_directory: "/robotfs/data/slam_data"
       max_maps: 500

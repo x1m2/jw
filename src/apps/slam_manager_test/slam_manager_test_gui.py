@@ -455,7 +455,7 @@ class RuntimeTestGui:
 
         # GUI 启动时尚未选择 map_id，因此先使用临时日志目录。
         # 一旦用户点击“开始建图”或“加载地图”选定 map_id，日志会切换到：
-        # /robotfs/data/slam_data/log/map_<id>/<时间戳>/
+        # /robotfs/data/slam_data/log/<map_id>/<时间戳>/
         self.session_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         self.bootstrap_log_directory = os.path.join(
             self.log_root, self.session_time
@@ -1096,15 +1096,13 @@ class RuntimeTestGui:
         return values
 
     def _prompt_map_id(self, action_title, require_existing=False):
-        """弹窗读取 uint32 地图编号，并统一转换为 map_<id>。"""
-        initial_value = ''
-        if self.current_map_id and self.current_map_id.startswith('map_'):
-            initial_value = self.current_map_id[4:]
+        """弹窗读取直接作为目录名的字符串 map_id。"""
+        initial_value = self.current_map_id or ''
 
         while True:
             value = simpledialog.askstring(
                 action_title,
-                '请输入 map_id（0～4294967295，不能为空）：',
+                "请输入 map_id（1～64位字母、数字、'_' 或 '-'）：",
                 initialvalue=initial_value,
                 parent=self.root,
             )
@@ -1112,31 +1110,20 @@ class RuntimeTestGui:
             if value is None:
                 return None
 
-            value = value.strip()
-            if not value:
+            try:
+                map_id = self._identifier(value, 'map_id')
+            except ValueError as error:
                 messagebox.showerror(
-                    'map_id 无效', 'map_id 不能为空。', parent=self.root
+                    'map_id 无效', str(error), parent=self.root
                 )
                 continue
-
-            if not value.isdecimal():
+            if map_id == 'log':
                 messagebox.showerror(
                     'map_id 无效',
-                    'map_id 必须是 0～4294967295 的非负整数。',
+                    "'log' 是运行日志保留目录，请使用其他 map_id。",
                     parent=self.root,
                 )
                 continue
-
-            map_number = int(value, 10)
-            if map_number > 0xFFFFFFFF:
-                messagebox.showerror(
-                    'map_id 无效',
-                    'map_id 超出 uint32 范围（最大 4294967295）。',
-                    parent=self.root,
-                )
-                continue
-
-            map_id = f'map_{map_number}'
             if require_existing:
                 map_directory = os.path.join(self.data_root, map_id)
                 if not os.path.isdir(map_directory):
@@ -1148,56 +1135,11 @@ class RuntimeTestGui:
                     self._append_log(
                         f'[FAIL] {action_title}: 地图目录不存在 {map_directory}'
                     )
-                    initial_value = value
+                    initial_value = map_id
                     continue
 
             self.current_map_id = map_id
             return map_id
-
-    def _prepare_new_map_directories(self, map_id):
-        """由GUI创建新地图的数据目录；slam_manager只检查和写入。"""
-        map_data_directory = os.path.join(self.data_root, map_id)
-        map_directory = os.path.join(map_data_directory, 'map')
-        task_directory = os.path.join(map_data_directory, 'task')
-
-        if os.path.exists(map_data_directory):
-            delete_existing = messagebox.askyesno(
-                '地图已存在',
-                f'{map_id} 已经存在：\n{map_data_directory}\n\n'
-                '是否删除原地图并重新建图？\n\n'
-                '注意：只删除地图数据目录，历史日志不会删除。',
-                parent=self.root,
-            )
-            if not delete_existing:
-                return False
-
-            self._append_log(
-                f'[WARN] 用户确认删除已有地图并重新建图: {map_data_directory}'
-            )
-            try:
-                if os.path.isdir(map_data_directory):
-                    shutil.rmtree(map_data_directory)
-                else:
-                    os.remove(map_data_directory)
-            except OSError as error:
-                raise RuntimeError(
-                    f'删除已有地图失败：\n{map_data_directory}\n{error}'
-                ) from error
-
-        try:
-            os.makedirs(map_directory, exist_ok=False)
-            os.makedirs(task_directory, exist_ok=False)
-        except Exception:
-            # 创建过程失败时只清理由本次GUI刚创建的目录。
-            try:
-                if os.path.isdir(map_data_directory):
-                    shutil.rmtree(map_data_directory)
-            except OSError:
-                pass
-            raise
-
-        self._append_log(f'[READY] 建图目录已准备: {map_data_directory}')
-        return True
 
     def start_mapping(self):
         map_id = self._prompt_map_id('开始建图')
@@ -1205,9 +1147,7 @@ class RuntimeTestGui:
             return
 
         try:
-            # 先处理已有地图。用户取消删除时，不启动平台，也不切换日志目录。
-            if not self._prepare_new_map_directories(map_id):
-                return
+            # 地图目录的新建/覆盖由start_mapping服务统一处理。
             self._configure_log_for_map(map_id)
         except (RuntimeError, OSError) as error:
             messagebox.showerror('无法开始建图', str(error), parent=self.root)

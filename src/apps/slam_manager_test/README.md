@@ -37,7 +37,7 @@ SlamManager测试launch会启动与 `run_slam.sh` 一致的 Livox MID360s 驱动
 
 1. **连接检查**：确认 Runtime Service/Action 和八个 Worker 状态全部可见。
 2. **建图**：开始建图、观察位姿/关键帧/点云计数、完成建图并检查返回值。
-3. **地图**：加载或删除指定字符串 `map_id`（例如 `map_0`）；“离线打点”使用
+3. **地图**：加载或删除指定字符串 `map_id`（例如 `floor_1`）；“离线打点”使用
    RViz 2D Goal Pose，“在线打点”复用重定位后的持续纯定位位姿。
 4. **定位**：加载地图后使用可选初始位姿启动重定位。
 5. **导航**：测试单点导航、巡检导航、暂停、恢复和取消。
@@ -54,8 +54,8 @@ SlamManager测试launch会启动与 `run_slam.sh` 一致的 Livox MID360s 驱动
 
 ## 目录职责
 
-- GUI 创建新地图目录：`<data_root>/<map_id>/map`、`<data_root>/<map_id>/task`。
+- `slam_manager` 在开始建图时创建新地图目录：`<data_root>/<map_id>/map`、`<data_root>/<map_id>/task`；同名地图直接覆盖。
 - GUI 创建会话日志目录：`<data_root>/log/<map_id>/<时间>/`。
 - `platform.log` 保存整个平台 launch 的 stdout/stderr。
 - `ROS_LOG_DIR` 指向 `<data_root>/log/<map_id>/<时间>/ros/`。
-- `slam_manager` 不创建 map/task/log 目录，只检查目录并把地图结果保存到已有的 `map/`。
+- `slam_manager` 创建 map/task 目录并把地图结果保存到 `map/`；GUI 仅创建会话日志目录。

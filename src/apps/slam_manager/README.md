@@ -7,6 +7,7 @@
 
 ```text
 APP /robot/start_mapping
+  -> 以map_id字符串直接创建目录（同名地图整体覆盖）
   -> 启动PGO和FastLIO
   -> 开始建图
 
@@ -72,6 +73,8 @@ A -> B为map_connection时：
 - 根据`StartNavigation` Goal中的`task_id`读取`<task_id>.json`，并按
   `node_id`查询节点位姿和停留时间。
 - JSON中没有该节点时，使用Action携带的`x/y/z/theta`和默认策略。
+- `NavigationNode.stop_duration_sec`表示到点后的停留秒数；JSON命中节点
+  时使用JSON值，JSON中没有该节点时使用Action消息中的值。
 - `<task_id>.json`不存在时拒绝启动导航。
 - 相邻的两个JSON节点必须存在唯一的直接有向边，不使用多边间接路径。
 - 校验和合并完成后，原子写入`task/topology_map.json`。
@@ -101,6 +104,11 @@ A -> B为map_connection时：
 - 正常完成返回`SUCCEEDED`，规划失败或超时返回`ABORTED`。
 
 ## 地图目录
+
+`map_id`长度为1～64，可使用字母、数字、`_`和`-`，不再强制
+`map_`前缀。`start_mapping`会创建`map`和`task`子目录；同名目录
+存在时先删除旧地图再重建。`load_map`和`delete_map`使用相同的
+`map_id`规则。`log`为运行日志保留目录，不能作为`map_id`。
 
 ```text
 /robotfs/data/slam_data/<map_id>/

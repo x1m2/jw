@@ -21,11 +21,6 @@ struct TaskEdgePolicy {
   double obstacle_avoidance_distance_m{0.5};
 };
 
-struct TaskTopologyNode {
-  slam_manager_interfaces::msg::NavigationNode navigation_node;
-  double stop_duration_sec{0.0};
-};
-
 struct TaskTopologyEdge {
   uint32_t id{0U};
   uint32_t from_id{0U};
@@ -37,7 +32,7 @@ struct TaskTopologyEdge {
 };
 
 struct TaskTopologyGraph {
-  std::vector<TaskTopologyNode> nodes;
+  std::vector<slam_manager_interfaces::msg::NavigationNode> nodes;
   std::vector<TaskTopologyEdge> edges;
 };
 
