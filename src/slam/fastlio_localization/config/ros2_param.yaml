@@ -2,6 +2,7 @@ fastlio_localization:
     ros__parameters:
         lidar_topic:  "/livox/lidar"
         imu_topic:  "/livox/imu"
+        use_gnss: false
         map_frame:  "map"
         lidar_frame:  "lidar"
         baselink_frame:  "base_link"
@@ -50,10 +51,7 @@ fastlio_localization:
         imu_tf_broadcast: false
 
         map_path: "/robotfs/data/slam_data/map/"
-        # map_path: "/home/will/tmp/out_bag/"
-        # map_path: "/home/will/tmp/test/"
-        # map_path: "/home/kshg/code/slam_ws/src/slam/fastlio_localization/PCD/"
-        # map_path: "/home/chery/tmp/"
+
         relocate_use_last_pose: false
         # last_pose_record_path: "/home/will/last_pose_record.txt"
         location_log_enable: false
@@ -107,9 +105,9 @@ fastlio_localization:
         ## Final align (evaluate the error)
         bbs3d_use_gicp: false
 
-        bnb3d_linear_xy_window_size: 5.   # meter
+        bnb3d_linear_xy_window_size: 4.   # meter
         bnb3d_linear_z_window_size: 0.5  # meter
-        bnb3d_angular_search_window: 180.  # degree 0~180
+        bnb3d_angular_search_window: 100.  # degree 0~180
         bnb3d_pc_resolutions: [0.3, 0.5, 0.8]
         bnb3d_depth: 3
         bnb3d_min_score: 0.3
@@ -119,7 +117,7 @@ fastlio_localization:
         bnb3d_min_z_resolution: 0.1
         bnb3d_min_angular_resolution: 5.   # degree
 
-        bnb3d_filter_size_scan: 2.0
+        bnb3d_filter_size_scan: 0.5
         bnb3d_debug_mode: false
 
         ndt_step_size: 0.1
@@ -131,4 +129,4 @@ fastlio_localization:
         gicp_search_radius: 0.5
         gicp_teps: 1.0e-4
         gicp_feps: 0.001
-        gicp_fitness_score: 10.3
+        gicp_fitness_score: 0.3

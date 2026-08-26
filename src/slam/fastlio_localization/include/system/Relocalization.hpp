@@ -27,7 +27,7 @@ public:
     bool load_keyframe_descriptor(const std::string &path);
     bool run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time);
 
-    void set_init_pose(const Pose &_manual_pose);
+    void set_init_pose(const Pose &_imu_pose);
     void set_bnb3d_param(const BnbOptions &match_option, const Pose &lidar_pose);
     void set_ndt_param(const double &_step_size, const double &_resolution);
     void set_gicp_param(bool _use_gicp, const double &filter_range, const double &gicp_ds, const double &search_radi, const double &tep, const double &fep, const double &fit_score);
@@ -35,6 +35,7 @@ public:
     void get_pose_score(const Eigen::Matrix4d &imu_pose, const PointCloudType::Ptr &scan, double &bnb_score, double &ndt_score);
 
     std::string algorithm_type = "UNKNOW";
+    bool use_gnss = false;
     BnbOptions bnb_option;
     Pose manual_pose, lidar_extrinsic, rough_pose;
     std::shared_ptr<BranchAndBoundMatcher3D> bnb3d;
@@ -274,7 +275,9 @@ bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &resul
     bool success_flag = true;
     double score = 0;
 
-    if (run_gnss_relocalization(scan, result, lidar_beg_time, lidar_ext, score) && fine_tune_pose(scan, result, lidar_ext, 0))
+    if (use_gnss &&
+        run_gnss_relocalization(scan, result, lidar_beg_time, lidar_ext, score) &&
+        fine_tune_pose(scan, result, lidar_ext, 0))
     {
         LOG_WARN("relocalization successfully!!!!!!");
         return true;
@@ -445,12 +448,11 @@ bool Relocalization::fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &r
     return true;
 }
 
-void Relocalization::set_init_pose(const Pose &_manual_pose)
+void Relocalization::set_init_pose(const Pose &_imu_pose)
 {
-    manual_pose = _manual_pose; // imu_pose
-    manual_pose.roll -= lidar_extrinsic.roll;
-    manual_pose.pitch -= lidar_extrinsic.pitch;
-    manual_pose.yaw -= lidar_extrinsic.yaw;
+    // BnB searches T_map_imu. The LiDAR extrinsic is applied later while
+    // scoring: T_map_lidar = T_map_imu * T_imu_lidar.
+    manual_pose = _imu_pose;
 
     // 当前不使用trajectory.pcd，保留原KD-Tree高度修正逻辑但停用。
 #if 0

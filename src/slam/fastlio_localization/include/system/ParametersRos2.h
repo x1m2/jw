@@ -1,7 +1,7 @@
 #include "system/System.hpp"
 #include <rclcpp/rclcpp.hpp>
 
-inline void load_ros_parameters(rclcpp::Node::SharedPtr &node, bool &path_en, bool &scan_pub_en, bool &dense_pub_en, bool &lidar_tf_broadcast, bool &imu_tf_broadcast,
+inline void load_ros_parameters(rclcpp::Node::SharedPtr &node, bool &path_en, bool &scan_pub_en, bool &dense_pub_en, bool &lidar_tf_broadcast, bool &imu_tf_broadcast, bool &use_gnss,
                                 std::string &lidar_topic, std::string &imu_topic, std::string &gnss_topic, std::string &map_frame, std::string &lidar_frame, std::string &baselink_frame)
 {
     node->declare_parameter("path_en", false);
@@ -9,6 +9,7 @@ inline void load_ros_parameters(rclcpp::Node::SharedPtr &node, bool &path_en, bo
     node->declare_parameter("dense_publish_en", false);
     node->declare_parameter("lidar_tf_broadcast", false);
     node->declare_parameter("imu_tf_broadcast", false);
+    node->declare_parameter("use_gnss", false);
 
     node->declare_parameter("lidar_topic", "/livox/lidar");
     node->declare_parameter("imu_topic", "/livox/imu");
@@ -22,6 +23,7 @@ inline void load_ros_parameters(rclcpp::Node::SharedPtr &node, bool &path_en, bo
     node->get_parameter("dense_publish_en", dense_pub_en);
     node->get_parameter("lidar_tf_broadcast", lidar_tf_broadcast);
     node->get_parameter("imu_tf_broadcast", imu_tf_broadcast);
+    node->get_parameter("use_gnss", use_gnss);
 
     node->get_parameter("lidar_topic", lidar_topic);
     node->get_parameter("imu_topic", imu_topic);
@@ -181,7 +183,7 @@ inline void load_parameters(rclcpp::Node::SharedPtr &node, System &slam, int &li
 
         node->get_parameter("gicp_use_gicp", use_gicp);
         node->get_parameter("gicp_filter_range", filter_range);
-        node->get_parameter("gicp_gicp_downsample", gicp_downsample);
+        node->get_parameter("gicp_downsample", gicp_downsample);
         node->get_parameter("gicp_search_radius", search_radius);
         node->get_parameter("gicp_teps", teps);
         node->get_parameter("gicp_feps", feps);

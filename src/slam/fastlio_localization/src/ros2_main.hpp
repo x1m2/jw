@@ -95,6 +95,7 @@ class FastlioLocalizationNode : public rclcpp::Node {
   bool dense_pub_en{false};
   bool lidar_tf_broadcast{false};
   bool imu_tf_broadcast{false};
+  bool use_gnss{false};
   std::atomic_bool stopping{false};
 
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr

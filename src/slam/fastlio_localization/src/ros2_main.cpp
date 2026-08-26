@@ -322,8 +322,10 @@ void FastlioLocalizationNode::sensor_data_process() {
       V3D baselink_pos;
       if (slam.run()) {
         const auto &state = slam.frontend->get_state();
-        LOG_INFO("location valid. feats_down = %d, cost time = %.1fms.",
+        LOG_INFO("location valid. feats_down = %d, match_score = %.3f, "
+                 "cost time = %.1fms.",
                  slam.frontend->loger.feats_down_size,
+                 slam.frontend->get_match_score(),
                  slam.frontend->loger.total_time);
         slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
@@ -386,8 +388,10 @@ void FastlioLocalizationNode::sensor_data_process() {
   V3D baselink_pos;
   if (slam.run()) {
     const auto &state = slam.frontend->get_state();
-    LOG_INFO("location valid. feats_down = %d, cost time = %.1fms.",
+    LOG_INFO("location valid. feats_down = %d, match_score = %.3f, "
+             "cost time = %.1fms.",
              slam.frontend->loger.feats_down_size,
+             slam.frontend->get_match_score(),
              slam.frontend->loger.total_time);
     slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
@@ -581,17 +585,21 @@ void FastlioLocalizationNode::initialPoseCallback(
     const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
   const geometry_msgs::msg::Pose &pose = msg->pose.pose;
   const auto &ori = msg->pose.pose.orientation;
-  Eigen::Quaterniond quat(ori.w, ori.x, ori.y, ori.z);
-  auto rpy = EigenMath::Quaternion2RPY(quat);
-  // prior pose in map(imu pose)
+  const Eigen::Quaterniond quat(ori.w, ori.x, ori.y, ori.z);
+
+  // T_map_imu = T_map_base * T_base_lidar * inverse(T_imu_lidar).
+  Eigen::Matrix4d imu_pose_matrix = Eigen::Matrix4d::Identity();
+  imu_pose_matrix.topLeftCorner<3, 3>() = quat.normalized().toRotationMatrix();
+  imu_pose_matrix.topRightCorner<3, 1>() =
+      Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
+  imu_pose_matrix *= T_base_lidar;
+  imu_pose_matrix *=
+      slam.relocalization->lidar_extrinsic.toMatrix4d().inverse();
+
   Pose init_pose;
-  init_pose.x = pose.position.x;
-  init_pose.y = pose.position.y;
-  init_pose.z = pose.position.z;
-  // lidar_to_base_R comes from robot_param.yaml and is already in radians.
-  init_pose.roll = lidar_to_base_R[0];
-  init_pose.pitch = lidar_to_base_R[1];
-  init_pose.yaw = rpy.z();
+  EigenMath::DecomposeAffineMatrix(imu_pose_matrix, init_pose.x, init_pose.y,
+                                   init_pose.z, init_pose.roll, init_pose.pitch,
+                                   init_pose.yaw);
   slam.relocalization->set_init_pose(init_pose);
 }
 
@@ -653,9 +661,10 @@ void FastlioLocalizationNode::initialize() {
       LOG_ERROR("open file %s failed!", location_log_save_path.c_str());
   }
   load_ros_parameters(node, path_en, scan_pub_en, dense_pub_en,
-                      lidar_tf_broadcast, imu_tf_broadcast, lidar_topic,
-                      imu_topic, gnss_topic, map_frame, lidar_frame,
-                      baselink_frame);
+                      lidar_tf_broadcast, imu_tf_broadcast, use_gnss,
+                      lidar_topic, imu_topic, gnss_topic, map_frame,
+                      lidar_frame, baselink_frame);
+  slam.relocalization->use_gnss = use_gnss;
   load_parameters(node, slam, lidar_type);
 
   /*** ROS subscribe initialization ***/
@@ -675,10 +684,13 @@ void FastlioLocalizationNode::initialize() {
       imu_topic, 200000, [this](sensor_msgs::msg::Imu::SharedPtr message) {
         imu_cbk(std::move(message));
       });
-  sub_gnss = node->create_subscription<sensor_msgs::msg::NavSatFix>(
-      gnss_topic, 1000, [this](sensor_msgs::msg::NavSatFix::SharedPtr message) {
-        gnss_cbk(std::move(message));
-      });
+  if (use_gnss) {
+    sub_gnss = node->create_subscription<sensor_msgs::msg::NavSatFix>(
+        gnss_topic, 1000,
+        [this](sensor_msgs::msg::NavSatFix::SharedPtr message) {
+          gnss_cbk(std::move(message));
+        });
+  }
   pubLaserCloudFull = node->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 1000);
   pubLidarOdom = node->create_publisher<nav_msgs::msg::Odometry>(
