@@ -18,16 +18,13 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 add_library(${PROJECT_NAME}_core STATIC
-  src/bbs_voxel_generator.cpp
-  src/localization_controller.cpp
-  src/map_storage.cpp
-  src/mapping_controller.cpp
-  src/navigation_controller.cpp
-  src/navigation_task_executor.cpp
+  src/localization.cpp
+  src/map_check.cpp
+  src/mapping.cpp
+  src/navigation.cpp
+  src/navigation_task.cpp
   src/slam_manager_node.cpp
-  src/slam_state_machine.cpp
-  src/task_topology.cpp
-  src/worker_client.cpp
+  src/worker_runtime.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_core PUBLIC

@@ -6,7 +6,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "slam_manager/worker_client.hpp"
+#include "slam_manager/worker_runtime.hpp"
 
 namespace slam_manager {
 

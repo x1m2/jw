@@ -104,7 +104,7 @@ class ManagedWorker : public rclcpp::Node {
       response->success =
           startAlgorithm(request->session_id, context, message);
     } else if (request->command == SetWorkerState::Request::STOP) {
-      response->success = stopAlgorithm(&message);
+      response->success = stopAlgorithm(request->session_id, &message);
     } else {
       response->success = false;
       message = "unknown command";
@@ -157,11 +157,29 @@ class ManagedWorker : public rclcpp::Node {
     }
   }
 
-  bool stopAlgorithm(std::string *message = nullptr) {
+  bool stopAlgorithm(uint64_t requested_session_id = 0U,
+                     std::string *message = nullptr) {
     std::unique_lock lock(mutex_);
     if (!algorithm_instance_.node) {
       state_.store(WorkerStatus::STOPPED);
       if (message) *message = "algorithm is already stopped";
+      return true;
+    }
+
+    const uint64_t running_session_id = session_id_.load();
+    if (requested_session_id != 0U &&
+        requested_session_id != running_session_id) {
+      if (message) {
+        *message = "stale stop ignored: requested_session=" +
+                   std::to_string(requested_session_id) +
+                   ", running_session=" +
+                   std::to_string(running_session_id);
+      }
+      RCLCPP_WARN(get_logger(),
+                  "Ignoring stale STOP: requested_session=%lu, "
+                  "running_session=%lu",
+                  static_cast<unsigned long>(requested_session_id),
+                  static_cast<unsigned long>(running_session_id));
       return true;
     }
 

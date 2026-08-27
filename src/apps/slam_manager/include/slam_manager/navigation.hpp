@@ -10,7 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
-#include "slam_manager/worker_client.hpp"
+#include "slam_manager/worker_runtime.hpp"
 
 namespace slam_manager {
 
@@ -23,7 +23,9 @@ class NavigationController {
                        rclcpp::CallbackGroup::SharedPtr callback_group);
 
   void start(uint64_t session_id, const std::string &topology_file,
-             const std::string &map_directory, Completion completion);
+             const std::string &map_directory,
+             std::shared_ptr<WorkerOperationToken> operation_token,
+             Completion completion);
   void stop(uint64_t session_id, Completion completion);
   // 暂停只控制底盘速度输出，不停止或析构导航算法。
   bool setPaused(bool paused, double timeout_sec, std::string &message);
@@ -35,12 +37,8 @@ class NavigationController {
   void startNext(uint64_t session_id, std::size_t index,
                  const std::string &topology_file,
                  const std::string &map_directory,
-                 std::shared_ptr<WorkerList> started,
+                 std::shared_ptr<WorkerOperationToken> operation_token,
                  Completion completion);
-  // 启动中途失败时，逆序停止本次已经启动的 Worker。
-  void rollbackStart(uint64_t session_id,
-                     std::shared_ptr<WorkerList> started,
-                     std::string failure, Completion completion);
   // 按 stop_order_ 逐个停止，并汇总所有停止错误。
   void stopNext(uint64_t session_id, std::size_t index,
                 std::shared_ptr<std::vector<std::string>> errors,

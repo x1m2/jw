@@ -1,4 +1,4 @@
-#include "slam_manager/localization_controller.hpp"
+#include "slam_manager/localization.hpp"
 
 #include <utility>
 

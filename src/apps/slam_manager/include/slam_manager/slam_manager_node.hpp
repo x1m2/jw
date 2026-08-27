@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -17,13 +18,11 @@
 #include <std_srvs/srv/trigger.hpp>
 #include <string>
 
-#include "slam_manager/bbs_voxel_generator.hpp"
-#include "slam_manager/localization_controller.hpp"
-#include "slam_manager/map_storage.hpp"
-#include "slam_manager/mapping_controller.hpp"
-#include "slam_manager/navigation_task_executor.hpp"
-#include "slam_manager/slam_state_machine.hpp"
-#include "slam_manager/task_topology.hpp"
+#include "slam_manager/localization.hpp"
+#include "slam_manager/map_check.hpp"
+#include "slam_manager/mapping.hpp"
+#include "slam_manager/navigation_task.hpp"
+#include "slam_manager/slam_mode.hpp"
 #include "slam_manager_interfaces/action/navigate_to_pose.hpp"
 #include "slam_manager_interfaces/action/start_navigation.hpp"
 #include "slam_manager_interfaces/msg/localization_pose.hpp"
@@ -61,6 +60,36 @@ class SlamManagerNode : public rclcpp::Node {
   using NavigateToPoseGoalHandle =
       rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
+  enum class RelocalizationStatus {
+    kSucceeded,
+    kFailed,
+    kTimedOut,
+    kCancelled,
+    kSuperseded,
+  };
+
+  struct RelocalizationOptions {
+    std::string source;
+    std::string map_id;
+    std::filesystem::path map_path;
+    bool use_initial_pose{false};
+    geometry_msgs::msg::Pose initial_pose;
+    uint64_t generation{0U};
+    std::shared_ptr<WorkerOperationToken> operation_token;
+    bool stop_existing_worker{false};
+    std::function<bool()> is_canceling;
+  };
+
+  struct RelocalizationResult {
+    RelocalizationStatus status{RelocalizationStatus::kFailed};
+    uint64_t session_id{0U};
+    std::string message;
+
+    bool success() const {
+      return status == RelocalizationStatus::kSucceeded;
+    }
+  };
+
   // 协议2.1～2.5：地图生命周期和重定位Service入口。
   void startMappingCallback(const StartMapping::Request::SharedPtr request,
                             StartMapping::Response::SharedPtr response);
@@ -73,6 +102,9 @@ class SlamManagerNode : public rclcpp::Node {
   void startLocalizationCallback(
       const StartLocalization::Request::SharedPtr request,
       StartLocalization::Response::SharedPtr response);
+  RelocalizationResult runRelocalizationAttempt(
+      const RelocalizationOptions &options,
+      std::unique_lock<std::mutex> lifecycle_lock);
   bool relocalizeForMapConnection(
       const slam_manager_interfaces::msg::NavigationNode &node,
       const std::function<bool()> &is_canceling, std::string &message);
@@ -118,9 +150,28 @@ class SlamManagerNode : public rclcpp::Node {
   void publishRuntimeState(uint8_t state, int32_t error_code = 0,
                            const std::string &error_message = "");
   void enterError(int32_t error_code, const std::string &error_message);
+  bool stopAllAlgorithms(std::string &message);
+  bool clearRuntimeAfterTeardown(bool discard_mapping,
+                                 std::string &message);
+  uint64_t beginLifecycleCommand(const char *command_name);
+  bool isLatestCommand(uint64_t generation) const;
+  std::shared_ptr<WorkerOperationToken> installLifecycleToken(
+      uint64_t generation);
+  bool isLifecycleCommandActive(
+      uint64_t generation,
+      const std::shared_ptr<WorkerOperationToken> &token) const;
+  bool prepareForStartCommand(
+      uint64_t generation,
+      const std::shared_ptr<WorkerOperationToken> &token,
+      bool discard_mapping, std::string &message);
 
   SlamStateMachine state_machine_;
   uint64_t session_id_{0U};
+  // 只允许一个生命周期命令执行“析构旧算法 -> 启动新算法”。
+  std::mutex lifecycle_mutex_;
+  std::atomic<uint64_t> command_generation_{0U};
+  std::mutex lifecycle_token_mutex_;
+  std::shared_ptr<WorkerOperationToken> active_lifecycle_token_;
   double start_mapping_timeout_sec_{30.0};
   double finish_mapping_timeout_sec_{300.0};
   double relocalization_timeout_sec_{180.0};
@@ -129,14 +180,15 @@ class SlamManagerNode : public rclcpp::Node {
   std::filesystem::path active_map_path_;
   std::string selected_map_id_;
 
-  std::mutex localization_command_mutex_;
   std::mutex localization_result_mutex_;
   std::condition_variable localization_result_cv_;
   uint64_t localization_attempt_session_id_{0U};
   bool localization_attempt_active_{false};
+  bool localization_result_armed_{false};
   bool localization_result_ready_{false};
   bool localization_result_success_{false};
   std::string localization_result_message_;
+  std::atomic_bool relocalization_succeeded_{false};
 
   std::mutex current_pose_mutex_;
   geometry_msgs::msg::PoseStamped current_pose_;
@@ -147,7 +199,7 @@ class SlamManagerNode : public rclcpp::Node {
   std::string error_message_;
 
   rclcpp::CallbackGroup::SharedPtr worker_callback_group_;
-  rclcpp::CallbackGroup::SharedPtr localization_control_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr lifecycle_control_callback_group_;
   rclcpp::CallbackGroup::SharedPtr localization_result_callback_group_;
   rclcpp::CallbackGroup::SharedPtr navigation_result_callback_group_;
   std::unique_ptr<MappingController> mapping_controller_;

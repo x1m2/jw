@@ -1,4 +1,4 @@
-#include "slam_manager/navigation_controller.hpp"
+#include "slam_manager/navigation.hpp"
 
 #include <chrono>
 #include <future>
@@ -34,17 +34,24 @@ NavigationController::NavigationController(
 void NavigationController::start(uint64_t session_id,
                                  const std::string &topology_file,
                                  const std::string &map_directory,
+                                 std::shared_ptr<WorkerOperationToken>
+                                     operation_token,
                                  Completion completion) {
   // 从启动顺序的第一个 Worker 开始异步串行启动。
-  startNext(session_id, 0U, topology_file, map_directory,
-            std::make_shared<WorkerList>(), std::move(completion));
+  startNext(session_id, 0U, topology_file, map_directory, operation_token,
+            std::move(completion));
 }
 
 void NavigationController::startNext(uint64_t session_id, std::size_t index,
                                      const std::string &topology_file,
                                      const std::string &map_directory,
-                                     std::shared_ptr<WorkerList> started,
+                                     std::shared_ptr<WorkerOperationToken>
+                                         operation_token,
                                      Completion completion) {
+  if (!operation_token->active()) {
+    completion(false, "navigation start cancelled");
+    return;
+  }
   if (index == start_order_.size()) {
     completion(true, "navigation workers started");
     return;
@@ -52,20 +59,20 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
 
   WorkerClient *worker = start_order_[index];
   auto worker_completion =
-      [this, session_id, index, worker, started,
+      [this, session_id, index, operation_token,
        topology_file, map_directory,
        completion = std::move(completion)](
           bool success, const std::string &message) mutable {
-        if (!success) {
-          // 保留已启动列表，失败后按相反顺序回滚。
-          rollbackStart(session_id, started, "navigation start failed: " +
-                                                   message,
-                        std::move(completion));
+        if (!operation_token->active()) {
+          completion(false, "navigation start cancelled after Worker response");
           return;
         }
-        started->push_back(worker);
+        if (!success) {
+          completion(false, "navigation start failed: " + message);
+          return;
+        }
         startNext(session_id, index + 1U, topology_file, map_directory,
-                  started, std::move(completion));
+                  operation_token, std::move(completion));
       };
 
   // 全局规划器按当前map_id动态加载task拓扑和map可行域点云。
@@ -75,27 +82,6 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
   } else {
     worker->start(session_id, std::move(worker_completion));
   }
-}
-
-void NavigationController::rollbackStart(uint64_t session_id,
-                                         std::shared_ptr<WorkerList> started,
-                                         std::string failure,
-                                         Completion completion) {
-  if (started->empty()) {
-    completion(false, failure);
-    return;
-  }
-
-  WorkerClient *worker = started->back();
-  started->pop_back();
-  worker->stop(
-      session_id,
-      [this, session_id, started, failure = std::move(failure),
-       completion = std::move(completion)](
-          bool, const std::string &) mutable {
-        rollbackStart(session_id, started, std::move(failure),
-                      std::move(completion));
-      });
 }
 
 void NavigationController::stop(uint64_t session_id, Completion completion) {

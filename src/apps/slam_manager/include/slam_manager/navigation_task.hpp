@@ -1,7 +1,9 @@
 #pragma once
 
-#include <condition_variable>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
@@ -12,16 +14,66 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
-#include "slam_manager/navigation_controller.hpp"
-#include "slam_manager/slam_state_machine.hpp"
-#include "slam_manager/task_topology.hpp"
+#include "slam_manager/navigation.hpp"
+#include "slam_manager/slam_mode.hpp"
 #include "slam_manager_interfaces/action/navigate_to_pose.hpp"
 #include "slam_manager_interfaces/action/start_navigation.hpp"
 #include "slam_manager_interfaces/msg/navigation_node.hpp"
 
 namespace slam_manager {
+
+struct TaskEdgePolicy {
+  double linear_velocity{0.5};
+  double angular_velocity{0.5};
+  int8_t motion_direction{1};
+  bool obstacle_stop_enabled{true};
+  bool obstacle_avoidance_enabled{false};
+  double obstacle_avoidance_distance_m{0.5};
+};
+
+struct TaskTopologyEdge {
+  uint32_t id{0U};
+  uint32_t from_id{0U};
+  uint32_t to_id{0U};
+  std::string edge_type{"straight"};
+  TaskEdgePolicy policy;
+  bool has_bezier_control_points{false};
+  std::array<std::array<double, 3>, 2> bezier_control_points{};
+};
+
+struct TaskTopologyGraph {
+  std::vector<slam_manager_interfaces::msg::NavigationNode> nodes;
+  std::vector<TaskTopologyEdge> edges;
+};
+
+using DirectedEdgeIndex = std::unordered_map<uint64_t, std::size_t>;
+
+uint64_t makeDirectedEdgeKey(uint32_t from_id, uint32_t to_id);
+bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
+                   DirectedEdgeIndex &directed_edge_indexes,
+                   std::string &message);
+const TaskTopologyEdge *findDirectEdge(
+    const TaskTopologyGraph &graph,
+    const DirectedEdgeIndex &directed_edge_indexes, uint32_t from_id,
+    uint32_t to_id);
+
+// 将合并后的任务拓扑原子保存为全局规划器使用的runtime JSON。
+class TopologyFileWriter {
+ public:
+  TopologyFileWriter() = default;
+
+  void setOutputFile(std::filesystem::path output_file);
+  const std::filesystem::path &outputFile() const;
+  bool write(const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
+             std::string &message) const;
+  bool write(const TaskTopologyGraph &graph, std::string &message) const;
+
+ private:
+  std::filesystem::path output_file_;
+};
 
 // 执行APP导航任务：拓扑生成、逐点下发、到达等待、取消、超时和反馈。
 class NavigationTaskExecutor {
@@ -45,6 +97,7 @@ class NavigationTaskExecutor {
     std::function<void()> publish_mode;
     std::function<void(uint8_t)> publish_runtime_state;
     std::function<void(int32_t, const std::string &)> enter_error;
+    std::function<bool()> relocalization_succeeded;
     std::function<bool(geometry_msgs::msg::PoseStamped &)> get_current_pose;
     std::function<bool(const slam_manager_interfaces::msg::NavigationNode &,
                        const std::function<bool()> &, std::string &)>
@@ -74,6 +127,7 @@ class NavigationTaskExecutor {
       const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
       const geometry_msgs::msg::PoseStamped &current_pose, uint64_t session_id);
   void cancel();
+  bool stopAndWait(uint64_t session_id, std::string &message);
 
   void onNavigationState(bool reached);
   bool setPaused(bool paused, std::string &message);
@@ -89,6 +143,7 @@ class NavigationTaskExecutor {
                     std::string &message) const;
   bool validatePoseFields(double x, double y, double z, double theta,
                           std::string &message) const;
+  bool beginNavigationIfLocalized();
   static slam_manager_interfaces::msg::NavigationNode nodeFromPose(
       uint32_t node_id, const geometry_msgs::msg::Pose &pose);
   bool startWorkers(uint64_t session_id, std::string &message);
@@ -117,6 +172,7 @@ class NavigationTaskExecutor {
   bool goal_reached_{false};
   bool cancel_requested_{false};
   bool shutting_down_{false};
+  std::mutex execution_mutex_;
   std::thread execution_thread_;
   std::filesystem::path task_directory_;
   std::filesystem::path topology_file_;

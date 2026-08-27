@@ -6,7 +6,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "slam_manager/worker_client.hpp"
+#include "slam_manager/worker_runtime.hpp"
 
 namespace slam_manager {
 
@@ -19,7 +19,9 @@ class MappingController {
                     rclcpp::CallbackGroup::SharedPtr callback_group);
 
   void start(uint64_t session_id, const std::string &map_id,
-             const std::string &map_staging_path, Completion completion);
+             const std::string &map_staging_path,
+             std::shared_ptr<WorkerOperationToken> operation_token,
+             Completion completion);
   void stop(uint64_t session_id, Completion completion);
 
  private:

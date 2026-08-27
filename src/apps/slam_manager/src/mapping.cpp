@@ -1,4 +1,4 @@
-#include "slam_manager/mapping_controller.hpp"
+#include "slam_manager/mapping.hpp"
 
 #include <utility>
 
@@ -11,12 +11,18 @@ MappingController::MappingController(
 
 void MappingController::start(uint64_t session_id, const std::string &map_id,
                               const std::string &map_staging_path,
+                              std::shared_ptr<WorkerOperationToken> operation_token,
                               Completion completion) {
   // PGO 先准备好，再启动产生建图数据的 FastLIO。
   pgo_worker_.start(
       session_id, map_id, map_staging_path,
-      [this, session_id, completion = std::move(completion)](
+      [this, session_id, operation_token,
+       completion = std::move(completion)](
           bool pgo_ok, const std::string &pgo_message) mutable {
+        if (!operation_token->active()) {
+          completion(false, "mapping start cancelled after PGO response");
+          return;
+        }
         if (!pgo_ok) {
           completion(false, "PGO start failed: " + pgo_message);
           return;
@@ -24,22 +30,19 @@ void MappingController::start(uint64_t session_id, const std::string &map_id,
 
         fast_lio_worker_.start(
             session_id,
-            [this, session_id, completion = std::move(completion)](
+            [operation_token, completion = std::move(completion)](
                 bool fast_lio_ok,
                 const std::string &fast_lio_message) mutable {
+              if (!operation_token->active()) {
+                completion(false,
+                           "mapping start cancelled after FastLIO response");
+                return;
+              }
               if (fast_lio_ok) {
                 completion(true, "mapping workers started");
                 return;
               }
-
-              // FastLIO 启动失败时回滚已经启动的 PGO。
-              pgo_worker_.stop(
-                  session_id,
-                  [completion = std::move(completion), fast_lio_message](
-                      bool, const std::string &) mutable {
-                    completion(false,
-                               "FastLIO start failed: " + fast_lio_message);
-                  });
+              completion(false, "FastLIO start failed: " + fast_lio_message);
             });
       });
 }
