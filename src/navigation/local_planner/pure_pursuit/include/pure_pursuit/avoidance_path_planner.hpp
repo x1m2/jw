@@ -65,12 +65,14 @@ public:
       const geometry_msgs::msg::Point &point, const char *point_name,
       double yaw = 0.0);
   bool isPathCollisionFree(const nav_msgs::msg::Path &path) const;
-  // 候选走廊不能进入控制阶段的近障停车半径。返回整条折线路径到
-  // 本次障碍中心的最小距离，便于候选淘汰日志说明原因。
+  // 候选走廊不能进入控制阶段的近障停车半径。若机器人触发规划时已经
+  // 位于该半径内，allow_initial_escape可允许一条不再靠近障碍、并最终
+  // 退出净空圈的脱离路径。返回整条折线路径到障碍中心的最小距离。
   bool isPathOutsideObstacleRadius(
       const nav_msgs::msg::Path &path,
       const geometry_msgs::msg::Point &obstacle_center,
-      double required_clearance, double *minimum_clearance = nullptr) const;
+      double required_clearance, double *minimum_clearance = nullptr,
+      bool allow_initial_escape = false) const;
   void publishVisualization(const geometry_msgs::msg::Point &start,
                             const geometry_msgs::msg::Point &goal,
                             const nav_msgs::msg::Path &path);

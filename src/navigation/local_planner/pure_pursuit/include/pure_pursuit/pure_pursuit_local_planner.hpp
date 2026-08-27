@@ -73,6 +73,14 @@ struct PlannerConfig {
   std::string robot_frame;  // 机器人坐标系
 
   double final_yaw_min_angular_velocity = 0.28;
+  double local_avoidance_align_enter_angle = 0.524;
+  double local_avoidance_align_exit_angle = 0.105;
+  double local_avoidance_lookahead_distance = 0.25;
+  double local_avoidance_min_linear_velocity = 0.4;
+  double local_avoidance_max_linear_velocity = 0.5;
+  // 动态目标明显变化时，放弃基于旧目标生成的局部绕障路径。
+  double dynamic_goal_change_distance = 0.7;
+  double dynamic_goal_change_angle = 0.436;
 };
 
 class PurePursuitLocalPlanner {
@@ -90,7 +98,7 @@ public:
   /** Stop control updates and publish a zero velocity command. */
   void stop();
 
-  /** 暂停时保留导航任务，只持续输出零速度；继续后重新计算控制量。 */
+  /** 暂停时保留全局任务、丢弃瞬态绕障路径并持续输出零速度；继续后基于最新路径控制。 */
   bool setPaused(bool paused);
 
   /**
@@ -144,6 +152,8 @@ private:
       smoothed_local_path_sub_; // 新增：平滑后局部路径订阅器
   rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
       target_points_sub_; // 新增：目标点订阅器
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
+      obstacle_stop_active_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // TF
@@ -182,6 +192,7 @@ private:
   rclcpp::Time last_control_time_;
   std::atomic_bool navigation_paused_{false};
   std::atomic_bool reset_velocity_on_next_control_{false};
+  std::atomic_bool obstacle_stop_active_{false};
 
   /**
    * @brief 加载参数
@@ -201,6 +212,9 @@ private:
    */
   void globalPathWithPolicyCallback(
       navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg);
+  bool hasDynamicGoalChanged(const nav_msgs::msg::Path &new_path,
+                             double &goal_shift,
+                             double &direction_change);
   void publishCurrentObstacleStopPolicy();
   bool isObstacleAvoidanceEnabled() const;
   navigation_interfaces::msg::EdgePolicy currentEdgePolicy() const;

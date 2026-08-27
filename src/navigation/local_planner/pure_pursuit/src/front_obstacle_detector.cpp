@@ -20,6 +20,8 @@ FrontObstacleDetector::FrontObstacleDetector()
       avoid_max_distance_(1.5),
       avoid_sector_angle_(60.0),
       side_passage_width_(0.75),
+      side_passage_obstacle_ratio_threshold_(0.02),
+      near_side_obstacle_lateral_threshold_(0.20),
       enable_path_corridor_filter_(true),
       path_obstacle_margin_(0.15),
       path_check_distance_(2.0),
@@ -47,6 +49,17 @@ bool FrontObstacleDetector::initialize(rclcpp::Node::SharedPtr node) {
       node_, "front_obstacle_detector.avoid_sector_angle", 60.0);
   side_passage_width_ = declareOrGetParameter(
       node_, "front_obstacle_detector.side_passage_width", 0.75);
+  side_passage_obstacle_ratio_threshold_ = std::clamp(
+      declareOrGetParameter(
+          node_, "front_obstacle_detector.side_passage_obstacle_ratio_threshold",
+          0.02),
+      0.0, 1.0);
+  near_side_obstacle_lateral_threshold_ = std::clamp(
+      declareOrGetParameter(
+          node_,
+          "front_obstacle_detector.near_side_obstacle_lateral_threshold",
+          0.20),
+      0.0, robot_width_ * 0.5 + safety_margin_);
   enable_path_corridor_filter_ = declareOrGetParameter(
       node_, "front_obstacle_detector.enable_path_corridor_filter", true);
   path_obstacle_margin_ = declareOrGetParameter(
@@ -67,8 +80,9 @@ bool FrontObstacleDetector::initialize(rclcpp::Node::SharedPtr node) {
 
   RCLCPP_INFO(node_->get_logger(),
               "Front Obstacle Detector initialized with parameters:");
-  RCLCPP_INFO(node_->get_logger(), "  - Obstacle threshold: %d",
-              obstacle_threshold_);
+  RCLCPP_INFO(node_->get_logger(),
+              "  - Obstacle threshold: %d, trigger ratio: %.3f",
+              obstacle_threshold_, obstacle_ratio_threshold_);
   RCLCPP_INFO(
       node_->get_logger(),
       "  - Avoidance sector: r=[%.2f, %.2f], angle=%.1f, side passage=%.2f",
@@ -117,21 +131,53 @@ FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
     return info;
   }
 
-  // 绕障触发区以内不再尝试临时侧向目标，直接判为阻塞并交给停障兜底。
-  // 从车体前缘开始检查，避免把机器人自身附近的栅格纳入统计。
+  // 从车体前缘开始检查近障碍，避免把机器人自身附近的栅格纳入统计。
+  // 单侧近障碍不能直接按正前方阻塞处理：先确认另一侧通道，再只允许
+  // 向障碍相反方向规划。正前方或对侧通道不足时仍然强制停车。
   const double near_min_distance = std::max(0.0, robot_length_ * 0.5);
   if (avoid_min_distance_ > near_min_distance &&
       findObstacleInSectorLocal(robot_pose, near_min_distance,
                                 avoid_min_distance_, avoid_sector_angle_,
                                 info)) {
-    info.decision = ObstacleDecision::BLOCKED;
+    info.left_clear = isPassageClear(robot_pose, true);
+    info.right_clear = isPassageClear(robot_pose, false);
+
+    const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+    const double dx = info.obstacle_center.x - robot_pose.pose.position.x;
+    const double dy = info.obstacle_center.y - robot_pose.pose.position.y;
+    const double obstacle_local_y =
+        -dx * std::sin(robot_yaw) + dy * std::cos(robot_yaw);
+    info.obstacle_local_y = obstacle_local_y;
+    const bool obstacle_on_left =
+        obstacle_local_y >= near_side_obstacle_lateral_threshold_;
+    const bool obstacle_on_right =
+        obstacle_local_y <= -near_side_obstacle_lateral_threshold_;
+
+    if (obstacle_on_left) {
+      // 贴近障碍的一侧即使外侧矩形为空，也不能作为绕行方向。
+      info.left_clear = false;
+      info.decision = info.right_clear ? ObstacleDecision::AVOIDABLE
+                                       : ObstacleDecision::BLOCKED;
+    } else if (obstacle_on_right) {
+      info.right_clear = false;
+      info.decision = info.left_clear ? ObstacleDecision::AVOIDABLE
+                                      : ObstacleDecision::BLOCKED;
+    } else {
+      // 障碍位于车头中部，原地转向或向任一侧切出都可能扫碰障碍。
+      info.left_clear = false;
+      info.right_clear = false;
+      info.decision = ObstacleDecision::BLOCKED;
+    }
+
     if (enable_visualization_) {
       publishVisualization(robot_pose, true);
     }
     RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 500,
-        "[AVOID_ANALYZE] BLOCKED near obstacle, dist=%.2fm < %.2fm",
-        info.obstacle_distance, avoid_min_distance_);
+        "[AVOID_NEAR_SIDE] decision=%s dist=%.2fm local_y=%.2fm "
+        "left=%d right=%d",
+        decisionToString(info.decision), info.obstacle_distance,
+        obstacle_local_y, info.left_clear, info.right_clear);
     return info;
   }
 
@@ -147,6 +193,11 @@ FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
 
   info.left_clear = isPassageClear(robot_pose, true);
   info.right_clear = isPassageClear(robot_pose, false);
+  const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  const double dx = info.obstacle_center.x - robot_pose.pose.position.x;
+  const double dy = info.obstacle_center.y - robot_pose.pose.position.y;
+  info.obstacle_local_y =
+      -dx * std::sin(robot_yaw) + dy * std::cos(robot_yaw);
   info.decision = (info.left_clear || info.right_clear)
                       ? ObstacleDecision::AVOIDABLE
                       : ObstacleDecision::BLOCKED;
@@ -159,11 +210,11 @@ FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
     RCLCPP_DEBUG_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 500,
         "[AVOID_ANALYZE] %s center=(%.3f, %.3f), dist=%.2f, left=%s, "
-        "right=%s",
+        "right=%s, local_y=%.3f",
         decisionToString(info.decision), info.obstacle_center.x,
         info.obstacle_center.y, info.obstacle_distance,
         info.left_clear ? "true" : "false",
-        info.right_clear ? "true" : "false");
+        info.right_clear ? "true" : "false", info.obstacle_local_y);
   }
 
   return info;
@@ -223,7 +274,7 @@ void FrontObstacleDetector::publishVisualization(
 
 bool FrontObstacleDetector::detectObstacleInRectLocal(
     const geometry_msgs::msg::PoseStamped &robot_pose, double x_min,
-    double x_max, double y_min, double y_max) {
+    double x_max, double y_min, double y_max, double ratio_threshold) {
   if (!has_costmap_ || costmap_->info.resolution <= 0.0 ||
       costmap_->info.width == 0 || costmap_->info.height == 0) {
     return false;
@@ -314,10 +365,10 @@ bool FrontObstacleDetector::detectObstacleInRectLocal(
                           "cells=%d/%d, ratio=%.3f, threshold=%.3f",
                           x_min, x_max, y_min, y_max, obstacle_cells,
                           total_cells, obstacle_ratio,
-                          obstacle_ratio_threshold_);
+                          ratio_threshold);
   }
 
-  return obstacle_ratio > obstacle_ratio_threshold_;
+  return obstacle_ratio > ratio_threshold;
 }
 
 bool FrontObstacleDetector::findObstacleInSectorLocal(
@@ -530,7 +581,9 @@ bool FrontObstacleDetector::isPassageClear(
   const double y_outer = side_sign * (half_width + side_passage_width_);
   const double y_min = std::min(y_inner, y_outer);
   const double y_max = std::max(y_inner, y_outer);
-  return !detectObstacleInRectLocal(robot_pose, x_min, x_max, y_min, y_max);
+  return !detectObstacleInRectLocal(
+      robot_pose, x_min, x_max, y_min, y_max,
+      side_passage_obstacle_ratio_threshold_);
 }
 
 double FrontObstacleDetector::pointToSegmentDistance(

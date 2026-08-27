@@ -50,6 +50,23 @@ bool LocalAvoidanceManager::initialize(
                  "avoidance_reentry_cooldown must not be negative");
     return false;
   }
+  avoidance_failure_retry_cooldown_ = declareOrGetParameter(
+      node_, "avoidance_failure_retry_cooldown", 2.0);
+  avoidance_max_planning_failures_ = declareOrGetParameter(
+      node_, "avoidance_max_planning_failures", 15);
+  avoidance_stall_timeout_ = std::max(
+      0.2, declareOrGetParameter(node_, "avoidance_stall_timeout", 1.5));
+  avoidance_stall_distance_ = std::max(
+      0.01, declareOrGetParameter(node_, "avoidance_stall_distance", 0.05));
+  avoidance_stall_yaw_change_ = std::clamp(
+      declareOrGetParameter(node_, "avoidance_stall_yaw_degrees", 5.0),
+      1.0, 45.0) * M_PI / 180.0;
+  if (avoidance_failure_retry_cooldown_ < 0.0 ||
+      avoidance_max_planning_failures_ < 1) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Invalid avoidance retry configuration");
+    return false;
+  }
   avoidance_lateral_clearance_ =
       declareOrGetParameter(node_, "avoidance_lateral_clearance", 0.8);
   avoidance_max_entry_angle_ = declareOrGetParameter(
@@ -60,6 +77,8 @@ bool LocalAvoidanceManager::initialize(
       node_, "front_obstacle_detector.avoid_min_distance", 1.0);
   avoidance_near_stop_margin_ = declareOrGetParameter(
       node_, "avoidance_near_stop_margin", 0.0);
+  avoidance_path_clearance_ = declareOrGetParameter(
+      node_, "avoidance_path_clearance", 0.5);
   avoidance_lateral_clearance_ = std::max(0.2, avoidance_lateral_clearance_);
   avoidance_max_entry_angle_ = std::clamp(
       avoidance_max_entry_angle_, 1.0 * M_PI / 180.0, 89.0 * M_PI / 180.0);
@@ -68,6 +87,7 @@ bool LocalAvoidanceManager::initialize(
   avoidance_near_stop_clearance_ =
       std::max(0.0, avoidance_near_stop_clearance_);
   avoidance_near_stop_margin_ = std::max(0.0, avoidance_near_stop_margin_);
+  avoidance_path_clearance_ = std::max(0.0, avoidance_path_clearance_);
   avoidance_goal_tolerance_ =
       declareOrGetParameter(node_, "avoidance_goal_tolerance", 0.35);
   const double robot_width = declareOrGetParameter(node_, "robot_width", 0.80);
@@ -180,9 +200,21 @@ LocalAvoidanceManager::getValidLocalPath() const {
 LocalAvoidanceOutput LocalAvoidanceManager::update(
     const geometry_msgs::msg::PoseStamped &robot_pose,
     const AvoidanceObservation &observation, bool avoidance_enabled,
-    bool global_controller_aligning) {
+    bool global_controller_aligning, bool safety_stop_blocking) {
   std::lock_guard<std::mutex> decision_lock(decision_mutex_);
   LocalAvoidanceOutput output;
+
+  RCLCPP_INFO_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 500,
+      "[AVOID_TRACE] decision=%d enabled=%d tracking=%d aligning=%d "
+      "obstacle_dist=%.3f left=%d right=%d costmap=%d prepared=%d "
+      "failure_latched=%d",
+      static_cast<int>(observation.decision), avoidance_enabled,
+      tracking_local_, global_controller_aligning, observation.obstacle_distance,
+      observation.left_clear, observation.right_clear,
+      costmap_received_.load(),
+      avoidance_path_planner_ && avoidance_path_planner_->hasPreparedCostmap(),
+      failure_latched_);
 
   auto finish = [this, &output]() {
     output.realign_local_path = stage_alignment_requested_.exchange(false);
@@ -197,6 +229,10 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
   };
 
   if (!avoidance_enabled) {
+    stall_monitoring_ = false;
+    RCLCPP_DEBUG_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "[AVOID_SKIP] obstacle avoidance disabled at current path index");
     if (tracking_local_ || isWaitingForDynamicPath()) {
       tracking_local_ = false;
       output.exited_local_tracking = true;
@@ -208,6 +244,7 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
   // 动态路径已经绕过障碍后保持停车，直到上层收到一条更新鲜的动态路径
   // 并把它作为新任务设置。不能在此阶段重新检测并启动绕障。
   if (isWaitingForDynamicPath()) {
+    stall_monitoring_ = false;
     if (tracking_local_) {
       tracking_local_ = false;
       output.exited_local_tracking = true;
@@ -216,28 +253,111 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
     return finish();
   }
 
-  // 失败后保持停车，直到检测器确认障碍已经清除。
+  // 失败后短暂停车，让Costmap有时间刷新。即使障碍没有完全消失也会
+  // 自动重新尝试，避免机器人静止后永远等不到CLEAR的状态机死锁。
   if (failure_latched_) {
     if (observation.decision == ObstacleDecision::CLEAR) {
       failure_latched_ = false;
+      has_failure_latch_time_ = false;
+      recovery_attempt_ = 0;
       output.failure_changed = true;
       RCLCPP_INFO(node_->get_logger(),
                   "[OBSTACLE_REPLAN] obstacle cleared, failure latch reset");
+    } else if (has_failure_latch_time_ &&
+               (node_->now() - failure_latch_time_).seconds() >=
+                   avoidance_failure_retry_cooldown_) {
+      failure_latched_ = false;
+      has_failure_latch_time_ = false;
+      ++recovery_attempt_;
+      output.failure_changed = true;
+      RCLCPP_WARN(node_->get_logger(),
+                  "[AVOID_RECOVERY] failure cooldown elapsed, retry=%d",
+                  recovery_attempt_);
     } else {
       output.mode = AvoidanceTrackingMode::FAILED;
       return finish();
     }
   }
 
-  // 全局路径的预对准期间不启动新任务；已经开始的绕障任务不受影响。
-  if (!tracking_local_ && global_controller_aligning) {
-    return finish();
+  // 全局路径预对准期间仍允许前方检测启动A*。动态目标大角度变化时，
+  // 原地旋转可能把近障碍扫入车头；若在此处跳过，通常要到硬停距离内
+  // 才会开始绕障。
+  (void)global_controller_aligning;
+
+  // obstacle_stop是最终安全门，之前PP只看到自己发布的规划速度，不知道
+  // 实际速度已被清零。绕障指令持续被安全层拦截且位姿没有产生足够变化
+  // 时，旧路径已经不可执行：主动切到相反侧重新生成A*，避免无限输出同一
+  // 条不可执行路径。
+  if (!tracking_local_ || !safety_stop_blocking) {
+    stall_monitoring_ = false;
+  } else if (!stall_monitoring_) {
+    stall_monitoring_ = true;
+    stall_start_time_ = node_->now();
+    stall_start_position_ = robot_pose.pose.position;
+    stall_start_yaw_ = tf2::getYaw(robot_pose.pose.orientation);
+  } else {
+    const double moved = calculateDistance(
+        robot_pose.pose.position, stall_start_position_);
+    const double current_yaw = tf2::getYaw(robot_pose.pose.orientation);
+    const double yaw_change = std::abs(std::atan2(
+        std::sin(current_yaw - stall_start_yaw_),
+        std::cos(current_yaw - stall_start_yaw_)));
+    if (moved >= avoidance_stall_distance_ ||
+        yaw_change >= avoidance_stall_yaw_change_) {
+      stall_start_time_ = node_->now();
+      stall_start_position_ = robot_pose.pose.position;
+      stall_start_yaw_ = current_yaw;
+    } else if ((node_->now() - stall_start_time_).seconds() >=
+               avoidance_stall_timeout_) {
+      AvoidanceSide stalled_side = AvoidanceSide::NONE;
+      geometry_msgs::msg::Point obstacle_center;
+      {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+        stalled_side = avoidance_side_;
+        obstacle_center = avoidance_obstacle_center_;
+      }
+      AvoidanceSide recovery_side =
+          stalled_side == AvoidanceSide::LEFT ? AvoidanceSide::RIGHT
+                                              : AvoidanceSide::LEFT;
+      if (stalled_side == AvoidanceSide::NONE) {
+        recovery_side = observation.obstacle_local_y > 0.0
+                            ? AvoidanceSide::RIGHT
+                            : AvoidanceSide::LEFT;
+      }
+
+      RCLCPP_WARN(
+          node_->get_logger(),
+          "[AVOID_STALL_RECOVERY] obstacle_stop blocked local motion for "
+          "%.2fs (moved=%.3fm yaw_change=%.1fdeg); switching side %d -> %d",
+          avoidance_stall_timeout_, moved, yaw_change * 180.0 / M_PI,
+          static_cast<int>(stalled_side), static_cast<int>(recovery_side));
+      stall_monitoring_ = false;
+      tracking_local_ = false;
+      ++recovery_attempt_;
+      resetAvoidance();
+      if (startAvoidance(robot_pose, obstacle_center, recovery_side)) {
+        tracking_local_ = true;
+        output.realign_local_path = true;
+        output.entered_local_tracking = true;
+        return finish();
+      }
+
+      failure_latched_ = true;
+      failure_latch_time_ = node_->now();
+      has_failure_latch_time_ = true;
+      output.failure_changed = true;
+      output.exited_local_tracking = true;
+      output.mode = AvoidanceTrackingMode::FAILED;
+      return finish();
+    }
   }
 
   if (tracking_local_) {
     // 规划线程可能异步进入FAILED，必须优先于BLOCKED处理并向上层锁存。
     if (isAvoidanceFailed()) {
       failure_latched_ = true;
+      failure_latch_time_ = node_->now();
+      has_failure_latch_time_ = true;
       tracking_local_ = false;
       output.failure_changed = true;
       output.exited_local_tracking = true;
@@ -248,20 +368,45 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
       return finish();
     }
 
-    if (observation.decision == ObstacleDecision::BLOCKED) {
-      output.mode = AvoidanceTrackingMode::STOPPED_BLOCKED;
-      return finish();
-    }
-
+    // 完成状态必须先于BLOCKED处理。规划线程到达回归点后会清空局部
+    // 路径；如果此时原障碍仍在检测扇区内，先检查BLOCKED会把状态永远
+    // 留在WAITING_LOCAL_PATH。
     if (isAvoidanceCompleted()) {
       last_avoidance_complete_time_ = node_->now();
       has_last_avoidance_complete_time_ = true;
+      recovery_attempt_ = 0;
       tracking_local_ = false;
       output.exited_local_tracking = true;
       resetAvoidance();
       RCLCPP_INFO(node_->get_logger(),
                   "[OBSTACLE_REPLAN] avoidance completed, back to global path");
+      return finish();
     }
+
+    if (observation.decision == ObstacleDecision::BLOCKED) {
+      // 局部路径已经通过A*的footprint和连续碰撞检查；此时检测器看到的
+      // 仍可能是绕障任务中的原障碍物，不能用全局前方停车半径打断侧向路径。
+      // 仅当局部路径已经失效时才停车，避免机器人永远到不了障碍侧方。
+      const auto local_path = getValidLocalPath();
+      if (!local_path || local_path->poses.empty()) {
+        output.mode = AvoidanceTrackingMode::WAITING_LOCAL_PATH;
+        RCLCPP_DEBUG_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 500,
+            "[AVOID_WAIT] obstacle BLOCKED while local path is being planned; "
+            "dist=%.3f",
+            observation.obstacle_distance);
+        return finish();
+      }
+
+      output.local_path = local_path;
+      output.mode = AvoidanceTrackingMode::LOCAL_PATH;
+      RCLCPP_DEBUG_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[AVOID_CONTINUE] local path remains active while front detector "
+          "reports BLOCKED, dist=%.3f",
+          observation.obstacle_distance);
+    }
+
   }
 
   if (!tracking_local_) {
@@ -274,6 +419,57 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
     }
 
     if (observation.decision == ObstacleDecision::BLOCKED) {
+      if (avoidance_path_planner_ &&
+          avoidance_path_planner_->hasPreparedCostmap()) {
+        AvoidanceSide recovery_side = AvoidanceSide::LEFT;
+        if (observation.left_clear != observation.right_clear) {
+          recovery_side = observation.left_clear ? AvoidanceSide::LEFT
+                                                  : AvoidanceSide::RIGHT;
+        } else if (observation.obstacle_local_y > 0.05) {
+          recovery_side = AvoidanceSide::RIGHT;
+        } else if (observation.obstacle_local_y < -0.05) {
+          recovery_side = AvoidanceSide::LEFT;
+        } else if (recovery_attempt_ % 2 != 0) {
+          recovery_side = AvoidanceSide::RIGHT;
+        }
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "[AVOID_RECOVERY] BLOCKED at dist=%.3f, trying side=%d "
+            "despite detector passage result left=%d right=%d local_y=%.3f",
+            observation.obstacle_distance, static_cast<int>(recovery_side),
+            observation.left_clear, observation.right_clear,
+            observation.obstacle_local_y);
+
+        bool recovery_started = startAvoidance(
+            robot_pose, observation.obstacle_center, recovery_side);
+        if (!recovery_started) {
+          const AvoidanceSide alternate_side =
+              recovery_side == AvoidanceSide::LEFT ? AvoidanceSide::RIGHT
+                                                    : AvoidanceSide::LEFT;
+          RCLCPP_WARN(node_->get_logger(),
+                      "[AVOID_RECOVERY] side=%d failed, trying alternate "
+                      "side=%d",
+                      static_cast<int>(recovery_side),
+                      static_cast<int>(alternate_side));
+          recovery_started = startAvoidance(
+              robot_pose, observation.obstacle_center, alternate_side);
+        }
+
+        if (recovery_started) {
+          tracking_local_ = true;
+          output.entered_local_tracking = true;
+          RCLCPP_INFO(node_->get_logger(),
+                      "[AVOID_RECOVERY] local A* recovery started");
+          return finish();
+        }
+      }
+
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[AVOID_STOP] obstacle BLOCKED; no A* start, dist=%.3f "
+          "left=%d right=%d",
+          observation.obstacle_distance, observation.left_clear,
+          observation.right_clear);
       output.mode = AvoidanceTrackingMode::STOPPED_BLOCKED;
       return finish();
     }
@@ -286,25 +482,63 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
         output.mode = AvoidanceTrackingMode::WAITING_COSTMAP;
         RCLCPP_WARN_THROTTLE(
             node_->get_logger(), *node_->get_clock(), 1000,
-            "[OBSTACLE_REPLAN] waiting for prepared costmap snapshot");
+            "[AVOID_WAIT] A* not started: planner=%d costmap_received=%d "
+            "prepared_costmap=%d",
+            avoidance_path_planner_ ? 1 : 0, costmap_received_.load(),
+            avoidance_path_planner_ &&
+                avoidance_path_planner_->hasPreparedCostmap());
         return finish();
       }
 
-      // 保持原逻辑：左右均可通行时优先从左侧绕行。
+      // 两侧均可通行时，恢复尝试交替选择左右侧，避免重复撞在同一个
+      // 不可行的固定走廊上。
       AvoidanceSide side = AvoidanceSide::NONE;
-      if (observation.left_clear) {
+      if (observation.left_clear && observation.right_clear) {
+        side = recovery_attempt_ % 2 == 0 ? AvoidanceSide::LEFT
+                                         : AvoidanceSide::RIGHT;
+      } else if (observation.left_clear) {
         side = AvoidanceSide::LEFT;
       } else if (observation.right_clear) {
         side = AvoidanceSide::RIGHT;
       }
 
-      if (!startAvoidance(robot_pose, observation.obstacle_center, side)) {
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "[AVOID_START] A* trigger accepted: dist=%.3f side=%d "
+          "left=%d right=%d",
+          observation.obstacle_distance, static_cast<int>(side),
+          observation.left_clear, observation.right_clear);
+
+      bool avoidance_started =
+          startAvoidance(robot_pose, observation.obstacle_center, side);
+      if (!avoidance_started) {
+        AvoidanceSide alternate_side = AvoidanceSide::NONE;
+        if (side == AvoidanceSide::LEFT && observation.right_clear) {
+          alternate_side = AvoidanceSide::RIGHT;
+        } else if (side == AvoidanceSide::RIGHT && observation.left_clear) {
+          alternate_side = AvoidanceSide::LEFT;
+        }
+
+        if (alternate_side != AvoidanceSide::NONE) {
+          RCLCPP_WARN(node_->get_logger(),
+                      "[AVOID_RETRY] preferred side=%d failed, retrying "
+                      "alternate side=%d",
+                      static_cast<int>(side),
+                      static_cast<int>(alternate_side));
+          avoidance_started = startAvoidance(
+              robot_pose, observation.obstacle_center, alternate_side);
+        }
+      }
+
+      if (!avoidance_started) {
         failure_latched_ = true;
+        failure_latch_time_ = node_->now();
+        has_failure_latch_time_ = true;
         output.failure_changed = true;
         output.mode = AvoidanceTrackingMode::FAILED;
         resetAvoidance();
         RCLCPP_WARN(node_->get_logger(),
-                    "[OBSTACLE_REPLAN] could not build avoidance goal");
+              "[AVOID_FAIL] A* not started: could not build side goal");
         return finish();
       }
 
@@ -322,7 +556,10 @@ void LocalAvoidanceManager::reset() {
   std::lock_guard<std::mutex> decision_lock(decision_mutex_);
   tracking_local_ = false;
   failure_latched_ = false;
+  has_failure_latch_time_ = false;
+  recovery_attempt_ = 0;
   has_last_avoidance_complete_time_ = false;
+  stall_monitoring_ = false;
   stage_alignment_requested_.store(false);
   resetAvoidance();
 }
@@ -336,11 +573,21 @@ bool LocalAvoidanceManager::startAvoidance(
     const geometry_msgs::msg::PoseStamped &robot_pose,
     const geometry_msgs::msg::Point &obstacle_center, AvoidanceSide side) {
   if (side == AvoidanceSide::NONE) {
+    RCLCPP_WARN(node_->get_logger(),
+                "[AVOID_FAIL] A* not started: no clear avoidance side");
     return false;
   }
   if (!global_path_received_ || !costmap_received_ ||
       !avoidance_path_planner_ ||
       !avoidance_path_planner_->hasPreparedCostmap()) {
+    RCLCPP_WARN(
+        node_->get_logger(),
+        "[AVOID_FAIL] A* not started: global_path=%d costmap_received=%d "
+        "planner=%d prepared_costmap=%d",
+        global_path_received_.load(), costmap_received_.load(),
+        avoidance_path_planner_ ? 1 : 0,
+        avoidance_path_planner_ &&
+            avoidance_path_planner_->hasPreparedCostmap());
     return false;
   }
 
@@ -352,11 +599,19 @@ bool LocalAvoidanceManager::startAvoidance(
     std::lock_guard<std::mutex> lock(global_path_mutex_);
     global_path_copy = global_path_;
   }
+  // 在全局路径上找到机器人最近点索引，作为侧向目标计算的参考。
   const int closest_index = findClosestPointOnGlobalPath(robot_pose);
+  RCLCPP_INFO(
+      node_->get_logger(),
+      "[AVOID_START] side=%d obstacle=(%.3f,%.3f) closest_index=%d "
+      "global_poses=%zu",
+      static_cast<int>(side), obstacle_center.x, obstacle_center.y,
+      closest_index, global_path_copy.poses.size());
   // 每次绕障只生成一个侧向临时点，不扩展候选、不做评分。
   const double base_lateral_clearance = std::max(
       avoidance_lateral_clearance_,
-      avoidance_near_stop_clearance_ + avoidance_near_stop_margin_);
+      avoidance_near_stop_clearance_ + avoidance_near_stop_margin_) +
+      std::min(0.45, 0.15 * static_cast<double>(recovery_attempt_ / 2));
   const bool have_seed = avoidance_path_planner_->buildSideGoal(
       robot_pose, obstacle_center, side, global_path_copy, closest_index,
       first_side_goal, side_goal_yaw, base_lateral_clearance,
@@ -369,7 +624,7 @@ bool LocalAvoidanceManager::startAvoidance(
     avoidance_obstacle_center_ = obstacle_center;
     local_path_valid_ = false;
     RCLCPP_WARN(node_->get_logger(),
-                "[AVOID_PLAN] Failed to build obstacle-based side goal");
+                "[AVOID_FAIL] A* not started: side goal generation failed");
     return false;
   }
 
@@ -385,6 +640,7 @@ bool LocalAvoidanceManager::startAvoidance(
     avoidance_return_goal_precomputed_ = false;
     avoidance_side_ = side;
     avoidance_corridor_selected_ = false;
+    consecutive_planning_failures_ = 0;
     avoidance_side_path_.poses.clear();
     avoidance_return_path_.poses.clear();
   }
@@ -410,6 +666,7 @@ void LocalAvoidanceManager::resetAvoidance() {
     avoidance_return_goal_precomputed_ = false;
     avoidance_side_ = AvoidanceSide::NONE;
     avoidance_corridor_selected_ = false;
+    consecutive_planning_failures_ = 0;
     avoidance_side_path_.poses.clear();
     avoidance_return_path_.poses.clear();
   }
@@ -447,7 +704,11 @@ void LocalAvoidanceManager::planningLoop() {
       if (avoidance_path_planner_) {
         avoidance_path_planner_->prepareLatestCostmap();
       }
-      computeLocalPath();
+      const bool planning_result = computeLocalPath();
+      RCLCPP_DEBUG_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[AVOID_THREAD] computeLocalPath result=%d local_valid=%d",
+          planning_result, local_path_valid_.load());
     } catch (const std::exception &e) {
       RCLCPP_ERROR(node_->get_logger(), "Exception in local path planning: %s",
                    e.what());
@@ -464,6 +725,14 @@ bool LocalAvoidanceManager::computeLocalPath() {
   if (!global_path_received_ || !costmap_received_ ||
       !avoidance_path_planner_ ||
       !avoidance_path_planner_->hasPreparedCostmap()) {
+    RCLCPP_DEBUG_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "[AVOID_THREAD_SKIP] A* not called: global_path=%d costmap=%d "
+      "planner=%d prepared=%d",
+      global_path_received_.load(), costmap_received_.load(),
+      avoidance_path_planner_ ? 1 : 0,
+      avoidance_path_planner_ &&
+        avoidance_path_planner_->hasPreparedCostmap());
     local_path_valid_ = false;
     return false;
   }
@@ -471,6 +740,9 @@ bool LocalAvoidanceManager::computeLocalPath() {
   {
     std::lock_guard<std::mutex> lock(avoidance_mutex_);
     if (!avoidance_active_) {
+      RCLCPP_DEBUG_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[AVOID_THREAD_SKIP] A* not called: avoidance_active=false");
       bool should_publish_empty = false;
       {
         std::lock_guard<std::mutex> path_lock(path_mutex_);
@@ -494,6 +766,9 @@ bool LocalAvoidanceManager::computeLocalPath() {
   // 获取机器人当前位姿
   geometry_msgs::msg::PoseStamped robot_pose;
   if (!getRobotPose(robot_pose)) {
+    RCLCPP_WARN_THROTTLE(
+      node_->get_logger(), *node_->get_clock(), 1000,
+      "[AVOID_THREAD_SKIP] A* not called: failed to get robot pose");
     local_path_valid_ = false;
     return false;
   }
@@ -501,6 +776,10 @@ bool LocalAvoidanceManager::computeLocalPath() {
   geometry_msgs::msg::Point goal_point;
   bool using_avoidance_goal = false;
   bool local_segment_changed = false;
+  // Costmap更新可能使当前阶段已经锁定的路径失效。此时新A*路径仍属于
+  // 同一阶段，但控制层保存的旧路径索引同样必须清零。
+  bool same_stage_path_replanned = false;
+  bool plan_return_path = false;
   {
     std::lock_guard<std::mutex> lock(avoidance_mutex_);
 
@@ -529,22 +808,17 @@ bool LocalAvoidanceManager::computeLocalPath() {
                       "a fresh dynamic path");
           return false;
         }
-        if (!avoidance_return_goal_precomputed_) {
-          avoidance_active_ = false;
-          avoidance_completed_ = false;
-          avoidance_stage_ = AvoidanceStage::FAILED;
-          clearLocalPath();
-          RCLCPP_ERROR(node_->get_logger(),
-                       "[AVOID_PLAN] Side goal reached but return point missing");
-          return false;
-        }
-        avoidance_stage_ = AvoidanceStage::RETURN_GOAL;
+        // 静态路径的回归段到达障碍侧方后再规划。此时机器人视野和
+        // Costmap已经前移，比在障碍前预估整条回归走廊可靠得多。
+        avoidance_stage_ = AvoidanceStage::RETURN_PATH_PLANNING;
+        avoidance_return_goal_precomputed_ = false;
+        avoidance_corridor_selected_ = false;
+        avoidance_return_path_.poses.clear();
         local_segment_changed = true;
-        RCLCPP_INFO(
-            node_->get_logger(),
-            "[AVOID_PLAN] Side goal reached, continuing to return "
-            "goal=(%.3f, %.3f)",
-            avoidance_return_goal_.x, avoidance_return_goal_.y);
+        plan_return_path = true;
+        RCLCPP_INFO(node_->get_logger(),
+                    "[AVOID_PLAN] Side goal reached, planning return path "
+                    "from the latest robot pose");
       }
     }
 
@@ -578,7 +852,65 @@ bool LocalAvoidanceManager::computeLocalPath() {
                avoidance_stage_ == AvoidanceStage::RETURN_GOAL) {
       goal_point = avoidance_return_goal_;
       using_avoidance_goal = true;
+    } else if (avoidance_active_ &&
+               avoidance_stage_ == AvoidanceStage::RETURN_PATH_PLANNING) {
+      plan_return_path = true;
     }
+  }
+
+  if (plan_return_path) {
+    if (local_segment_changed) clearLocalPath();
+
+    nav_msgs::msg::Path global_path_copy;
+    geometry_msgs::msg::Point obstacle_center;
+    {
+      std::lock_guard<std::mutex> lock(global_path_mutex_);
+      global_path_copy = global_path_;
+    }
+    {
+      std::lock_guard<std::mutex> lock(avoidance_mutex_);
+      obstacle_center = avoidance_obstacle_center_;
+    }
+
+    const int closest_index = findClosestPointOnGlobalPath(robot_pose);
+    geometry_msgs::msg::Point return_goal;
+    nav_msgs::msg::Path return_path;
+    bool used_direct_path = false;
+    const bool return_ok = avoidance_path_planner_->buildReturnPath(
+        robot_pose.pose.position, closest_index, obstacle_center,
+        global_path_copy, return_goal, return_path,
+        avoidance_max_return_angle_, avoidance_path_clearance_,
+        used_direct_path);
+    if (!return_ok || return_path.poses.empty()) {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[AVOID_RETRY] return path unavailable from current Costmap");
+      markAvoidanceFailed("return path unavailable");
+      local_path_valid_ = false;
+      return false;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(avoidance_mutex_);
+      if (!avoidance_active_ ||
+          avoidance_stage_ != AvoidanceStage::RETURN_PATH_PLANNING) {
+        return false;
+      }
+      avoidance_return_goal_ = return_goal;
+      avoidance_return_goal_precomputed_ = true;
+      avoidance_return_path_ = return_path;
+      avoidance_corridor_selected_ = true;
+      avoidance_stage_ = AvoidanceStage::RETURN_GOAL;
+      consecutive_planning_failures_ = 0;
+    }
+    goal_point = return_goal;
+    using_avoidance_goal = true;
+    local_segment_changed = true;
+    RCLCPP_INFO(node_->get_logger(),
+                "[AVOID_PLAN] return path selected from side position: "
+                "goal=(%.3f, %.3f), mode=%s",
+                return_goal.x, return_goal.y,
+                used_direct_path ? "DIRECT" : "ASTAR");
   }
 
   if (!using_avoidance_goal) {
@@ -636,7 +968,6 @@ bool LocalAvoidanceManager::computeLocalPath() {
   AvoidanceStage planning_stage = AvoidanceStage::IDLE;
   geometry_msgs::msg::Point first_side_goal;
   geometry_msgs::msg::Point return_goal;
-  bool return_goal_precomputed = false;
   double side_goal_yaw = 0.0;
   geometry_msgs::msg::Point obstacle_center;
   nav_msgs::msg::Path selected_segment;
@@ -646,13 +977,67 @@ bool LocalAvoidanceManager::computeLocalPath() {
     planning_stage = avoidance_stage_;
     first_side_goal = avoidance_first_side_goal_;
     return_goal = avoidance_return_goal_;
-    return_goal_precomputed = avoidance_return_goal_precomputed_;
     side_goal_yaw = avoidance_side_goal_yaw_;
     obstacle_center = avoidance_obstacle_center_;
     selected_segment = planning_stage == AvoidanceStage::RETURN_GOAL
                            ? avoidance_return_path_
                            : avoidance_side_path_;
     corridor_selected = avoidance_corridor_selected_;
+  }
+
+  // A*段虽然在生成时通过了碰撞检查，但Costmap仍会持续变化。只检查从
+  // 机器人当前位置开始的剩余段，避免已经驶过的路径被后方障碍误判；
+  // 同时把机器人当前位姿作为首点，确保“机器人已偏离旧路径且前方被
+  // 安全层挡住”的情况也能触发重新规划。
+  if (avoidance_path_planner_ && corridor_selected &&
+      !selected_segment.poses.empty()) {
+    std::size_t closest_pose = 0U;
+    double closest_distance = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < selected_segment.poses.size(); ++i) {
+      const double distance = calculateDistance(
+          robot_pose.pose.position, selected_segment.poses[i].pose.position);
+      if (distance < closest_distance) {
+        closest_distance = distance;
+        closest_pose = i;
+      }
+    }
+
+    nav_msgs::msg::Path remaining_path;
+    remaining_path.header = selected_segment.header;
+    remaining_path.poses.push_back(robot_pose);
+    const std::size_t copy_start = closest_pose > 0U ? closest_pose - 1U : 0U;
+    remaining_path.poses.insert(
+        remaining_path.poses.end(),
+        selected_segment.poses.begin() + static_cast<std::ptrdiff_t>(copy_start),
+        selected_segment.poses.end());
+
+    if (!avoidance_path_planner_->isPathCollisionFree(remaining_path)) {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[AVOID_REPLAN_LOCAL] locked local path is blocked on latest "
+          "Costmap; stage=%d closest=%zu distance=%.3f",
+          static_cast<int>(planning_stage), closest_pose, closest_distance);
+      {
+        std::lock_guard<std::mutex> lock(avoidance_mutex_);
+        if (avoidance_active_ && avoidance_stage_ == planning_stage) {
+          avoidance_corridor_selected_ = false;
+          if (planning_stage == AvoidanceStage::FIRST_SIDE_GOAL) {
+            avoidance_side_path_.poses.clear();
+          } else if (planning_stage == AvoidanceStage::RETURN_GOAL) {
+            avoidance_return_path_.poses.clear();
+            avoidance_return_goal_precomputed_ = false;
+            avoidance_stage_ = AvoidanceStage::RETURN_PATH_PLANNING;
+          }
+        }
+      }
+      clearLocalPath();
+      selected_segment.poses.clear();
+      corridor_selected = false;
+      if (planning_stage == AvoidanceStage::RETURN_GOAL) {
+        return false;
+      }
+      same_stage_path_replanned = true;
+    }
   }
 
   // 阶段1只发布当前位置到临时点；阶段2只发布临时点到回归点。
@@ -669,92 +1054,65 @@ bool LocalAvoidanceManager::computeLocalPath() {
   if (!planning_success && avoidance_path_planner_ &&
       planning_stage == AvoidanceStage::FIRST_SIDE_GOAL) {
     if (!corridor_selected) {
-      nav_msgs::msg::Path global_path_copy;
-      {
-        std::lock_guard<std::mutex> lock(global_path_mutex_);
-        global_path_copy = global_path_;
-      }
-      const int closest_index = findClosestPointOnGlobalPath(robot_pose);
-      const double required_near_stop_clearance =
-          avoidance_near_stop_clearance_ + avoidance_near_stop_margin_;
-
-      auto appendPath = [](nav_msgs::msg::Path &destination,
-                           const nav_msgs::msg::Path &source) {
-        if (source.poses.empty()) return;
-        destination.poses.insert(destination.poses.end(),
-            source.poses.begin() + (destination.poses.empty() ? 0 : 1),
-            source.poses.end());
-      };
-
-      const bool need_return = !dynamic_path_mode_.load();
-      geometry_msgs::msg::Point planned_return;
-      nav_msgs::msg::Path return_path;
-      bool return_uses_direct_path = false;
-      const bool have_return = !need_return ||
-          avoidance_path_planner_->buildReturnPath(
-              first_side_goal, closest_index, obstacle_center,
-              global_path_copy, planned_return, return_path,
-              avoidance_max_return_angle_, required_near_stop_clearance,
-              return_uses_direct_path);
-      nav_msgs::msg::Path first_path, full_path;
+      nav_msgs::msg::Path first_path;
       const bool first_ok = avoidance_path_planner_->planPath(
           robot_pose.pose.position, first_side_goal, first_path,
           side_goal_yaw);
-      const bool return_ok = first_ok && have_return &&
-          (!need_return || !return_path.poses.empty());
-
-      if (first_ok && return_ok) {
-        full_path.header = first_path.header;
-        appendPath(full_path, first_path);
-        if (need_return) appendPath(full_path, return_path);
-
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "[AVOID_ASTAR] first segment called: result=%d path_poses=%zu "
+          "start=(%.3f,%.3f) goal=(%.3f,%.3f)",
+          first_ok, first_path.poses.size(), robot_pose.pose.position.x,
+          robot_pose.pose.position.y, first_side_goal.x, first_side_goal.y);
+      if (first_ok && first_path.poses.size() >= 2) {
         double minimum_obstacle_clearance = 0.0;
-        // A*各段已经完成栅格和矩形footprint检查。这里不再对拼接路径做
-        // 第二次连续footprint复核，避免检查规则不一致导致规划后立即停止；
-        // 仍强制整条路径保持在近障停车区域之外。
-        const bool path_safe = full_path.poses.size() >= 2 &&
+        const bool path_safe =
             avoidance_path_planner_->isPathOutsideObstacleRadius(
-                full_path, obstacle_center, required_near_stop_clearance,
-                &minimum_obstacle_clearance);
+                first_path, obstacle_center, avoidance_path_clearance_,
+                &minimum_obstacle_clearance, true);
         if (!path_safe) {
           RCLCPP_WARN(node_->get_logger(),
-                      "[AVOID_PLAN] fixed two-point path rejected: "
+                      "[AVOID_PLAN] side path rejected: "
                       "minimum_clearance=%.2f required=%.2f",
-                      minimum_obstacle_clearance,
-                      required_near_stop_clearance);
+                      minimum_obstacle_clearance, avoidance_path_clearance_);
         } else {
-          // 完整拼接路径只用于一次性安全校验，不交给控制器跟踪。
+          const double start_clearance = std::hypot(
+              first_path.poses.front().pose.position.x - obstacle_center.x,
+              first_path.poses.front().pose.position.y - obstacle_center.y);
+          if (start_clearance < avoidance_path_clearance_) {
+            RCLCPP_WARN(node_->get_logger(),
+                        "[AVOID_PLAN] accepting outward escape path: "
+                        "start_clearance=%.2f minimum_clearance=%.2f "
+                        "target_clearance=%.2f",
+                        start_clearance, minimum_obstacle_clearance,
+                        avoidance_path_clearance_);
+          }
           new_local_path = first_path;
-          return_goal = planned_return;
-          return_goal_precomputed = need_return;
           published_goal = first_side_goal;
           planning_success = true;
         }
       } else {
         RCLCPP_WARN(node_->get_logger(),
-                    "[AVOID_PLAN] single-point A* failed: side=%d return=%d",
-                    first_ok ? 1 : 0, return_ok ? 1 : 0);
+                    "[AVOID_PLAN] side A* failed: result=%d poses=%zu",
+                    first_ok ? 1 : 0, first_path.poses.size());
       }
 
       if (planning_success) {
         new_local_path.header.stamp = node_->now();
         {
           std::lock_guard<std::mutex> lock(avoidance_mutex_);
-          avoidance_return_goal_ = return_goal;
-          avoidance_return_goal_precomputed_ = return_goal_precomputed;
+          if (!avoidance_active_ ||
+              avoidance_stage_ != AvoidanceStage::FIRST_SIDE_GOAL) {
+            return false;
+          }
           avoidance_side_path_ = first_path;
-          avoidance_return_path_ = return_path;
           avoidance_corridor_selected_ = true;
+          consecutive_planning_failures_ = 0;
         }
         RCLCPP_INFO(node_->get_logger(),
-                    "[AVOID_PLAN] fixed path locked: side=(%.3f,%.3f) "
-                    "return=%s(%.3f,%.3f) mode=%s",
-                    first_side_goal.x, first_side_goal.y,
-                    return_goal_precomputed ? "yes" : "no",
-                    return_goal.x, return_goal.y,
-                    return_goal_precomputed
-                        ? (return_uses_direct_path ? "DIRECT" : "ASTAR")
-                        : "NONE");
+                    "[AVOID_PLAN] side path locked: goal=(%.3f,%.3f); "
+                    "return path will be planned after reaching it",
+                    first_side_goal.x, first_side_goal.y);
       }
     }
   }
@@ -777,15 +1135,21 @@ bool LocalAvoidanceManager::computeLocalPath() {
     // 这里直接使用 A* 原始路径，保证可视化和跟踪都忠实于栅格规划结果。
     nav_msgs::msg::Path planned_path = new_local_path;
 
-    // 更新局部路径
+    // 更新局部路径。状态检查与路径提交按avoidance->path的固定锁顺序
+    // 原子完成，防止暂停取消任务时规划线程又提交一条旧临时路径。
     {
-      std::lock_guard<std::mutex> lock(path_mutex_);
+      std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
+      if (!avoidance_active_ || avoidance_stage_ != planning_stage) {
+        return false;
+      }
+      std::lock_guard<std::mutex> path_lock(path_mutex_);
       previous_local_path_ = local_path_; // 保存之前的路径
       local_path_ = planned_path;
       local_path_valid_ = true;
-      // 新段路径已经可见后再通知控制层清零索引，避免状态先切换、路径仍是
-      // 第一段时产生一次错误的跟踪周期。
-      if (local_segment_changed) {
+      // 新路径已经可见后再通知控制层清零索引。除侧向段/回归段切换外，
+      // 同一阶段因Costmap变化重规划也会改变路径长度和点序，不能继续使用
+      // 旧路径索引。
+      if (local_segment_changed || same_stage_path_replanned) {
         stage_alignment_requested_.store(true);
       }
     }
@@ -804,6 +1168,8 @@ bool LocalAvoidanceManager::computeLocalPath() {
                  planned_path.poses.size());
     return true;
   } else {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+                         "[AVOID_RETRY] A* returned no usable local path");
     markAvoidanceFailed("A* returned no path");
     local_path_valid_ = false;
     return false;
@@ -811,9 +1177,18 @@ bool LocalAvoidanceManager::computeLocalPath() {
 }
 
 void LocalAvoidanceManager::markAvoidanceFailed(const char *reason) {
+  int failure_count = 0;
   {
     std::lock_guard<std::mutex> lock(avoidance_mutex_);
     if (!avoidance_active_) {
+      return;
+    }
+    failure_count = ++consecutive_planning_failures_;
+    if (failure_count < avoidance_max_planning_failures_) {
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[AVOID_RETRY] planning failure %d/%d: %s",
+          failure_count, avoidance_max_planning_failures_, reason);
       return;
     }
     avoidance_active_ = false;
@@ -822,8 +1197,9 @@ void LocalAvoidanceManager::markAvoidanceFailed(const char *reason) {
   }
 
   clearLocalPath();
-  RCLCPP_ERROR(node_->get_logger(), "[AVOID_PLAN] avoidance failed: %s",
-               reason);
+  RCLCPP_ERROR(node_->get_logger(),
+               "[AVOID_PLAN] avoidance failed after %d attempts: %s",
+               failure_count, reason);
 }
 
 void LocalAvoidanceManager::clearLocalPath() {

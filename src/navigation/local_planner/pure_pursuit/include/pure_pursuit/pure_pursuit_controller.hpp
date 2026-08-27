@@ -19,6 +19,9 @@ struct PurePursuitControllerConfig {
   double yaw_tolerance{0.1};
   double yaw_adjustment_gain{1.0};
   double final_yaw_min_angular_velocity{0.28};
+  double local_avoidance_align_enter_angle{0.524};
+  double local_avoidance_align_exit_angle{0.105};
+  double local_avoidance_min_linear_velocity{0.4};
 };
 
 // 有状态的速度控制层：只把前瞻目标转换成Twist，不负责选择路径或触发绕障。

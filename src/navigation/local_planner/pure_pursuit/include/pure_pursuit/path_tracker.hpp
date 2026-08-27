@@ -30,10 +30,15 @@ struct TrackingContext {
   TrackingPathType path_type{TrackingPathType::kGlobal};
   std::size_t progress_index{0U};
   double current_velocity{0.0};
+  // 大于0时使用固定前瞻距离。局部A*路径需要更短前瞻，避免在折角切弯。
+  double lookahead_distance_override{0.0};
 };
 
 struct TrackingResult {
   geometry_msgs::msg::PointStamped lookahead_point;
+  // 机器人当前实际投影所在的路径段。它与前瞻点所在段必须分开保存，
+  // 否则把前瞻点索引当作机器人进度会在每个控制周期持续向前跳段。
+  std::size_t progress_index{0U};
   std::size_t path_index{0U};
 };
 

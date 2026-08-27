@@ -12,7 +12,7 @@ namespace pure_pursuit_local_planner {
 bool PathTracker::initialize(rclcpp::Node::SharedPtr node,
                              const PathTrackerConfig &config) {
   node_ = node;
-  if (config.lookahead_distance_min < 0.0 ||
+  if (config.lookahead_distance_min < 0.05 ||
       config.lookahead_distance_max < config.lookahead_distance_min ||
       config.max_linear_velocity < 0.0 || config.output_frame.empty()) {
     RCLCPP_ERROR(node_->get_logger(), "Invalid path tracker configuration");
@@ -57,17 +57,136 @@ std::optional<TrackingResult> PathTracker::computeTrackingLookahead(
                 context.current_velocity / config_.max_linear_velocity, 0.0,
                 1.0)
           : 0.0;
-  const double lookahead_distance =
+  const double velocity_lookahead =
       config_.lookahead_distance_min +
       velocity_factor *
           (config_.lookahead_distance_max - config_.lookahead_distance_min);
+  const double lookahead_distance =
+      context.lookahead_distance_override > 0.0
+          ? std::clamp(context.lookahead_distance_override, 0.05,
+                       config_.lookahead_distance_max)
+          : velocity_lookahead;
   const double robot_x = robot_pose.pose.position.x;
   const double robot_y = robot_pose.pose.position.y;
   // 全局和局部路径都从各自的单调进度开始搜索，禁止回归阶段重新追踪
   // 已经驶过的局部路径段。
-  const std::size_t start_index = context.progress_index;
-  if (start_index >= path.poses.size())
-    return std::nullopt;
+  std::size_t start_index = context.progress_index;
+  if (start_index >= path.poses.size()) {
+    if (context.path_type == TrackingPathType::kGlobal) {
+      return std::nullopt;
+    }
+    // 局部A*会在Costmap变化后异步替换路径。新路径可能比旧路径短，
+    // 此时旧进度索引不能作为永久失败条件；新局部路径从当前机器人位姿
+    // 附近生成，从起点重新投影即可恢复跟踪。
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "[PP_LOCAL_INDEX_RESET] stale progress=%zu exceeds new path size=%zu; "
+        "restart projection from path start",
+        start_index, path.poses.size());
+    start_index = 0U;
+  }
+
+  TrackingResult result;
+  result.lookahead_point.header.frame_id = config_.output_frame;
+  result.lookahead_point.header.stamp = node_->now();
+
+  // A*路径点密且可能在机器人附近折返。局部路径若沿用“在整条路径上
+  // 选择累计进度最大的圆交点”，很容易一次跳到末端，随后单调索引又
+  // 禁止回退。局部路径固定从机器人最近投影沿弧长取前瞻点，并把投影
+  // 段与前瞻段分别返回。
+  if (context.path_type != TrackingPathType::kGlobal) {
+    if (path.poses.size() == 1U) {
+      result.lookahead_point.point = path.poses.front().pose.position;
+      result.progress_index = 0U;
+      result.path_index = 0U;
+      return result;
+    }
+
+    std::size_t projection_segment = start_index;
+    double projection_ratio = 0.0;
+    double min_projection_distance_sq =
+        std::numeric_limits<double>::infinity();
+    double searched_arc_length = 0.0;
+    // 只在当前进度前方的有限弧长内匹配，防止路径折返/自交时吸附到
+    // 数米外的后续分支。窗口至少覆盖两个局部前瞻距离。
+    const double projection_search_arc =
+        std::max(0.50, 2.0 * lookahead_distance);
+
+    for (std::size_t i = start_index; i + 1 < path.poses.size(); ++i) {
+      const auto &p1 = path.poses[i].pose.position;
+      const auto &p2 = path.poses[i + 1].pose.position;
+      const double segment_x = p2.x - p1.x;
+      const double segment_y = p2.y - p1.y;
+      const double segment_length_sq =
+          segment_x * segment_x + segment_y * segment_y;
+      const double segment_length = std::sqrt(segment_length_sq);
+      if (segment_length_sq >= 1e-8) {
+        const double ratio = std::clamp(
+            ((robot_x - p1.x) * segment_x +
+             (robot_y - p1.y) * segment_y) /
+                segment_length_sq,
+            0.0, 1.0);
+        const double projected_x = p1.x + ratio * segment_x;
+        const double projected_y = p1.y + ratio * segment_y;
+        const double distance_sq =
+            (robot_x - projected_x) * (robot_x - projected_x) +
+            (robot_y - projected_y) * (robot_y - projected_y);
+        if (distance_sq < min_projection_distance_sq) {
+          min_projection_distance_sq = distance_sq;
+          projection_segment = i;
+          projection_ratio = ratio;
+        }
+      }
+
+      searched_arc_length += segment_length;
+      if (searched_arc_length >= projection_search_arc) break;
+    }
+
+    if (!std::isfinite(min_projection_distance_sq)) {
+      result.lookahead_point.point = path.poses[start_index].pose.position;
+      result.progress_index = start_index;
+      result.path_index = start_index;
+      return result;
+    }
+
+    double remaining_distance = lookahead_distance;
+    for (std::size_t i = projection_segment; i + 1 < path.poses.size(); ++i) {
+      const auto &p1 = path.poses[i].pose.position;
+      const auto &p2 = path.poses[i + 1].pose.position;
+      const double segment_x = p2.x - p1.x;
+      const double segment_y = p2.y - p1.y;
+      const double segment_length = std::hypot(segment_x, segment_y);
+      if (segment_length < 1e-8) continue;
+
+      const double segment_start_ratio =
+          i == projection_segment ? projection_ratio : 0.0;
+      const double available_length =
+          (1.0 - segment_start_ratio) * segment_length;
+      if (remaining_distance <= available_length) {
+        const double target_ratio =
+            segment_start_ratio + remaining_distance / segment_length;
+        result.lookahead_point.point.x = p1.x + target_ratio * segment_x;
+        result.lookahead_point.point.y = p1.y + target_ratio * segment_y;
+        result.lookahead_point.point.z =
+            p1.z + target_ratio * (p2.z - p1.z);
+        result.progress_index = projection_segment;
+        result.path_index = i;
+        RCLCPP_INFO_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 1000,
+            "[PP_LOCAL_LOOKAHEAD] path=%s start=%zu projection=%zu "
+            "target=%zu lateral_error=%.3f lookahead=%.3f",
+            pathTypeLabel(context.path_type), start_index, projection_segment,
+            i, std::sqrt(min_projection_distance_sq), lookahead_distance);
+        return result;
+      }
+      remaining_distance -= available_length;
+    }
+
+    result.lookahead_point.point = path.poses.back().pose.position;
+    result.progress_index = projection_segment;
+    result.path_index = path.poses.size() - 1U;
+    return result;
+  }
 
   bool intersection_found = false;
   std::size_t best_segment_index = 0;
@@ -97,11 +216,9 @@ std::optional<TrackingResult> PathTracker::computeTrackingLookahead(
     cumulative_path_length += calculateDistance(p1, p2);
   }
 
-  TrackingResult result;
-  result.lookahead_point.header.frame_id = config_.output_frame;
-  result.lookahead_point.header.stamp = node_->now();
   if (intersection_found) {
     result.lookahead_point.point = best_intersection;
+    result.progress_index = best_segment_index;
     result.path_index = best_segment_index;
     return result;
   }
@@ -142,6 +259,7 @@ std::optional<TrackingResult> PathTracker::computeTrackingLookahead(
 
   if (!std::isfinite(min_projection_distance_sq)) {
     result.lookahead_point.point = path.poses[start_index].pose.position;
+    result.progress_index = start_index;
     result.path_index = start_index;
     return result;
   }
@@ -167,6 +285,7 @@ std::optional<TrackingResult> PathTracker::computeTrackingLookahead(
       result.lookahead_point.point.y = p1.y + target_ratio * segment_y;
       result.lookahead_point.point.z =
           p1.z + target_ratio * (p2.z - p1.z);
+      result.progress_index = projection_segment;
       result.path_index = i;
       RCLCPP_INFO_THROTTLE(
           node_->get_logger(), *node_->get_clock(), 1000,
@@ -182,6 +301,7 @@ std::optional<TrackingResult> PathTracker::computeTrackingLookahead(
   }
 
   result.lookahead_point.point = path.poses.back().pose.position;
+  result.progress_index = projection_segment;
   result.path_index = path.poses.size() - 1;
   RCLCPP_INFO_THROTTLE(
       node_->get_logger(), *node_->get_clock(), 1000,

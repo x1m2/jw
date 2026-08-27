@@ -15,6 +15,9 @@ struct AvoidanceObservation {
   ObstacleDecision decision{ObstacleDecision::CLEAR};
   geometry_msgs::msg::Point obstacle_center;
   double obstacle_distance{0.0};
+  // 障碍中心在base_link中的横向坐标：左正、右负。Manager需要该值
+  // 在左右通道检测都失败时仍能优先向障碍相反侧脱困。
+  double obstacle_local_y{0.0};
   bool left_clear{false};
   bool right_clear{false};
 };
@@ -26,6 +29,7 @@ enum class AvoidanceSide { NONE, LEFT, RIGHT };
 enum class AvoidanceStage {
   IDLE,
   FIRST_SIDE_GOAL,
+  RETURN_PATH_PLANNING,
   RETURN_GOAL,
   WAITING_DYNAMIC_PATH,
   COMPLETED,

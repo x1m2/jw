@@ -255,40 +255,69 @@ bool AvoidancePathPlanner::isPathCollisionFree(
 bool AvoidancePathPlanner::isPathOutsideObstacleRadius(
     const nav_msgs::msg::Path &path,
     const geometry_msgs::msg::Point &obstacle_center,
-    double required_clearance, double *minimum_clearance) const {
+    double required_clearance, double *minimum_clearance,
+    bool allow_initial_escape) const {
   double minimum = std::numeric_limits<double>::max();
   if (path.poses.empty()) {
     if (minimum_clearance) *minimum_clearance = minimum;
     return false;
   }
 
-  auto update_point_distance = [&](const geometry_msgs::msg::Point &point) {
-    minimum = std::min(minimum, calculateDistance(point, obstacle_center));
-  };
-  update_point_distance(path.poses.front().pose.position);
+  const double start_clearance = calculateDistance(
+      path.poses.front().pose.position, obstacle_center);
+  minimum = start_clearance;
+  const bool starts_inside = start_clearance < required_clearance;
+  const bool escaping_from_inside = allow_initial_escape && starts_inside;
+  // 允许一个Costmap栅格量级的离散误差，但不能借“脱离”名义继续明显
+  // 靠近障碍。退出净空圈后的所有路径段仍执行严格的0.80m校验。
+  const double escape_tolerance =
+      std::min(0.05, std::max(0.0, required_clearance) * 0.10);
+  const double escape_floor =
+      std::max(0.0, start_clearance - escape_tolerance);
+  bool escaped = !starts_inside;
+
   for (std::size_t i = 1; i < path.poses.size(); ++i) {
     const auto &a = path.poses[i - 1].pose.position;
     const auto &b = path.poses[i].pose.position;
     const double dx = b.x - a.x;
     const double dy = b.y - a.y;
     const double length_squared = dx * dx + dy * dy;
+    double segment_minimum = calculateDistance(b, obstacle_center);
     if (length_squared <= 1e-12) {
-      update_point_distance(b);
-      continue;
+      segment_minimum = std::min(
+          segment_minimum, calculateDistance(a, obstacle_center));
+    } else {
+      const double projection = std::clamp(
+          ((obstacle_center.x - a.x) * dx +
+           (obstacle_center.y - a.y) * dy) /
+              length_squared,
+          0.0, 1.0);
+      geometry_msgs::msg::Point closest;
+      closest.x = a.x + projection * dx;
+      closest.y = a.y + projection * dy;
+      segment_minimum = calculateDistance(closest, obstacle_center);
     }
-    const double projection = std::clamp(
-        ((obstacle_center.x - a.x) * dx +
-         (obstacle_center.y - a.y) * dy) /
-            length_squared,
-        0.0, 1.0);
-    geometry_msgs::msg::Point closest;
-    closest.x = a.x + projection * dx;
-    closest.y = a.y + projection * dy;
-    minimum = std::min(minimum, calculateDistance(closest, obstacle_center));
+    minimum = std::min(minimum, segment_minimum);
+
+    if (!escaping_from_inside) continue;
+    if (!escaped) {
+      if (segment_minimum < escape_floor) {
+        if (minimum_clearance) *minimum_clearance = minimum;
+        return false;
+      }
+      if (calculateDistance(b, obstacle_center) >= required_clearance) {
+        escaped = true;
+      }
+    } else if (segment_minimum < required_clearance) {
+      if (minimum_clearance) *minimum_clearance = minimum;
+      return false;
+    }
   }
 
   if (minimum_clearance) *minimum_clearance = minimum;
-  return std::isfinite(minimum) && minimum >= required_clearance;
+  if (!std::isfinite(minimum)) return false;
+  if (escaping_from_inside) return escaped;
+  return minimum >= required_clearance;
 }
 
 void AvoidancePathPlanner::publishVisualization(

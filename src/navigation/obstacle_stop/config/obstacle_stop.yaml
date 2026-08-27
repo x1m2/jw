@@ -19,11 +19,11 @@
     grid_height: 50
     inflation_radius: 0.1
 
-    safety_margin: 0.10
+    safety_margin: 0.05
     # 近矩形：从车体前缘开始，检测到障碍后强制停车。
-    hard_stop_distance: 0.40
+    hard_stop_distance: 0.10
     # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
-    slowdown_distance: 0.60
+    slowdown_distance: 0.20
     obstacle_ratio_threshold: 0.10
 
     linear_velocity_factor: 0.40
@@ -31,6 +31,13 @@
     # 障碍消失后延迟解除，避免点云波动导致速度状态频繁切换。
     hard_stop_clear_delay: 0.30
     slowdown_clear_delay: 0.50
+
+    # 将检测矩形分成左/中/右三区。单侧障碍且规划速度明确向相反侧运动时，
+    # 只释放该侧停障；中央障碍、两侧夹障和转向不足仍然停车。
+    directional_release_enabled: true
+    directional_center_half_width: 0.20
+    # 检测区域中心横向速度 |vy + wz*x| 至少达到该值才认为正在脱离（m/s）。
+    directional_escape_velocity_threshold: 0.05
 
     lidar_timeout_sec: 0.30
     command_timeout_sec: 0.30

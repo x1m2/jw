@@ -72,7 +72,7 @@ class FrontObstacleDetector {
 
   bool detectObstacleInRectLocal(
       const geometry_msgs::msg::PoseStamped& robot_pose, double x_min,
-      double x_max, double y_min, double y_max);
+      double x_max, double y_min, double y_max, double ratio_threshold);
   bool findObstacleInSectorLocal(
       const geometry_msgs::msg::PoseStamped& robot_pose, double min_radius,
       double max_radius, double angle_deg, AvoidanceInfo& info);
@@ -117,6 +117,8 @@ class FrontObstacleDetector {
   double avoid_max_distance_;        // 绕障检测最大距离
   double avoid_sector_angle_;        // 绕障检测扇形角度
   double side_passage_width_;        // 左右通道检测宽度
+  double side_passage_obstacle_ratio_threshold_; // 通道障碍占比阈值
+  double near_side_obstacle_lateral_threshold_; // 近障碍判为单侧障碍的横向阈值
   bool enable_path_corridor_filter_;  // 是否只处理全局路径走廊内的绕障障碍
   double path_obstacle_margin_;  // 路径走廊额外安全边距
   double path_check_distance_;  // 机器人前方参与绕障判断的路径长度

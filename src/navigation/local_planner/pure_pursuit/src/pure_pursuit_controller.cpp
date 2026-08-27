@@ -37,6 +37,7 @@ bool PurePursuitController::computeCommand(
     int current_path_index, geometry_msgs::msg::Twist &cmd_vel) {
   const double effective_angular_velocity =
       std::clamp(angular_velocity_limit, 0.0, config_.max_angular_velocity);
+  const double velocity_ceiling = std::abs(target_velocity);
   const double dx = lookahead_point.point.x - robot_pose.pose.position.x;
   const double dy = lookahead_point.point.y - robot_pose.pose.position.y;
   const double distance = std::hypot(dx, dy);
@@ -60,12 +61,14 @@ bool PurePursuitController::computeCommand(
       path_yaw + (direction == -1 ? M_PI : 0.0));
   const double yaw_error = tf2NormalizeAngle(target_yaw - robot_yaw);
   const double yaw_error_abs = std::abs(yaw_error);
-  // 局部绕障路径包含侧向切入/切出弯道，35°就原地旋转会让机器人在
-  // 点1和回归点频繁停车。局部路径允许更大的边走边转范围。
+  // 局部A*路径靠近障碍物时不能用全局路径的大角度边走边转策略，否则
+  // Pure Pursuit会切过折角。超过局部进入阈值时重新原地对准。
   const double rotate_enter_threshold =
-      tf2Radians(local_replanning_active ? 65.0 : 35.0);
+      local_replanning_active ? config_.local_avoidance_align_enter_angle
+                              : tf2Radians(35.0);
   const double rotate_exit_threshold =
-      tf2Radians(local_replanning_active ? 15.0 : 10.0);
+      local_replanning_active ? config_.local_avoidance_align_exit_angle
+                              : tf2Radians(10.0);
   const double correct_enter_threshold = tf2Radians(8.0);
   const double correct_exit_threshold = tf2Radians(4.0);
   const double angular_gain = 0.7;
@@ -74,8 +77,9 @@ bool PurePursuitController::computeCommand(
 
   // 刚切入局部路径时优先完成一次方向对齐，避免带线速度横切局部路径。
   if (local_replanning_active && local_avoidance_aligning_) {
-    const double avoid_align_exit_threshold = tf2Radians(8.0);
-    if (yaw_error_abs < avoid_align_exit_threshold) {
+    // 每一段新的局部路径都必须先对准到退出阈值内。不能因为初始误差
+    // 小于进入阈值就直接前进，否则车体会切向障碍物而不是贴合A*路径。
+    if (yaw_error_abs < config_.local_avoidance_align_exit_angle) {
       local_avoidance_aligning_ = false;
       aligning_ = false;
       correcting_ = false;
@@ -152,6 +156,15 @@ bool PurePursuitController::computeCommand(
 
   cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -effective_angular_velocity,
                                  effective_angular_velocity);
+  // 局部绕障进入行走阶段后保持至少0.4m/s巡航；原地对准时vx为0，
+  // 边策略给出的速度上限更低时仍优先服从上限。
+  if (local_replanning_active && std::abs(cmd_vel.linear.x) > 1e-6) {
+    const double minimum_cruise = std::min(
+        config_.local_avoidance_min_linear_velocity, velocity_ceiling);
+    if (std::abs(cmd_vel.linear.x) < minimum_cruise) {
+      cmd_vel.linear.x = std::copysign(minimum_cruise, cmd_vel.linear.x);
+    }
+  }
   RCLCPP_INFO_THROTTLE(
       node_->get_logger(), *node_->get_clock(), 500,
       "[PP_CMD] robot=(%.3f, %.3f, yaw=%.2f deg), "

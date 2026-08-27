@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def find_robot_param(package_share):
@@ -24,6 +25,8 @@ def generate_launch_description():
     config_file = LaunchConfiguration('config_file')
     robot_param_file = LaunchConfiguration('robot_param_file')
     runtime_profile = LaunchConfiguration('runtime_profile')
+    lidar_type = LaunchConfiguration('lidar_type')
+    lidar_topic = LaunchConfiguration('lidar_topic')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -41,6 +44,16 @@ def generate_launch_description():
             default_value='test',
             description='test autostarts; platform waits for slam_manager',
         ),
+        DeclareLaunchArgument(
+            'lidar_type',
+            default_value='1',
+            description='1 uses Livox CustomMsg; other values use PointCloud2',
+        ),
+        DeclareLaunchArgument(
+            'lidar_topic',
+            default_value='/livox/lidar',
+            description='Input Livox or semantic obstacle cloud topic',
+        ),
         Node(
             package='obstacle_stop',
             executable='obstacle_stop_node',
@@ -48,7 +61,11 @@ def generate_launch_description():
             parameters=[
                 config_file,
                 robot_param_file,
-                {'runtime_profile': runtime_profile},
+                {
+                    'runtime_profile': runtime_profile,
+                    'lidar_type': ParameterValue(lidar_type, value_type=int),
+                    'lidar_topic': lidar_topic,
+                },
             ],
         ),
     ])

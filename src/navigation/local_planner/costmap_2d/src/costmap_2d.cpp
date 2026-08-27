@@ -85,6 +85,7 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("livox_topic", "/livox/lidar");
   node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
   node_->declare_parameter<int>("lidar_type", 1);
+  node_->declare_parameter<bool>("pointcloud2_in_base_frame", false);
 
   node_->declare_parameter<std::vector<double>>("lidar_to_base_T",
                                                 std::vector<double>());
@@ -120,6 +121,8 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("livox_topic", livox_topic_);
   node_->get_parameter("lidar_frame", lidar_frame_);
   node_->get_parameter("lidar_type", lidar_type_);
+  node_->get_parameter("pointcloud2_in_base_frame",
+                       pointcloud2_in_base_frame_);
 
   std::vector<double> lidar_to_base_T;
   std::vector<double> lidar_to_base_R;
@@ -258,10 +261,6 @@ void CostMap2D::livoxCallback(
 
 void CostMap2D::pointCloud2Callback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr pointcloud_msg) {
-  if (pointcloud_msg->data.empty()) {
-    return;
-  }
-
   if (!pointcloud_msg->header.frame_id.empty() &&
       pointcloud_msg->header.frame_id != lidar_frame_) {
     RCLCPP_WARN_THROTTLE(
@@ -296,8 +295,10 @@ void CostMap2D::projectLidarPoint(double x, double y, double z,
     return;
   }
 
-  const Eigen::Vector3d point_base =
-      lidar_to_base_transform_ * Eigen::Vector3d(x, y, z);
+  Eigen::Vector3d point_base(x, y, z);
+  if (lidar_type_ == 1 || !pointcloud2_in_base_frame_) {
+    point_base = lidar_to_base_transform_ * point_base;
+  }
   if (point_base.z() < projection_config_.min_height ||
       point_base.z() > projection_config_.max_height) {
     return;

@@ -52,7 +52,7 @@ public:
   LocalAvoidanceOutput update(
       const geometry_msgs::msg::PoseStamped &robot_pose,
       const AvoidanceObservation &observation, bool avoidance_enabled,
-      bool global_controller_aligning);
+      bool global_controller_aligning, bool safety_stop_blocking = false);
   void reset();
   bool isTrackingLocal() const;
 
@@ -102,12 +102,24 @@ private:
   std::string robot_frame_;    // 机器人坐标系
   double transform_tolerance_; // TF变换容忍度
   double avoidance_reentry_cooldown_;
+  double avoidance_failure_retry_cooldown_{2.0};
+  int avoidance_max_planning_failures_{15};
+  double avoidance_stall_timeout_{1.5};
+  double avoidance_stall_distance_{0.05};
+  double avoidance_stall_yaw_change_{0.0872664626};
 
   // 控制层状态也由Manager唯一持有，避免PurePursuit再维护镜像布尔量。
   bool tracking_local_;
   bool failure_latched_;
+  bool has_failure_latch_time_{false};
+  rclcpp::Time failure_latch_time_;
+  int recovery_attempt_{0};
   bool has_last_avoidance_complete_time_;
   rclcpp::Time last_avoidance_complete_time_;
+  bool stall_monitoring_{false};
+  rclcpp::Time stall_start_time_;
+  geometry_msgs::msg::Point stall_start_position_;
+  double stall_start_yaw_{0.0};
 
   // 静态路径：单个侧向临时点 -> 回归点；动态路径在临时点等待新路径。
   bool avoidance_active_;
@@ -121,6 +133,7 @@ private:
   AvoidanceSide avoidance_side_{AvoidanceSide::NONE};
   // 两段路径在本次绕障期间保持不变，但控制器一次只能看到当前阶段。
   bool avoidance_corridor_selected_{false};
+  int consecutive_planning_failures_{0};
   nav_msgs::msg::Path avoidance_side_path_;
   nav_msgs::msg::Path avoidance_return_path_;
   double avoidance_lateral_clearance_;
@@ -128,6 +141,7 @@ private:
   double avoidance_max_return_angle_;
   double avoidance_near_stop_clearance_{1.0};
   double avoidance_near_stop_margin_{0.0};
+  double avoidance_path_clearance_{0.5};
   double avoidance_goal_tolerance_;
   double avoidance_return_goal_clearance_;
   double avoidance_return_obstacle_clearance_;

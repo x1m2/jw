@@ -8,10 +8,13 @@
 #include <memory>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <string>
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
+
+#include "obstacle_stop/directional_obstacle_policy.hpp"
 
 namespace obstacle_stop {
 
@@ -61,6 +64,9 @@ class ObstacleStop {
     double angular_velocity_factor{1.0};
     double hard_stop_clear_delay{0.30};
     double slowdown_clear_delay{0.50};
+    bool directional_release_enabled{true};
+    double directional_center_half_width{0.20};
+    double directional_escape_velocity_threshold{0.05};
 
     // 数据时效和调试参数。
     double lidar_timeout_sec{0.30};
@@ -74,10 +80,18 @@ class ObstacleStop {
     int y{0};
   };
 
+  struct DirectionalZoneCells {
+    std::vector<std::size_t> left;
+    std::vector<std::size_t> center;
+    std::vector<std::size_t> right;
+  };
+
   void loadParameters();
   void initializeGridLookup();
   void lidarCallback(
       const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr message);
+  void pointCloud2Callback(
+      const sensor_msgs::msg::PointCloud2::ConstSharedPtr message);
   void plannedVelocityCallback(
       const geometry_msgs::msg::Twist::ConstSharedPtr message);
   void emergencyStopCallback(const std_msgs::msg::Bool::ConstSharedPtr message);
@@ -90,11 +104,25 @@ class ObstacleStop {
   void buildObstacleGrid(
       const livox_ros_driver2::msg::CustomMsg &message,
       std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
+  bool buildObstacleGrid(
+      const sensor_msgs::msg::PointCloud2 &message,
+      std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
+  void addBasePointToGrid(double x, double y, double z,
+                          std::vector<uint8_t> &grid,
+                          std::vector<GridCell> &occupied_cells) const;
+  void processObstacleGrid(std::vector<uint8_t> &grid,
+                           std::vector<GridCell> &occupied_cells,
+                           bool input_valid);
   void inflateGrid(std::vector<uint8_t> &grid,
                    const std::vector<GridCell> &occupied_cells) const;
   std::vector<std::size_t> buildRectangleCellIndices(double x_min, double x_max,
                                                      double y_min,
                                                      double y_max) const;
+  DirectionalZoneCells buildDirectionalZoneCells(double x_min,
+                                                  double x_max) const;
+  DirectionalZoneOccupancy measureDirectionalZone(
+      const std::vector<uint8_t> &grid,
+      const DirectionalZoneCells &zone_cells) const;
   bool obstacleInCells(const std::vector<uint8_t> &grid,
                        const std::vector<std::size_t> &cells) const;
   bool localToGrid(double x, double y, int &mx, int &my) const;
@@ -107,6 +135,8 @@ class ObstacleStop {
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr lidar_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
+      pointcloud2_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr planned_cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
@@ -120,12 +150,13 @@ class ObstacleStop {
   std::string planned_cmd_topic_;
   std::string safe_cmd_topic_;
   std::string base_frame_;
+  int lidar_type_{1};  // 1: Livox CustomMsg，其他: base_link PointCloud2
   // MID360坐标系到机器人base_link坐标系的固定外参。
   Eigen::Isometry3d lidar_to_base_{Eigen::Isometry3d::Identity()};
   ObstacleStopConfig config_;
   std::vector<GridCell> inflation_offsets_;
-  std::vector<std::size_t> hard_stop_cells_;
-  std::vector<std::size_t> slowdown_cells_;
+  DirectionalZoneCells hard_stop_zone_cells_;
+  DirectionalZoneCells slowdown_zone_cells_;
 
   // 回调与控制定时器可能并发访问以下状态。
   mutable std::mutex mutex_;

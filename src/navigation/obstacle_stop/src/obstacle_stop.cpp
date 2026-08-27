@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <stdexcept>
 #include <utility>
 
@@ -25,10 +26,19 @@ bool ObstacleStop::initialize() {
   loadParameters();
   initializeGridLookup();
 
-  // 输入为MID360原始点云、规划速度和外部急停信号。
-  lidar_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-      lidar_topic_, rclcpp::SensorDataQoS(),
-      std::bind(&ObstacleStop::lidarCallback, this, std::placeholders::_1));
+  // 默认保持MID360原始点云模式；UWB楼梯跟随使用已经在base_link下的
+  // obstacle_cloud，使台阶过滤结果同时作用于绕障和最终停障。
+  if (lidar_type_ == 1) {
+    lidar_sub_ = node_->create_subscription<livox_ros_driver2::msg::CustomMsg>(
+        lidar_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&ObstacleStop::lidarCallback, this, std::placeholders::_1));
+  } else {
+    pointcloud2_sub_ =
+        node_->create_subscription<sensor_msgs::msg::PointCloud2>(
+            lidar_topic_, rclcpp::SensorDataQoS(),
+            std::bind(&ObstacleStop::pointCloud2Callback, this,
+                      std::placeholders::_1));
+  }
   planned_cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
       planned_cmd_topic_, 10,
       std::bind(&ObstacleStop::plannedVelocityCallback, this,
@@ -58,8 +68,10 @@ bool ObstacleStop::initialize() {
 
   RCLCPP_INFO(
       node_->get_logger(),
-      "Obstacle stop initialized: lidar=%s, planned_cmd=%s, safe_cmd=%s",
-      lidar_topic_.c_str(), planned_cmd_topic_.c_str(),
+      "Obstacle stop initialized: lidar=%s (type=%s), planned_cmd=%s, "
+      "safe_cmd=%s",
+      lidar_topic_.c_str(), lidar_type_ == 1 ? "Livox" : "PointCloud2",
+      planned_cmd_topic_.c_str(),
       safe_cmd_topic_.c_str());
   return true;
 }
@@ -67,6 +79,7 @@ bool ObstacleStop::initialize() {
 void ObstacleStop::loadParameters() {
   lidar_topic_ =
       node_->declare_parameter<std::string>("lidar_topic", "/livox/lidar");
+  lidar_type_ = node_->declare_parameter<int>("lidar_type", 1);
   planned_cmd_topic_ = node_->declare_parameter<std::string>(
       "planned_cmd_topic", "/cmd_vel_planned");
   safe_cmd_topic_ =
@@ -125,6 +138,17 @@ void ObstacleStop::loadParameters() {
       "hard_stop_clear_delay", config_.hard_stop_clear_delay);
   config_.slowdown_clear_delay = node_->declare_parameter<double>(
       "slowdown_clear_delay", config_.slowdown_clear_delay);
+  config_.directional_release_enabled = node_->declare_parameter<bool>(
+      "directional_release_enabled", config_.directional_release_enabled);
+  config_.directional_center_half_width = std::clamp(
+      node_->declare_parameter<double>(
+          "directional_center_half_width",
+          config_.directional_center_half_width),
+      0.0, config_.robot_width * 0.5 + config_.safety_margin);
+  config_.directional_escape_velocity_threshold = std::max(
+      0.0, node_->declare_parameter<double>(
+               "directional_escape_velocity_threshold",
+               config_.directional_escape_velocity_threshold));
   config_.lidar_timeout_sec = node_->declare_parameter<double>(
       "lidar_timeout_sec", config_.lidar_timeout_sec);
   config_.command_timeout_sec = node_->declare_parameter<double>(
@@ -153,30 +177,95 @@ void ObstacleStop::initializeGridLookup() {
   }
 
   // 两个检测矩形内的栅格索引固定，避免每帧遍历整张栅格并重复换算坐标。
-  const double half_width = config_.robot_width * 0.5 + config_.safety_margin;
   const double front_edge = config_.robot_length * 0.5;
   const double hard_stop_end = front_edge + config_.hard_stop_distance;
-  hard_stop_cells_ = buildRectangleCellIndices(front_edge, hard_stop_end,
-                                               -half_width, half_width);
-  slowdown_cells_ = buildRectangleCellIndices(
-      hard_stop_end, hard_stop_end + config_.slowdown_distance, -half_width,
-      half_width);
+  hard_stop_zone_cells_ =
+      buildDirectionalZoneCells(front_edge, hard_stop_end);
+  slowdown_zone_cells_ = buildDirectionalZoneCells(
+      hard_stop_end, hard_stop_end + config_.slowdown_distance);
 }
 
 void ObstacleStop::lidarCallback(
     const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr message) {
-  // 点云经过外参和范围过滤后，直接构建并膨胀临时障碍栅格。
   std::vector<uint8_t> grid;
   std::vector<GridCell> occupied_cells;
   const auto grid_cell_count =
       static_cast<std::size_t>(config_.grid_width * config_.grid_height);
   occupied_cells.reserve(std::min(message->points.size(), grid_cell_count));
   buildObstacleGrid(*message, grid, occupied_cells);
-  inflateGrid(grid, occupied_cells);
+  // 原始Livox空消息仍视为传感器异常。
+  processObstacleGrid(grid, occupied_cells, !message->points.empty());
+}
 
-  // 近矩形强制停车，紧接其后的远矩形执行减速。
-  const bool raw_hard_stop = obstacleInCells(grid, hard_stop_cells_);
-  const bool raw_slowdown = obstacleInCells(grid, slowdown_cells_);
+void ObstacleStop::pointCloud2Callback(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr message) {
+  std::vector<uint8_t> grid;
+  std::vector<GridCell> occupied_cells;
+  const auto grid_cell_count =
+      static_cast<std::size_t>(config_.grid_width * config_.grid_height);
+  const auto point_count =
+      static_cast<std::size_t>(message->width) * message->height;
+  occupied_cells.reserve(std::min(point_count, grid_cell_count));
+
+  bool input_valid = true;
+  if (!message->header.frame_id.empty() &&
+      message->header.frame_id != base_frame_) {
+    RCLCPP_ERROR_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 2000,
+        "Semantic obstacle cloud frame '%s' differs from base frame '%s'",
+        message->header.frame_id.c_str(), base_frame_.c_str());
+    input_valid = false;
+  } else {
+    input_valid = buildObstacleGrid(*message, grid, occupied_cells);
+  }
+
+  // obstacle_cloud为空表示本帧分割成功且没有障碍，是有效的自由空间观测。
+  processObstacleGrid(grid, occupied_cells, input_valid);
+}
+
+void ObstacleStop::processObstacleGrid(
+    std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells,
+    bool input_valid) {
+  if (grid.empty()) {
+    grid.assign(
+        static_cast<std::size_t>(config_.grid_width * config_.grid_height),
+        kFree);
+  }
+  if (input_valid) {
+    inflateGrid(grid, occupied_cells);
+  }
+
+  geometry_msgs::msg::Twist planned_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    planned_snapshot = planned_cmd_;
+  }
+
+  const auto hard_occupancy =
+      measureDirectionalZone(grid, hard_stop_zone_cells_);
+  const auto slowdown_occupancy =
+      measureDirectionalZone(grid, slowdown_zone_cells_);
+  const double front_edge = config_.robot_length * 0.5;
+  const double hard_center_x =
+      front_edge + config_.hard_stop_distance * 0.5;
+  const double slowdown_center_x = front_edge + config_.hard_stop_distance +
+                                   config_.slowdown_distance * 0.5;
+  const double hard_lateral_velocity =
+      planned_snapshot.linear.y +
+      planned_snapshot.angular.z * hard_center_x;
+  const double slowdown_lateral_velocity =
+      planned_snapshot.linear.y +
+      planned_snapshot.angular.z * slowdown_center_x;
+  const auto hard_decision = evaluateDirectionalObstacle(
+      hard_occupancy, hard_lateral_velocity,
+      config_.directional_escape_velocity_threshold,
+      config_.directional_release_enabled);
+  const auto slowdown_decision = evaluateDirectionalObstacle(
+      slowdown_occupancy, slowdown_lateral_velocity,
+      config_.directional_escape_velocity_threshold,
+      config_.directional_release_enabled);
+  const bool raw_hard_stop = hard_decision.active;
+  const bool raw_slowdown = slowdown_decision.active;
   const auto now = node_->now();
   bool hard_stop = false;
   bool slowdown = false;
@@ -184,15 +273,27 @@ void ObstacleStop::lidarCallback(
   {
     std::lock_guard<std::mutex> lock(mutex_);
     has_lidar_ = true;
-    // 只把原始点云消息为空视为传感器数据异常。障碍过滤后没有点表示
-    // 当前检测范围内没有有效障碍，不能据此阻断机器运动。
-    lidar_valid_ = !message->points.empty();
+    lidar_valid_ = input_valid;
     if (lidar_valid_) {
       updateObstacleState(raw_hard_stop, raw_slowdown, now);
     }
     hard_stop = hard_stop_active_;
     slowdown = slowdown_active_;
     last_lidar_time_ = now;
+  }
+
+  if (hard_decision.released_left || hard_decision.released_right ||
+      slowdown_decision.released_left || slowdown_decision.released_right) {
+    RCLCPP_INFO_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 500,
+        "[OBSTACLE_DIRECTIONAL_RELEASE] planned=(vy=%.3f,wz=%.3f), "
+        "hard_lateral=%.3f slow_lateral=%.3f, hard(L/C/R)=%d/%d/%d, "
+        "slow(L/C/R)=%d/%d/%d",
+        planned_snapshot.linear.y, planned_snapshot.angular.z,
+        hard_lateral_velocity, slowdown_lateral_velocity,
+        hard_occupancy.left, hard_occupancy.center, hard_occupancy.right,
+        slowdown_occupancy.left, slowdown_occupancy.center,
+        slowdown_occupancy.right);
   }
 
   publishDetectionMarkers(hard_stop, slowdown);
@@ -231,30 +332,62 @@ void ObstacleStop::buildObstacleGrid(
         !std::isfinite(point.z)) {
       continue;
     }
-    // 先应用雷达外参，再按base_link中的高度、距离和角度过滤。
+    // 原始Livox点先应用雷达外参；语义PointCloud2由提取器直接输出在
+    // base_link下，不再走这条变换路径。
     const Eigen::Vector3d point_base =
         lidar_to_base_ * Eigen::Vector3d(point.x, point.y, point.z);
-    if (point_base.z() < config_.min_height ||
-        point_base.z() > config_.max_height) {
-      continue;
-    }
+    addBasePointToGrid(point_base.x(), point_base.y(), point_base.z(), grid,
+                       occupied_cells);
+  }
+}
 
-    const double range = std::hypot(point_base.x(), point_base.y());
-    if (range < config_.range_min || range > config_.range_max) continue;
-    const double angle = std::atan2(point_base.y(), point_base.x());
-    if (angle < config_.angle_min || angle > config_.angle_max) continue;
+bool ObstacleStop::buildObstacleGrid(
+    const sensor_msgs::msg::PointCloud2 &message, std::vector<uint8_t> &grid,
+    std::vector<GridCell> &occupied_cells) const {
+  grid.assign(
+      static_cast<std::size_t>(config_.grid_width * config_.grid_height),
+      kFree);
+  occupied_cells.clear();
 
-    int mx = 0;
-    int my = 0;
-    if (localToGrid(point_base.x(), point_base.y(), mx, my)) {
-      const auto grid_index =
-          static_cast<std::size_t>(my * config_.grid_width + mx);
-      // 同一栅格可能落入多个点云点，只记录一次障碍格。
-      if (grid[grid_index] == kFree) {
-        grid[grid_index] = kOccupied;
-        occupied_cells.push_back(GridCell{mx, my});
-      }
+  // 合法空点云不包含字段，也应被接受为“当前没有障碍”。
+  if (message.data.empty()) return true;
+
+  try {
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(message, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(message, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(message, "z");
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+      addBasePointToGrid(*iter_x, *iter_y, *iter_z, grid, occupied_cells);
     }
+  } catch (const std::runtime_error &error) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Invalid semantic obstacle PointCloud2: %s", error.what());
+    return false;
+  }
+  return true;
+}
+
+void ObstacleStop::addBasePointToGrid(
+    double x, double y, double z, std::vector<uint8_t> &grid,
+    std::vector<GridCell> &occupied_cells) const {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+      z < config_.min_height || z > config_.max_height) {
+    return;
+  }
+
+  const double range = std::hypot(x, y);
+  if (range < config_.range_min || range > config_.range_max) return;
+  const double angle = std::atan2(y, x);
+  if (angle < config_.angle_min || angle > config_.angle_max) return;
+
+  int mx = 0;
+  int my = 0;
+  if (!localToGrid(x, y, mx, my)) return;
+  const auto grid_index =
+      static_cast<std::size_t>(my * config_.grid_width + mx);
+  if (grid[grid_index] == kFree) {
+    grid[grid_index] = kOccupied;
+    occupied_cells.push_back(GridCell{mx, my});
   }
 }
 
@@ -292,6 +425,31 @@ std::vector<std::size_t> ObstacleStop::buildRectangleCellIndices(
     }
   }
   return cells;
+}
+
+ObstacleStop::DirectionalZoneCells ObstacleStop::buildDirectionalZoneCells(
+    double x_min, double x_max) const {
+  const double half_width = config_.robot_width * 0.5 + config_.safety_margin;
+  const double center_half_width = std::min(
+      half_width, std::max(0.0, config_.directional_center_half_width));
+  DirectionalZoneCells zones;
+  zones.left = buildRectangleCellIndices(x_min, x_max, center_half_width,
+                                         half_width);
+  zones.center = buildRectangleCellIndices(
+      x_min, x_max, -center_half_width, center_half_width);
+  zones.right = buildRectangleCellIndices(x_min, x_max, -half_width,
+                                          -center_half_width);
+  return zones;
+}
+
+DirectionalZoneOccupancy ObstacleStop::measureDirectionalZone(
+    const std::vector<uint8_t> &grid,
+    const DirectionalZoneCells &zone_cells) const {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.left = obstacleInCells(grid, zone_cells.left);
+  occupancy.center = obstacleInCells(grid, zone_cells.center);
+  occupancy.right = obstacleInCells(grid, zone_cells.right);
+  return occupancy;
 }
 
 bool ObstacleStop::obstacleInCells(

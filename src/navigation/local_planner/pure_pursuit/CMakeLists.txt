@@ -81,6 +81,21 @@ if(BUILD_TESTING)
   ament_add_gtest(test_astar_planner test/test_astar_planner.cpp)
   target_link_libraries(test_astar_planner ${PROJECT_NAME})
   ament_target_dependencies(test_astar_planner ${dependencies})
+
+  ament_add_gtest(test_pure_pursuit_controller
+    test/test_pure_pursuit_controller.cpp)
+  target_link_libraries(test_pure_pursuit_controller ${PROJECT_NAME})
+  ament_target_dependencies(test_pure_pursuit_controller ${dependencies})
+
+  ament_add_gtest(test_front_obstacle_detector
+    test/test_front_obstacle_detector.cpp)
+  target_link_libraries(test_front_obstacle_detector ${PROJECT_NAME})
+  ament_target_dependencies(test_front_obstacle_detector ${dependencies})
+
+  ament_add_gtest(test_avoidance_path_planner
+    test/test_avoidance_path_planner.cpp)
+  target_link_libraries(test_avoidance_path_planner ${PROJECT_NAME})
+  ament_target_dependencies(test_avoidance_path_planner ${dependencies})
 endif()
 
 ament_package()

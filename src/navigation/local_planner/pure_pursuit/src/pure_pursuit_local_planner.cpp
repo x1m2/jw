@@ -1,5 +1,7 @@
 #include "pure_pursuit/pure_pursuit_local_planner.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 
 #include "pure_pursuit/param_utils.hpp"
@@ -31,6 +33,26 @@ void PurePursuitLocalPlanner::stop() {
 bool PurePursuitLocalPlanner::setPaused(bool paused) {
   navigation_paused_.store(paused);
   if (paused) {
+    // 暂停代表人工或上层接管。全局任务继续保留，但局部绕障路径是基于
+    // 接管前位姿生成的一次性轨迹，恢复后不能再追逐旧临时点。
+    if (local_avoidance_manager_) {
+      const uint8_t previous_avoidance_state = avoidance_state_.load();
+      local_avoidance_manager_->reset();
+      smoothed_local_path_received_ = false;
+      current_path_index_ = static_cast<int>(path_progress_index_);
+      goal_position_reached_ = false;
+      if (controller_) controller_->resetTrackingState();
+      publishAvoidanceFailure(false);
+      LocalAvoidanceOutput idle_output;
+      publishAvoidanceState(idle_output);
+      if (previous_avoidance_state !=
+          navigation_interfaces::msg::AvoidanceState::IDLE) {
+        RCLCPP_INFO(node_->get_logger(),
+                    "[AVOID_CANCEL] navigation paused; discarded local "
+                    "avoidance path so tracking resumes from a fresh path");
+      }
+    }
+
     // 立即发送一次零速度，并要求控制循环持续发送，防止底盘沿用旧指令。
     reset_velocity_on_next_control_.store(true);
     if (cmd_vel_pub_) {
@@ -78,6 +100,12 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   controller_config.yaw_adjustment_gain = config_.yaw_adjustment_gain;
   controller_config.final_yaw_min_angular_velocity =
       config_.final_yaw_min_angular_velocity;
+  controller_config.local_avoidance_align_enter_angle =
+      config_.local_avoidance_align_enter_angle;
+  controller_config.local_avoidance_align_exit_angle =
+      config_.local_avoidance_align_exit_angle;
+  controller_config.local_avoidance_min_linear_velocity =
+      config_.local_avoidance_min_linear_velocity;
   controller_ = std::make_unique<PurePursuitController>();
   if (!controller_->initialize(node_, controller_config)) {
     RCLCPP_ERROR(node_->get_logger(),
@@ -164,6 +192,12 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
       [this](geometry_msgs::msg::Pose::ConstSharedPtr msg) {
         this->targetPointsCallback(msg);
       });
+  obstacle_stop_active_sub_ =
+      node_->create_subscription<std_msgs::msg::Bool>(
+          "/obstacle_stop/active", rclcpp::QoS(1).reliable().transient_local(),
+          [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+            obstacle_stop_active_.store(msg->data);
+          });
 
   // 初始化控制定时器
   control_timer_ = node_->create_wall_timer(
@@ -254,6 +288,34 @@ void PurePursuitLocalPlanner::loadParameters() {
       declareOrGetParameter(node_, "yaw_adjustment_gain", 1.0);
   config_.final_yaw_min_angular_velocity =
       declareOrGetParameter(node_, "final_yaw_min_angular_velocity", 0.28);
+  config_.local_avoidance_align_enter_angle =
+      declareOrGetParameter(node_, "local_avoidance_align_enter_angle", 30.0) *
+      M_PI / 180.0;
+  config_.local_avoidance_align_exit_angle =
+      declareOrGetParameter(node_, "local_avoidance_align_exit_angle", 6.0) *
+      M_PI / 180.0;
+  config_.local_avoidance_align_enter_angle = std::clamp(
+      config_.local_avoidance_align_enter_angle, 1.0 * M_PI / 180.0,
+      89.0 * M_PI / 180.0);
+  config_.local_avoidance_align_exit_angle = std::clamp(
+      config_.local_avoidance_align_exit_angle, 1.0 * M_PI / 180.0,
+      config_.local_avoidance_align_enter_angle);
+  config_.local_avoidance_lookahead_distance = std::clamp(
+      declareOrGetParameter(node_, "local_avoidance_lookahead_distance", 0.25),
+      0.05, config_.lookahead_distance_max);
+  config_.local_avoidance_max_linear_velocity = std::clamp(
+      declareOrGetParameter(node_, "local_avoidance_max_linear_velocity", 0.5),
+      0.0, config_.max_linear_velocity);
+  config_.local_avoidance_min_linear_velocity = std::clamp(
+      declareOrGetParameter(node_, "local_avoidance_min_linear_velocity", 0.4),
+      0.0, config_.local_avoidance_max_linear_velocity);
+  config_.dynamic_goal_change_distance = std::max(
+      0.0, declareOrGetParameter(node_, "dynamic_goal_change_distance", 0.7));
+  config_.dynamic_goal_change_angle =
+      std::clamp(declareOrGetParameter(
+                     node_, "dynamic_goal_change_angle_degrees", 25.0),
+                 0.0, 180.0) *
+      M_PI / 180.0;
   // Local planning parameters
   config_.use_smoothed_path =
       declareOrGetParameter(node_, "use_smoothed_path", false);
@@ -372,10 +434,13 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     }
     if (output.realign_local_path && !output.entered_local_tracking) {
       current_path_index_ = 0;
-      if (controller_) controller_->resetTrackingState();
+      smoothed_local_path_received_ = false;
+      // 阶段切换或同阶段重规划都会产生一条全新的局部路径，必须从新路径
+      // 起点重新投影并原地对准。
+      if (controller_) controller_->startLocalAvoidanceAlignment();
       last_cmd_vel_ = geometry_msgs::msg::Twist();
       RCLCPP_INFO(node_->get_logger(),
-                  "[AVOID_PATH] stage changed, switched to return segment");
+                  "[AVOID_PATH] local path replaced, tracking index reset");
     }
   };
 
@@ -383,7 +448,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   if (!avoidance_enabled && local_tracking) {
     const AvoidanceObservation clear_observation;
     avoidance_output = local_avoidance_manager_->update(
-        robot_pose, clear_observation, false, false);
+        robot_pose, clear_observation, false, false, false);
     avoidance_updated = true;
     apply_avoidance_transition(avoidance_output);
     local_tracking = avoidance_output.tracking_local;
@@ -436,15 +501,31 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     if (avoidance_enabled && front_obstacle_detector_) {
       observation = front_obstacle_detector_->analyzeAvoidance(robot_pose);
     }
+    const bool planned_motion =
+        std::abs(last_cmd_vel_.linear.x) > 0.02 ||
+        std::abs(last_cmd_vel_.linear.y) > 0.02 ||
+        std::abs(last_cmd_vel_.angular.z) > 0.05;
     avoidance_output = local_avoidance_manager_->update(
         robot_pose, observation, avoidance_enabled,
-        controller_ && controller_->isAligning());
+        controller_ && controller_->isAligning(),
+        obstacle_stop_active_.load() && planned_motion);
     apply_avoidance_transition(avoidance_output);
     local_tracking = avoidance_output.tracking_local;
   }
 
   if (local_avoidance_manager_) {
     publishAvoidanceState(avoidance_output);
+  }
+
+  // 绕障期间路径走廊必须跟随当前A*段。若继续使用旧全局路径做过滤，
+  // 局部路径正前方的障碍可能被判为“全局走廊外”而返回CLEAR。
+  if (front_obstacle_detector_) {
+    if (local_tracking && avoidance_output.local_path &&
+        !avoidance_output.local_path->poses.empty()) {
+      front_obstacle_detector_->setGlobalPath(*avoidance_output.local_path);
+    } else if (avoidance_output.exited_local_tracking) {
+      front_obstacle_detector_->setGlobalPath(global_path_);
+    }
   }
 
   if (avoidance_output.mode == AvoidanceTrackingMode::FAILED ||
@@ -473,10 +554,14 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return false;
   }
 
-  double target_velocity = edge_linear_velocity;
+  double target_velocity =
+      local_tracking
+          ? std::min(edge_linear_velocity,
+                     config_.local_avoidance_max_linear_velocity)
+          : edge_linear_velocity;
   if (path_tracker_) {
     target_velocity = path_tracker_->computeTargetVelocity(
-        robot_pose, lookahead_point, edge_linear_velocity, motion_direction);
+        robot_pose, lookahead_point, target_velocity, motion_direction);
   }
   if (!controller_ ||
       !controller_->computeCommand(
@@ -560,7 +645,8 @@ void PurePursuitLocalPlanner::controlCallback() {
   }
 
   if (navigation_paused_.load()) {
-    // 暂停期间每个控制周期都发送零速度，导航路径和任务状态保持不变。
+    // 暂停期间保留全局任务，但局部绕障状态已在setPaused(true)中清除。
+    // 每个控制周期持续发送零速度，避免底盘沿用接管前的速度。
     RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "[PP_PAUSED] navigation paused, publishing zero "
                          "velocity");
@@ -587,10 +673,24 @@ void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
     if (state == navigation_interfaces::msg::AvoidanceState::AVOIDING ||
         state == navigation_interfaces::msg::AvoidanceState::BLOCKED ||
         state == navigation_interfaces::msg::AvoidanceState::FAILED) {
-      RCLCPP_DEBUG_THROTTLE(
-          node_->get_logger(), *node_->get_clock(), 1000,
-          "Ignoring dynamic path while local avoidance state=%u", state);
-      return;
+      double goal_shift = 0.0;
+      double direction_change = 0.0;
+      if (!hasDynamicGoalChanged(msg->path, goal_shift, direction_change)) {
+        RCLCPP_DEBUG_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 1000,
+            "Ignoring dynamic path while local avoidance state=%u; "
+            "goal_shift=%.2fm direction_change=%.1fdeg",
+            state, goal_shift, direction_change * 180.0 / M_PI);
+        return;
+      }
+
+      // setGlobalPath()会统一复位Manager、控制器和局部路径。新路径在下一
+      // 控制周期重新做障碍检测：新路线已避开障碍就直接跟踪，否则重新规划。
+      RCLCPP_INFO(node_->get_logger(),
+                  "[AVOID_CANCEL_TARGET] dynamic target changed; discarding "
+                  "old avoidance path (shift=%.2fm, direction=%.1fdeg, "
+                  "state=%u)",
+                  goal_shift, direction_change * 180.0 / M_PI, state);
     }
     if (state ==
         navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH) {
@@ -648,6 +748,64 @@ void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
   }
   setGlobalPath(msg->path, msg->dynamic_path);
   publishCurrentObstacleStopPolicy();
+}
+
+bool PurePursuitLocalPlanner::hasDynamicGoalChanged(
+    const nav_msgs::msg::Path &new_path, double &goal_shift,
+    double &direction_change) {
+  goal_shift = 0.0;
+  direction_change = 0.0;
+  if (new_path.poses.empty() || global_path_.poses.empty()) {
+    return false;
+  }
+
+  const std::string &old_frame = global_path_.header.frame_id;
+  const std::string &new_frame = new_path.header.frame_id;
+  if (!old_frame.empty() && !new_frame.empty() && old_frame != new_frame) {
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "Cannot compare dynamic goals in different frames: old=%s new=%s",
+        old_frame.c_str(), new_frame.c_str());
+    return false;
+  }
+
+  // 防止平滑器或DDS队列中的旧路径把机器人拉回旧目标。时间戳为0时保留
+  // 兼容性，只用目标几何变化判断。
+  const int64_t old_stamp_ns =
+      rclcpp::Time(global_path_.header.stamp).nanoseconds();
+  const int64_t new_stamp_ns = rclcpp::Time(new_path.header.stamp).nanoseconds();
+  if (old_stamp_ns > 0 && new_stamp_ns > 0 && new_stamp_ns <= old_stamp_ns) {
+    return false;
+  }
+
+  const auto &old_goal = global_path_.poses.back().pose.position;
+  const auto &new_goal = new_path.poses.back().pose.position;
+  goal_shift = std::hypot(new_goal.x - old_goal.x, new_goal.y - old_goal.y);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  if (config_.dynamic_goal_change_angle > 0.0 && getRobotPose(robot_pose) &&
+      (new_frame.empty() || robot_pose.header.frame_id == new_frame)) {
+    const double old_dx = old_goal.x - robot_pose.pose.position.x;
+    const double old_dy = old_goal.y - robot_pose.pose.position.y;
+    const double new_dx = new_goal.x - robot_pose.pose.position.x;
+    const double new_dy = new_goal.y - robot_pose.pose.position.y;
+    const double old_norm = std::hypot(old_dx, old_dy);
+    const double new_norm = std::hypot(new_dx, new_dy);
+    if (old_norm > 1e-3 && new_norm > 1e-3) {
+      const double cosine = std::clamp(
+          (old_dx * new_dx + old_dy * new_dy) / (old_norm * new_norm), -1.0,
+          1.0);
+      direction_change = std::acos(cosine);
+    }
+  }
+
+  const bool distance_changed =
+      config_.dynamic_goal_change_distance > 0.0 &&
+      goal_shift >= config_.dynamic_goal_change_distance;
+  const bool direction_changed = config_.dynamic_goal_change_angle > 0.0 &&
+                                 direction_change >=
+                                     config_.dynamic_goal_change_angle;
+  return distance_changed || direction_changed;
 }
 
 bool PurePursuitLocalPlanner::isObstacleAvoidanceEnabled() const {
@@ -773,6 +931,7 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
           ? path_progress_index_
           : static_cast<std::size_t>(std::max(0, current_path_index_)),
       current_velocity,
+      local_tracking ? config_.local_avoidance_lookahead_distance : 0.0,
   };
   const auto tracking_result = path_tracker_->computeTrackingLookahead(
       robot_pose, *path_to_use, tracking_context);
@@ -783,8 +942,12 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
   if (path_type == TrackingPathType::kGlobal) {
     current_path_index_ = static_cast<int>(tracking_result->path_index);
   } else {
-    current_path_index_ = std::max(
-        current_path_index_, static_cast<int>(tracking_result->path_index));
+    // 局部路径的控制进度使用机器人投影段，不能使用前瞻点段；否则每个
+    // 控制周期都会把搜索起点向前推一个前瞻距离，机器人不动索引也会跑完。
+    // PathTracker正常情况下只从当前索引向前搜索，因此直接赋值仍保持单调；
+    // 当局部路径被异步替换且旧索引越界时，它会从新路径重新投影，此处
+    // 必须允许索引回到新路径的有效范围。
+    current_path_index_ = static_cast<int>(tracking_result->progress_index);
   }
   return true;
 }

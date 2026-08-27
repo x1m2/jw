@@ -91,6 +91,8 @@ class CostMap2D {
   std::string livox_topic_;
   std::string lidar_frame_;
   int lidar_type_;  // 1: Livox CustomMsg，其他: PointCloud2
+  // PointCloud2 已经在 robot_base_frame 下时跳过固定雷达外参。
+  bool pointcloud2_in_base_frame_;
 
   // 雷达在 robot_base_frame 中的固定外参
   Eigen::Affine3d lidar_to_base_transform_;

@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <limits>
+#include <queue>
+#include <unordered_map>
+#include <vector>
 
 DualRadarTraversableExtractor::DualRadarTraversableExtractor(
     const rclcpp::Node::SharedPtr& node)
@@ -118,6 +122,20 @@ void DualRadarTraversableExtractor::loadParameters() {
       node_->declare_parameter<bool>("use_ground_expansion", true);
   expansion_radius_ = node_->declare_parameter<double>("expansion_radius", 0.5);
   expansion_height_ = node_->declare_parameter<double>("expansion_height", 0.3);
+  use_stair_region_growing_ =
+      node_->declare_parameter<bool>("use_stair_region_growing", true);
+  stair_grid_resolution_ =
+      node_->declare_parameter<double>("stair_grid_resolution", 0.1);
+  stair_max_step_height_ =
+      node_->declare_parameter<double>("stair_max_step_height", 0.22);
+  stair_max_cell_height_span_ =
+      node_->declare_parameter<double>("stair_max_cell_height_span", 0.25);
+  stair_max_gap_cells_ =
+      node_->declare_parameter<int>("stair_max_gap_cells", 1);
+  stair_hysteresis_frames_ =
+      node_->declare_parameter<int>("stair_hysteresis_frames", 5);
+  stair_hysteresis_neighbor_cells_ =
+      node_->declare_parameter<int>("stair_hysteresis_neighbor_cells", 1);
 
   use_obstacle_clustering_ =
       node_->declare_parameter<bool>("use_obstacle_clustering", true);
@@ -154,6 +172,18 @@ void DualRadarTraversableExtractor::loadParameters() {
     RCLCPP_INFO(node_->get_logger(), "  膨胀半径: %.3f 米", expansion_radius_);
     RCLCPP_INFO(node_->get_logger(), "  膨胀高度范围: %.3f 米",
                 expansion_height_);
+    RCLCPP_INFO(node_->get_logger(), "  楼梯逐级扩张: %s",
+                use_stair_region_growing_ ? "启用" : "禁用");
+    if (use_stair_region_growing_) {
+      RCLCPP_INFO(node_->get_logger(),
+                  "  楼梯栅格: %.3f 米, 最大级高: %.3f 米, 单格最大高度跨度: %.3f 米",
+                  stair_grid_resolution_, stair_max_step_height_,
+                  stair_max_cell_height_span_);
+      RCLCPP_INFO(node_->get_logger(),
+                  "  楼梯断格跨越: %d 格, 判断保持: %d 帧, 帧间匹配: %d 格",
+                  stair_max_gap_cells_, stair_hysteresis_frames_,
+                  stair_hysteresis_neighbor_cells_);
+    }
   }
 
   RCLCPP_INFO(node_->get_logger(), "  障碍物点云聚类滤波: %s",
@@ -637,8 +667,9 @@ void DualRadarTraversableExtractor::publishResults(
     ground_cloud_pub_->publish(ground_msg);
   }
 
-  if (!obstacle_cloud->empty() &&
-      obstacle_cloud_pub_->get_subscription_count() > 0) {
+  // 分割成功但当前没有障碍时也要发布空点云，使代价地图和停障节点能够
+  // 清除上一帧障碍，而不是继续沿用陈旧结果。
+  if (obstacle_cloud_pub_->get_subscription_count() > 0) {
     sensor_msgs::msg::PointCloud2 obstacle_msg;
     pcl::toROSMsg(*obstacle_cloud, obstacle_msg);
     obstacle_msg.header = base_link_header;
@@ -658,6 +689,7 @@ void DualRadarTraversableExtractor::expandGroundCloud(
   (void)original_cloud;
 
   if (ground_cloud->empty() || obstacle_cloud->empty()) {
+    stair_cell_hold_frames_.clear();
     RCLCPP_DEBUG(node_->get_logger(), "地面点云或障碍物点云为空，跳过膨胀");
     return;
   }
@@ -711,6 +743,225 @@ void DualRadarTraversableExtractor::expandGroundCloud(
   *ground_cloud = *expanded_ground_cloud;
   *obstacle_cloud = *filtered_obstacle_cloud;
 
+  // 单轮邻近扩张只能处理第一级台阶，因为本轮新增的地面点不会继续作为
+  // 种子。下面将点云投影为局部高度栅格，从已知地面沿相邻台阶逐级传播。
+  // 单格垂直跨度过大的单元（人、墙、高箱体）不会参与传播，因此仍保留
+  // 在 obstacle_cloud 中供代价地图绕障和停障使用。
+  std::size_t stair_expanded_points = 0U;
+  if (use_stair_region_growing_ && !obstacle_cloud->empty()) {
+    if (stair_grid_resolution_ <= 0.0 || stair_max_step_height_ <= 0.0 ||
+        stair_max_cell_height_span_ <= 0.0 || stair_max_gap_cells_ < 0 ||
+        stair_hysteresis_frames_ < 0 ||
+        stair_hysteresis_neighbor_cells_ < 0) {
+      stair_cell_hold_frames_.clear();
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 2000,
+          "楼梯逐级扩张参数无效，当前帧跳过: resolution=%.3f, step=%.3f, span=%.3f, gap=%d, hold=%d",
+          stair_grid_resolution_, stair_max_step_height_,
+          stair_max_cell_height_span_, stair_max_gap_cells_,
+          stair_hysteresis_frames_);
+    } else {
+      struct HeightCell {
+        int x{0};
+        int y{0};
+        double min_z{std::numeric_limits<double>::max()};
+        double max_z{std::numeric_limits<double>::lowest()};
+        bool has_ground{false};
+        bool traversable{false};
+        std::vector<std::size_t> obstacle_indices;
+      };
+
+      const auto make_key = [](int x, int y) -> std::uint64_t {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x))
+                << 32U) |
+               static_cast<std::uint32_t>(y);
+      };
+      const auto grid_coordinate = [this](float value) -> int {
+        return static_cast<int>(
+            std::floor(static_cast<double>(value) / stair_grid_resolution_));
+      };
+
+      std::unordered_map<std::uint64_t, HeightCell> cells;
+      cells.reserve(ground_cloud->points.size() + obstacle_cloud->points.size());
+
+      const auto add_point = [&](const PointType& point, bool is_ground,
+                                 std::size_t obstacle_index) {
+        const int cell_x = grid_coordinate(point.x);
+        const int cell_y = grid_coordinate(point.y);
+        auto& cell = cells[make_key(cell_x, cell_y)];
+        cell.x = cell_x;
+        cell.y = cell_y;
+        cell.min_z = std::min(cell.min_z, static_cast<double>(point.z));
+        cell.max_z = std::max(cell.max_z, static_cast<double>(point.z));
+        cell.has_ground = cell.has_ground || is_ground;
+        if (!is_ground) {
+          cell.obstacle_indices.push_back(obstacle_index);
+        }
+      };
+
+      for (const auto& point : ground_cloud->points) {
+        add_point(point, true, 0U);
+      }
+      for (std::size_t index = 0; index < obstacle_cloud->points.size();
+           ++index) {
+        add_point(obstacle_cloud->points[index], false, index);
+      }
+
+      std::queue<std::uint64_t> open_cells;
+      for (auto& entry : cells) {
+        auto& cell = entry.second;
+        const double height_span = cell.max_z - cell.min_z;
+        if (cell.has_ground && height_span <= stair_max_cell_height_span_) {
+          cell.traversable = true;
+          open_cells.push(entry.first);
+        }
+      }
+
+      // 最多允许跨过两个空格，避免错误参数造成过远跳跃。长距离连接只有在
+      // 中间格完全无点时才允许；若中间存在人、墙等阻挡格，绝不会跨越。
+      const int connection_radius =
+          1 + std::min(stair_max_gap_cells_, 2);
+
+      while (!open_cells.empty()) {
+        const std::uint64_t current_key = open_cells.front();
+        open_cells.pop();
+        const auto current_it = cells.find(current_key);
+        if (current_it == cells.end()) {
+          continue;
+        }
+        const HeightCell& current = current_it->second;
+
+        for (int dx = -connection_radius; dx <= connection_radius; ++dx) {
+          for (int dy = -connection_radius; dy <= connection_radius; ++dy) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+
+            const int grid_distance = std::max(std::abs(dx), std::abs(dy));
+            if (grid_distance > 1) {
+              bool intermediate_cell_occupied = false;
+              for (int step = 1; step < grid_distance; ++step) {
+                const int intermediate_x = current.x + static_cast<int>(
+                    std::round(static_cast<double>(dx * step) /
+                               grid_distance));
+                const int intermediate_y = current.y + static_cast<int>(
+                    std::round(static_cast<double>(dy * step) /
+                               grid_distance));
+                if (cells.find(make_key(intermediate_x, intermediate_y)) !=
+                    cells.end()) {
+                  intermediate_cell_occupied = true;
+                  break;
+                }
+              }
+              if (intermediate_cell_occupied) {
+                continue;
+              }
+            }
+
+            const auto neighbor_key = make_key(current.x + dx, current.y + dy);
+            auto neighbor_it = cells.find(neighbor_key);
+            if (neighbor_it == cells.end() ||
+                neighbor_it->second.traversable) {
+              continue;
+            }
+
+            auto& neighbor = neighbor_it->second;
+            const double neighbor_span = neighbor.max_z - neighbor.min_z;
+            if (neighbor_span > stair_max_cell_height_span_) {
+              continue;
+            }
+
+            // max_z 表示该栅格可落脚表面的保守高度。台阶之间高度变化有限；
+            // 人体、墙面和高箱体即使接触地面，也会被上面的垂直跨度约束挡住。
+            if (std::fabs(neighbor.max_z - current.max_z) >
+                stair_max_step_height_) {
+              continue;
+            }
+
+            neighbor.traversable = true;
+            open_cells.push(neighbor_key);
+          }
+        }
+      }
+
+      // 对低垂直跨度的楼梯单元进行短时保持，消除某一帧点云稀疏造成的
+      // 闪烁。高跨度单元不继承历史状态，因此人或墙进入时会立即恢复为障碍。
+      std::unordered_map<std::uint64_t, int> next_hold_frames;
+      next_hold_frames.reserve(cells.size());
+      for (auto& entry : cells) {
+        auto& cell = entry.second;
+        const double height_span = cell.max_z - cell.min_z;
+        if (height_span > stair_max_cell_height_span_) {
+          cell.traversable = false;
+          continue;
+        }
+
+        int hold_frames = cell.traversable ? stair_hysteresis_frames_ : 0;
+        if (!cell.traversable && stair_hysteresis_frames_ > 0) {
+          int previous_hold = 0;
+          for (int dx = -stair_hysteresis_neighbor_cells_;
+               dx <= stair_hysteresis_neighbor_cells_; ++dx) {
+            for (int dy = -stair_hysteresis_neighbor_cells_;
+                 dy <= stair_hysteresis_neighbor_cells_; ++dy) {
+              const auto previous_it = stair_cell_hold_frames_.find(
+                  make_key(cell.x + dx, cell.y + dy));
+              if (previous_it != stair_cell_hold_frames_.end()) {
+                previous_hold = std::max(previous_hold, previous_it->second);
+              }
+            }
+          }
+          hold_frames = std::max(0, previous_hold - 1);
+          cell.traversable = hold_frames > 0;
+        }
+
+        if (cell.traversable && hold_frames > 0) {
+          next_hold_frames[entry.first] = hold_frames;
+        }
+      }
+      stair_cell_hold_frames_.swap(next_hold_frames);
+
+      std::vector<bool> move_to_ground(obstacle_cloud->points.size(), false);
+      for (const auto& entry : cells) {
+        const auto& cell = entry.second;
+        if (!cell.traversable) {
+          continue;
+        }
+        for (const auto index : cell.obstacle_indices) {
+          move_to_ground[index] = true;
+        }
+      }
+
+      pcl::PointCloud<PointType>::Ptr stair_filtered_obstacles(
+          new pcl::PointCloud<PointType>);
+      stair_filtered_obstacles->points.reserve(obstacle_cloud->points.size());
+      ground_cloud->points.reserve(ground_cloud->points.size() +
+                                   obstacle_cloud->points.size());
+
+      for (std::size_t index = 0; index < obstacle_cloud->points.size();
+           ++index) {
+        if (move_to_ground[index]) {
+          ground_cloud->points.push_back(obstacle_cloud->points[index]);
+          ++stair_expanded_points;
+        } else {
+          stair_filtered_obstacles->points.push_back(
+              obstacle_cloud->points[index]);
+        }
+      }
+
+      ground_cloud->width =
+          static_cast<std::uint32_t>(ground_cloud->points.size());
+      ground_cloud->height = 1;
+      ground_cloud->is_dense = true;
+      stair_filtered_obstacles->width = static_cast<std::uint32_t>(
+          stair_filtered_obstacles->points.size());
+      stair_filtered_obstacles->height = 1;
+      stair_filtered_obstacles->is_dense = true;
+      *obstacle_cloud = *stair_filtered_obstacles;
+    }
+  } else {
+    stair_cell_hold_frames_.clear();
+  }
+
   const std::size_t expanded_points =
       ground_cloud->points.size() - original_ground_size;
   const std::size_t removed_points =
@@ -726,6 +977,14 @@ void DualRadarTraversableExtractor::expandGroundCloud(
   RCLCPP_DEBUG(node_->get_logger(), "  原始障碍物点: %zu -> %zu (移除 %zu 点)",
                original_obstacle_size, obstacle_cloud->points.size(),
                removed_points);
+  RCLCPP_DEBUG(node_->get_logger(), "  楼梯逐级扩张新增: %zu 点",
+               stair_expanded_points);
+  if (stair_expanded_points > 0U) {
+    RCLCPP_INFO_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 2000,
+        "楼梯逐级扩张移除 %zu 个台阶候选点，当前保留 %zu 个障碍点",
+        stair_expanded_points, obstacle_cloud->points.size());
+  }
 
   RCLCPP_DEBUG(node_->get_logger(),
                "  膨胀参数: 半径 %.3f 米, 高度范围 %.3f 米", expansion_radius_,
@@ -749,16 +1008,36 @@ DualRadarTraversableExtractor::filterObstacleCloud(
 
   pcl::EuclideanClusterExtraction<PointType> ec;
   ec.setClusterTolerance(cluster_tolerance_);
-  ec.setMinClusterSize(min_cluster_size_);
-  ec.setMaxClusterSize(max_cluster_size_);
+  // 先提取所有连通簇，再由下面的逻辑只过滤小簇。PCL 会直接丢弃超过
+  // MaxClusterSize 的整簇；楼梯与站在楼梯上的人一旦连成大簇，就会导致
+  // 两者同时从 obstacle_cloud 消失，这是不可接受的安全行为。
+  ec.setMinClusterSize(1);
+  ec.setMaxClusterSize(std::numeric_limits<int>::max());
   ec.setSearchMethod(tree);
   ec.setInputCloud(obstacle_cloud);
   ec.extract(cluster_indices);
 
   pcl::PointCloud<PointType>::Ptr filtered_cloud(
       new pcl::PointCloud<PointType>);
+  filtered_cloud->points.reserve(obstacle_cloud->points.size());
+
+  std::size_t small_cluster_points = 0U;
+  std::size_t oversized_cluster_count = 0U;
 
   for (const auto& cluster : cluster_indices) {
+    const auto cluster_size = cluster.indices.size();
+    if (cluster_size < static_cast<std::size_t>(min_cluster_size_)) {
+      small_cluster_points += cluster_size;
+      continue;
+    }
+
+    // max_cluster_size 仅作为异常大簇的诊断阈值，绝不能作为删除真实障碍物
+    // 的条件。大墙、楼梯以及与楼梯接触的人都可能形成很大的有效点簇。
+    if (max_cluster_size_ > 0 &&
+        cluster_size > static_cast<std::size_t>(max_cluster_size_)) {
+      ++oversized_cluster_count;
+    }
+
     for (const auto& idx : cluster.indices) {
       filtered_cloud->points.push_back(obstacle_cloud->points[idx]);
     }
@@ -770,18 +1049,24 @@ DualRadarTraversableExtractor::filterObstacleCloud(
   filtered_cloud->is_dense = true;
 
   const std::size_t filtered_size = filtered_cloud->points.size();
-  const std::size_t removed_points =
-      original_size > filtered_size ? original_size - filtered_size : 0U;
 
   RCLCPP_DEBUG(node_->get_logger(), "障碍物点云聚类滤波完成:");
   RCLCPP_DEBUG(node_->get_logger(), "  原始点云: %zu 点", original_size);
   RCLCPP_DEBUG(node_->get_logger(), "  滤波后点云: %zu 点", filtered_size);
-  RCLCPP_DEBUG(node_->get_logger(), "  移除孤立点: %zu 点", removed_points);
+  RCLCPP_DEBUG(node_->get_logger(), "  移除小簇孤立点: %zu 点",
+               small_cluster_points);
   RCLCPP_DEBUG(node_->get_logger(), "  有效聚类数: %zu 个",
                cluster_indices.size());
   RCLCPP_DEBUG(node_->get_logger(),
-               "  聚类参数: 容忍距离 %.3f 米, 最小大小 %d 点, 最大大小 %d 点",
+               "  聚类参数: 容忍距离 %.3f 米, 最小大小 %d 点, 大簇诊断阈值 %d 点",
                cluster_tolerance_, min_cluster_size_, max_cluster_size_);
+
+  if (oversized_cluster_count > 0U) {
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 2000,
+        "检测到 %zu 个超过 %d 点的大障碍簇，已为安全起见完整保留",
+        oversized_cluster_count, max_cluster_size_);
+  }
 
   return filtered_cloud;
 }

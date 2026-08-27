@@ -67,9 +67,16 @@
     use_ground_expansion: true                 # 启用地面点云膨胀（用于处理楼梯等场景）
     expansion_radius: 0.3                     # 膨胀半径（米）- 地面点周围多少米内的点视为可行区域
     expansion_height: 0.3                     # 膨胀高度范围（米）- 地面点上下多少米内的点视为可行区域
+    use_stair_region_growing: true             # 从地面沿相邻低高度跨度单元逐级扩张到楼梯
+    stair_grid_resolution: 0.10                # 楼梯高度图栅格分辨率（米）
+    stair_max_step_height: 0.30                # 相邻台阶允许的最大级高（米）
+    stair_max_cell_height_span: 0.25           # 单格垂直跨度上限；人和墙通常超过此值并保留
+    stair_max_gap_cells: 1                     # 允许跨过一个无点空格，降低稀疏点云造成的断裂
+    stair_hysteresis_frames: 10                # 楼梯判定保持约1秒，抑制连续漏判造成的低频闪烁
+    stair_hysteresis_neighbor_cells: 1         # 帧间允许移动一格，补偿机器人运动和点云抖动
 
     # 障碍物点云聚类滤波参数
     use_obstacle_clustering: true             # 启用障碍物点云聚类滤波（去除孤立点）
-    cluster_tolerance: 0.4                   # 聚类容忍距离（米）- 点之间的最大距离
+    cluster_tolerance: 0.15                  # 聚类连接距离；避免把相邻的人和楼梯过度粘成一簇
     min_cluster_size: 10                     # 最小聚类大小（点数）- 小于此值的聚类将被过滤掉
-    max_cluster_size: 25000                  # 最大聚类大小（点数）- 防止过大的聚类
+    max_cluster_size: 25000                  # 大簇诊断阈值；超过后报警但仍保留，避免漏掉人/墙

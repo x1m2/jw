@@ -3,6 +3,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 import os
@@ -30,6 +31,12 @@ def generate_launch_description():
     robot_param_file = LaunchConfiguration('robot_param_file')
     runtime_profile = LaunchConfiguration('runtime_profile')
     global_frame = LaunchConfiguration('global_frame')
+    lidar_type = LaunchConfiguration('lidar_type')
+    livox_topic = LaunchConfiguration('livox_topic')
+    lidar_frame = LaunchConfiguration('lidar_frame')
+    pointcloud2_in_base_frame = LaunchConfiguration(
+        'pointcloud2_in_base_frame'
+    )
 
     package_share = get_package_share_directory('costmap_2d')
     default_config_file = os.path.join(
@@ -61,6 +68,26 @@ def generate_launch_description():
             default_value='map',
             description='Costmap global frame; use odom for FAST-LIO UWB follow'
         ),
+        DeclareLaunchArgument(
+            'lidar_type',
+            default_value='1',
+            description='1 uses Livox CustomMsg; other values use PointCloud2'
+        ),
+        DeclareLaunchArgument(
+            'livox_topic',
+            default_value='/livox/lidar',
+            description='Input Livox or PointCloud2 topic'
+        ),
+        DeclareLaunchArgument(
+            'lidar_frame',
+            default_value='livox_frame',
+            description='Configured input point-cloud frame'
+        ),
+        DeclareLaunchArgument(
+            'pointcloud2_in_base_frame',
+            default_value='false',
+            description='PointCloud2 input is already expressed in base_link'
+        ),
 
         Node(
             package='costmap_2d',
@@ -72,6 +99,12 @@ def generate_launch_description():
                 {
                     'runtime_profile': runtime_profile,
                     'global_frame': global_frame,
+                    'lidar_type': ParameterValue(lidar_type, value_type=int),
+                    'livox_topic': livox_topic,
+                    'lidar_frame': lidar_frame,
+                    'pointcloud2_in_base_frame': ParameterValue(
+                        pointcloud2_in_base_frame, value_type=bool
+                    ),
                 }
             ]
         ),

@@ -13,6 +13,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include <Eigen/Dense>
+#include <cstdint>
 #include <deque>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <memory>
@@ -23,6 +24,7 @@
 #include <std_msgs/msg/header.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <unordered_map>
 
 #include "patchwork/pcl_ground_segmenter.hpp"
 
@@ -87,6 +89,14 @@ class DualRadarTraversableExtractor {
   bool use_ground_expansion_;
   double expansion_radius_;
   double expansion_height_;
+  bool use_stair_region_growing_;
+  double stair_grid_resolution_;
+  double stair_max_step_height_;
+  double stair_max_cell_height_span_;
+  int stair_max_gap_cells_;
+  int stair_hysteresis_frames_;
+  int stair_hysteresis_neighbor_cells_;
+  std::unordered_map<std::uint64_t, int> stair_cell_hold_frames_;
 
   pcl::VoxelGrid<PointType> voxel_filter_;
   pcl::StatisticalOutlierRemoval<PointType> stat_filter_;
