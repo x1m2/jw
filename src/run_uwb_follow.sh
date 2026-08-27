@@ -125,9 +125,9 @@ start_bg "Livox ROS Driver2" "/dev/null" 4 \
 start_bg "FAST-LIO2" "${FOLLOW_LOG_DIR}/fast_lio_$(log_time).log" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false
 
-start_bg "Dual Radar Extractor" \
-    "${FOLLOW_LOG_DIR}/dual_radar_extractor_$(log_time).log" 3 \
-    ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py
+start_bg "Terrain Filter" \
+    "${FOLLOW_LOG_DIR}/terrain_filter_$(log_time).log" 3 \
+    ros2 launch terrain_filter terrain_filter.launch.py
 
 start_bg "Obstacle Stop" "${FOLLOW_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
     ros2 launch obstacle_stop obstacle_stop.launch.py \

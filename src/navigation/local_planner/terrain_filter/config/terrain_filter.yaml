@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    # 双雷达可行区域提取器配置文件
+    # 地形过滤器配置，支持单/双雷达输入。
 
     # 模式配置
     use_dual_radar: false                      # 是否使用双雷达模式（false=单雷达模式，true=双雷达模式）

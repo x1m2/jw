@@ -1,12 +1,12 @@
-# dual_radar_traversable_extractor ROS2 Humble 版本
+# terrain_filter
 
-双雷达/单雷达可行区域提取节点，已从 ROS1 catkin 迁移到 ROS2 ament_cmake，并将包内自定义头文件后缀从 `.h` 改为 `.hpp`。
+单/双雷达地形过滤节点，分割地面与障碍物点云。
 
 ## 编译
 
 ```bash
 cd ~/robotics_platform/robot_ws
-colcon build --packages-select dual_radar_traversable_extractor --symlink-install
+colcon build --packages-select terrain_filter --symlink-install
 source install/setup.bash
 ```
 
@@ -15,13 +15,13 @@ source install/setup.bash
 单雷达模式：
 
 ```bash
-ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py
+ros2 launch terrain_filter terrain_filter.launch.py
 ```
 
 双雷达模式：
 
 ```bash
-ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py use_dual_radar:=true
+ros2 launch terrain_filter terrain_filter.launch.py use_dual_radar:=true
 ```
 
 ## 参数文件
@@ -29,13 +29,13 @@ ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py use_
 参数文件：
 
 ```bash
-config/dual_radar_config.yaml
+config/terrain_filter.yaml
 ```
 
 ROS2 参数格式为：
 
 ```yaml
-dual_radar_traversable_extractor:
+terrain_filter_node:
   ros__parameters:
     lidar_topic: "/livox/pointcloud2"
     base_frame: "base_link"

@@ -1,5 +1,5 @@
-#ifndef DUAL_RADAR_TRAVERSABLE_EXTRACTOR_HPP_
-#define DUAL_RADAR_TRAVERSABLE_EXTRACTOR_HPP_
+#ifndef TERRAIN_FILTER__TERRAIN_FILTER_HPP_
+#define TERRAIN_FILTER__TERRAIN_FILTER_HPP_
 
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/voxel_grid.h>
@@ -30,10 +30,10 @@
 
 using PointType = pcl::PointXYZI;
 
-class DualRadarTraversableExtractor {
+class TerrainFilter {
  public:
-  explicit DualRadarTraversableExtractor(const rclcpp::Node::SharedPtr& node);
-  ~DualRadarTraversableExtractor();
+  explicit TerrainFilter(const rclcpp::Node::SharedPtr& node);
+  ~TerrainFilter();
 
  private:
   rclcpp::Node::SharedPtr node_;
@@ -144,4 +144,4 @@ class DualRadarTraversableExtractor {
                       const std_msgs::msg::Header& header);
 };
 
-#endif  // DUAL_RADAR_TRAVERSABLE_EXTRACTOR_HPP_
+#endif  // TERRAIN_FILTER__TERRAIN_FILTER_HPP_

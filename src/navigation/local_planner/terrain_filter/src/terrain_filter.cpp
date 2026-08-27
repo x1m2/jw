@@ -1,4 +1,4 @@
-#include "dual_radar_traversable_extractor/dual_radar_traversable_extractor.hpp"
+#include "terrain_filter/terrain_filter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -9,13 +9,13 @@
 #include <unordered_map>
 #include <vector>
 
-DualRadarTraversableExtractor::DualRadarTraversableExtractor(
+TerrainFilter::TerrainFilter(
     const rclcpp::Node::SharedPtr& node)
     : node_(node),
-      lidar_transform_ready_(false),
-      radar_transform_ready_(false),
       tf_buffer_(nullptr),
-      tf_listener_(nullptr) {
+      tf_listener_(nullptr),
+      lidar_transform_ready_(false),
+      radar_transform_ready_(false) {
   loadParameters();
 
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(node_->get_clock());
@@ -73,7 +73,7 @@ DualRadarTraversableExtractor::DualRadarTraversableExtractor(
                 "公共 PatchWork++ 地面分割器初始化完成");
   }
 
-  RCLCPP_INFO(node_->get_logger(), "DualRadarTraversableExtractor 初始化完成");
+  RCLCPP_INFO(node_->get_logger(), "TerrainFilter 初始化完成");
   RCLCPP_INFO(node_->get_logger(), "订阅激光雷达: %s", lidar_topic_.c_str());
 
   if (use_dual_radar_) {
@@ -85,9 +85,9 @@ DualRadarTraversableExtractor::DualRadarTraversableExtractor(
   RCLCPP_INFO(node_->get_logger(), "基坐标系: %s", base_frame_.c_str());
 }
 
-DualRadarTraversableExtractor::~DualRadarTraversableExtractor() = default;
+TerrainFilter::~TerrainFilter() = default;
 
-void DualRadarTraversableExtractor::loadParameters() {
+void TerrainFilter::loadParameters() {
   lidar_topic_ = node_->declare_parameter<std::string>(
       "lidar_topic", "/cloud_registered_body");
   radar_topic_ =
@@ -199,7 +199,7 @@ void DualRadarTraversableExtractor::loadParameters() {
   }
 }
 
-void DualRadarTraversableExtractor::lidarCallback(
+void TerrainFilter::lidarCallback(
     sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
   {
     std::lock_guard<std::mutex> lock(lidar_mutex_);
@@ -221,7 +221,7 @@ void DualRadarTraversableExtractor::lidarCallback(
   processData();
 }
 
-void DualRadarTraversableExtractor::radarCallback(
+void TerrainFilter::radarCallback(
     sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
   if (!use_dual_radar_) {
     return;
@@ -245,12 +245,12 @@ void DualRadarTraversableExtractor::radarCallback(
   }
 }
 
-void DualRadarTraversableExtractor::odomCallback(
+void TerrainFilter::odomCallback(
     nav_msgs::msg::Odometry::ConstSharedPtr msg) {
   (void)msg;
 }
 
-void DualRadarTraversableExtractor::processData() {
+void TerrainFilter::processData() {
   sensor_msgs::msg::PointCloud2::ConstSharedPtr lidar_msg;
   double lidar_time = 0.0;
 
@@ -367,7 +367,7 @@ void DualRadarTraversableExtractor::processData() {
                  lidar_msg->header);
 }
 
-bool DualRadarTraversableExtractor::getTransform(
+bool TerrainFilter::getTransform(
     const std::string& from_frame, const std::string& to_frame,
     Eigen::Matrix4d& transform_matrix) {
   try {
@@ -404,7 +404,7 @@ bool DualRadarTraversableExtractor::getTransform(
 }
 
 pcl::PointCloud<PointType>::Ptr
-DualRadarTraversableExtractor::transformPointCloud(
+TerrainFilter::transformPointCloud(
     const pcl::PointCloud<PointType>::Ptr& cloud,
     const Eigen::Matrix4d& transform) {
   pcl::PointCloud<PointType>::Ptr transformed_cloud(
@@ -433,7 +433,7 @@ DualRadarTraversableExtractor::transformPointCloud(
 }
 
 pcl::PointCloud<PointType>::Ptr
-DualRadarTraversableExtractor::combinePointClouds(
+TerrainFilter::combinePointClouds(
     const pcl::PointCloud<PointType>::Ptr& lidar_cloud,
     const pcl::PointCloud<PointType>::Ptr& radar_cloud) {
   pcl::PointCloud<PointType>::Ptr combined_cloud(
@@ -458,7 +458,7 @@ DualRadarTraversableExtractor::combinePointClouds(
 }
 
 pcl::PointCloud<PointType>::Ptr
-DualRadarTraversableExtractor::preprocessPointCloud(
+TerrainFilter::preprocessPointCloud(
     const pcl::PointCloud<PointType>::Ptr& input_cloud) {
   pcl::PointCloud<PointType>::Ptr filtered_cloud(
       new pcl::PointCloud<PointType>);
@@ -501,7 +501,7 @@ DualRadarTraversableExtractor::preprocessPointCloud(
   return downsampled_cloud;
 }
 
-bool DualRadarTraversableExtractor::segmentGround(
+bool TerrainFilter::segmentGround(
     const pcl::PointCloud<PointType>::Ptr& input_cloud,
     pcl::PointCloud<PointType>::Ptr& ground_cloud,
     pcl::PointCloud<PointType>::Ptr& obstacle_cloud) {
@@ -643,7 +643,7 @@ bool DualRadarTraversableExtractor::segmentGround(
   return !ground_cloud->empty() || !obstacle_cloud->empty();
 }
 
-void DualRadarTraversableExtractor::publishResults(
+void TerrainFilter::publishResults(
     const pcl::PointCloud<PointType>::Ptr& combined_cloud,
     const pcl::PointCloud<PointType>::Ptr& ground_cloud,
     const pcl::PointCloud<PointType>::Ptr& obstacle_cloud,
@@ -682,7 +682,7 @@ void DualRadarTraversableExtractor::publishResults(
                obstacle_cloud->points.size());
 }
 
-void DualRadarTraversableExtractor::expandGroundCloud(
+void TerrainFilter::expandGroundCloud(
     const pcl::PointCloud<PointType>::Ptr& original_cloud,
     pcl::PointCloud<PointType>::Ptr& ground_cloud,
     pcl::PointCloud<PointType>::Ptr& obstacle_cloud) {
@@ -992,7 +992,7 @@ void DualRadarTraversableExtractor::expandGroundCloud(
 }
 
 pcl::PointCloud<PointType>::Ptr
-DualRadarTraversableExtractor::filterObstacleCloud(
+TerrainFilter::filterObstacleCloud(
     const pcl::PointCloud<PointType>::Ptr& obstacle_cloud) {
   if (obstacle_cloud->empty()) {
     RCLCPP_DEBUG(node_->get_logger(), "障碍物点云为空，跳过聚类滤波");

@@ -161,7 +161,7 @@ kill_known_launches() {
     kill_by_pattern "ros2 launch global_path_planner global_path_planner.launch.py" "global_path_planner launch"
     kill_by_pattern "ros2 launch path_smoother path_smoother.launch.py" "path_smoother launch"
     kill_by_pattern "ros2 launch pure_pursuit pure_pursuit.launch.py" "pure_pursuit launch"
-    kill_by_pattern "ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py" "dual_radar_extractor launch"
+    kill_by_pattern "ros2 launch terrain_filter terrain_filter.launch.py" "terrain_filter launch"
     kill_by_pattern "ros2 launch topology_rviz_plugin target_points_visualizer.launch.py" "target_points_visualizer launch"
     kill_by_pattern "ros2 launch user_interface navigation_task_state_machine.launch.py" "navigation_state_machine launch"
 }

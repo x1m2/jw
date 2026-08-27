@@ -8,11 +8,11 @@ import os
 
 
 def generate_launch_description():
-    package_name = 'dual_radar_traversable_extractor'
+    package_name = 'terrain_filter'
     default_config = os.path.join(
         get_package_share_directory(package_name),
         'config',
-        'dual_radar_config.yaml'
+        'terrain_filter.yaml'
     )
 
     config_file = LaunchConfiguration('config_file')
@@ -23,7 +23,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'config_file',
             default_value=default_config,
-            description='Path to dual radar traversable extractor parameter file'
+            description='Path to terrain filter parameter file'
         ),
         DeclareLaunchArgument(
             'use_dual_radar',
@@ -33,11 +33,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'runtime_profile',
             default_value='test',
-            description='test autostarts; platform waits for slam_manager'
+            description='test autostarts; platform waits for a Worker command'
         ),
         Node(
             package=package_name,
-            executable='dual_radar_traversable_extractor_node',
+            executable='terrain_filter_node',
             output='screen',
             parameters=[
                 config_file,

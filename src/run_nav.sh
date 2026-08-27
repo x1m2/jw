@@ -96,7 +96,7 @@ GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
 PURE_PURSUIT_PID=""
 OBSTACLE_STOP_PID=""
-# DUAL_RADAR_EXTRACTOR_PID=""
+# TERRAIN_FILTER_PID=""
 TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
 
@@ -328,9 +328,9 @@ start_bg PURE_PURSUIT_PID "pure_pursuit" \
     "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
     ros2 launch pure_pursuit pure_pursuit.launch.py
 
-# start_bg DUAL_RADAR_EXTRACTOR_PID "dual_radar_extractor" \
-#     "${NAV_LOG_DIR}/dual_radar_extractor_$(log_time).log" 3 \
-#     ros2 launch dual_radar_traversable_extractor dual_radar_extractor.launch.py
+# start_bg TERRAIN_FILTER_PID "terrain_filter" \
+#     "${NAV_LOG_DIR}/terrain_filter_$(log_time).log" 3 \
+#     ros2 launch terrain_filter terrain_filter.launch.py
 
 start_bg TARGET_POINTS_VISUALIZER_PID "target_points_visualizer" \
     "${NAV_LOG_DIR}/target_points_visualizer_$(log_time).log" 1 \
