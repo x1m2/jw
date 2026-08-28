@@ -1,6 +1,8 @@
 /**:
   ros__parameters:
-    lidar_topic: "/livox/lidar"
+    # 使用terrain_filter输出的base_link障碍物点云。
+    lidar_type: 2
+    lidar_topic: "/obstacle_cloud"
     planned_cmd_topic: "/cmd_vel_planned"
     safe_cmd_topic: "/cmd_vel"
     base_frame: "base_link"

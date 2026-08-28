@@ -4,10 +4,12 @@
     global_frame: "map"
     robot_base_frame: "base_link"
 
-    # 点云输入：1使用Livox CustomMsg，其他值使用标准PointCloud2。
-    lidar_type: 1
-    livox_topic: "/livox/lidar"
-    lidar_frame: "livox_frame"
+    # 使用terrain_filter输出的base_link障碍物点云。
+    # lidar_type非1表示标准PointCloud2。
+    lidar_type: 2
+    livox_topic: "/obstacle_cloud"
+    lidar_frame: "base_link"
+    pointcloud2_in_base_frame: true
 
     # 在 base_link 坐标系中裁剪点云并投影为内部二维射线
     min_height: 0.2

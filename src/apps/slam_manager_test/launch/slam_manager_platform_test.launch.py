@@ -112,6 +112,7 @@ def generate_launch_description():
 
     platform_args = {'runtime_profile': 'platform'}
     navigation_workers = [
+        include_launch('terrain_filter', 'terrain_filter.launch.py', platform_args),
         include_launch('obstacle_stop', 'obstacle_stop.launch.py', platform_args),
         include_launch('costmap_2d', 'costmap_2d.launch.py', platform_args),
         include_launch(

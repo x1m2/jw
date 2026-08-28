@@ -46,12 +46,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'lidar_type',
-            default_value='1',
+            default_value='2',
             description='1 uses Livox CustomMsg; other values use PointCloud2',
         ),
         DeclareLaunchArgument(
             'lidar_topic',
-            default_value='/livox/lidar',
+            default_value='/obstacle_cloud',
             description='Input Livox or semantic obstacle cloud topic',
         ),
         Node(

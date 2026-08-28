@@ -70,22 +70,22 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'lidar_type',
-            default_value='1',
+            default_value='2',
             description='1 uses Livox CustomMsg; other values use PointCloud2'
         ),
         DeclareLaunchArgument(
             'livox_topic',
-            default_value='/livox/lidar',
+            default_value='/obstacle_cloud',
             description='Input Livox or PointCloud2 topic'
         ),
         DeclareLaunchArgument(
             'lidar_frame',
-            default_value='livox_frame',
+            default_value='base_link',
             description='Configured input point-cloud frame'
         ),
         DeclareLaunchArgument(
             'pointcloud2_in_base_frame',
-            default_value='false',
+            default_value='true',
             description='PointCloud2 input is already expressed in base_link'
         ),
 
