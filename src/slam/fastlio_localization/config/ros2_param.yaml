@@ -105,20 +105,36 @@ fastlio_localization:
         ## Final align (evaluate the error)
         bbs3d_use_gicp: false
 
-        bnb3d_linear_xy_window_size: 4.   # meter
-        bnb3d_linear_z_window_size: 0.5  # meter
-        bnb3d_angular_search_window: 100.  # degree 0~180
-        bnb3d_pc_resolutions: [0.3, 0.5, 0.8]
-        bnb3d_depth: 3
-        bnb3d_min_score: 0.3
-        bnb3d_enough_score: 0.7
+        # BnB参数按重定位场景选择；slam_manager启动时覆盖此profile。
+        relocalization_profile: "initial"
+        bnb3d:
+            initial:
+                linear_xy_window_size: 4.0   # meter
+                linear_z_window_size: 0.5    # meter
+                angular_search_window: 100.0 # degree 0~180
+                pc_resolutions: [0.3, 0.5, 0.8]
+                depth: 3
+                min_score: 0.3
+                enough_score: 0.7
+                min_xy_resolution: 0.2
+                min_z_resolution: 0.1
+                min_angular_resolution: 5.0  # degree
+                filter_size_scan: 0.5
+                debug_mode: false
 
-        bnb3d_min_xy_resolution: 0.2
-        bnb3d_min_z_resolution: 0.1
-        bnb3d_min_angular_resolution: 5.   # degree
-
-        bnb3d_filter_size_scan: 0.5
-        bnb3d_debug_mode: false
+            map_connection:
+                linear_xy_window_size: 4.0   # meter
+                linear_z_window_size: 0.5    # meter
+                angular_search_window: 100.0 # degree 0~180
+                pc_resolutions: [0.3, 0.5, 0.8]
+                depth: 3
+                min_score: 0.3
+                enough_score: 0.7
+                min_xy_resolution: 0.2
+                min_z_resolution: 0.1
+                min_angular_resolution: 5.0  # degree
+                filter_size_scan: 0.5
+                debug_mode: false
 
         ndt_step_size: 0.1
         ndt_resolution: 1.

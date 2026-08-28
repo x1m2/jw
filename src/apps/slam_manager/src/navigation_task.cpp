@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <tf2/utils.h>
 
 #include "slam_manager/pose_utils.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
@@ -477,7 +478,7 @@ void NavigationTaskExecutor::fillCurrentPoseFeedback(
   feedback.x = current_pose.pose.position.x;
   feedback.y = current_pose.pose.position.y;
   feedback.z = current_pose.pose.position.z;
-  feedback.theta = pose_utils::yaw(current_pose.pose.orientation);
+  feedback.theta = tf2::getYaw(current_pose.pose.orientation);
 }
 
 bool NavigationTaskExecutor::validatePose(const geometry_msgs::msg::Pose &pose,
@@ -525,7 +526,7 @@ NavigationTaskExecutor::nodeFromPose(uint32_t node_id,
   node.x = pose.position.x;
   node.y = pose.position.y;
   node.z = pose.position.z;
-  node.theta = pose_utils::yaw(pose.orientation);
+  node.theta = tf2::getYaw(pose.orientation);
   return node;
 }
 

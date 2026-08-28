@@ -18,8 +18,7 @@ class LocalizationController {
   LocalizationController(rclcpp::Node *node,
                          rclcpp::CallbackGroup::SharedPtr callback_group);
 
-  void start(uint64_t session_id, const std::string &map_id,
-             const std::string &map_path, bool use_initial_pose,
+  void start(uint64_t session_id, const WorkerStartContext &context,
              Completion completion);
   void stop(uint64_t session_id, Completion completion);
 

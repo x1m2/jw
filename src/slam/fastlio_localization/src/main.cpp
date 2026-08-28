@@ -21,6 +21,10 @@ int main(int argc, char **argv) {
           options.append_parameter_override("algorithm_type",
                                             "manually_set");
         }
+        if (!context.algorithm_profile.empty()) {
+          options.append_parameter_override("relocalization_profile",
+                                            context.algorithm_profile);
+        }
         auto localization =
             std::make_shared<FastlioLocalizationNode>(options);
         localization->initialize();

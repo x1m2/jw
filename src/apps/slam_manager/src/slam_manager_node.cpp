@@ -10,6 +10,8 @@
 #include <string>
 #include <thread>
 
+#include <tf2/utils.h>
+
 #include "slam_manager/pose_utils.hpp"
 
 namespace slam_manager {
@@ -827,6 +829,7 @@ void SlamManagerNode::startLocalizationCallback(
   options.map_id = selected_map_id;
   options.map_path = selected_map_path;
   options.use_initial_pose = use_initial_pose;
+  options.algorithm_profile = "initial";
   options.initial_pose = initial_pose;
   options.generation = generation;
   options.operation_token = operation_token;
@@ -916,12 +919,15 @@ SlamManagerNode::runRelocalizationAttempt(
     localization_result_message_.clear();
   }
 
+  const WorkerStartContext worker_context{
+      options.map_id, options.map_path.string(), options.use_initial_pose,
+      options.algorithm_profile};
   localization_controller_->start(
-      localization_session_id, options.map_id, options.map_path.string(),
-      options.use_initial_pose,
+      localization_session_id, worker_context,
       [this, generation = options.generation,
        operation_token = options.operation_token, localization_session_id,
        source = options.source, use_initial_pose = options.use_initial_pose,
+       algorithm_profile = options.algorithm_profile,
        initial_pose = options.initial_pose](
           bool success, const std::string &worker_message) {
         if (!isLatestCommand(generation) ||
@@ -987,9 +993,10 @@ SlamManagerNode::runRelocalizationAttempt(
         }
         RCLCPP_INFO(get_logger(),
                     "Relocalization worker started: source=%s, session=%llu, "
-                    "use_initial_pose=%s, %s",
+                    "profile=%s, use_initial_pose=%s, %s",
                     source.c_str(),
                     static_cast<unsigned long long>(localization_session_id),
+                    algorithm_profile.c_str(),
                     use_initial_pose ? "true" : "false",
                     worker_message.c_str());
         publishMode();
@@ -1150,6 +1157,7 @@ bool SlamManagerNode::relocalizeForMapConnection(
   options.map_id = map_id;
   options.map_path = selected_map_path;
   options.use_initial_pose = true;
+  options.algorithm_profile = "map_connection";
   options.initial_pose =
       pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta);
   options.generation = generation;
@@ -1395,7 +1403,7 @@ void SlamManagerNode::publishCurrentPose(
   robot_pose.x = pose.pose.position.x;
   robot_pose.y = pose.pose.position.y;
   robot_pose.z = pose.pose.position.z;
-  robot_pose.theta = pose_utils::yaw(pose.pose.orientation);
+  robot_pose.theta = tf2::getYaw(pose.pose.orientation);
   robot_pose.match_score = match_score;
   current_pose_pub_->publish(robot_pose);
 }

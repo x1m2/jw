@@ -81,8 +81,10 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
 
   // 全局规划器按当前map_id动态加载task拓扑和map可行域点云。
   if (worker == &global_planner_worker_) {
-    worker->start(session_id, topology_file, map_directory,
-                  std::move(worker_completion));
+    WorkerStartContext planner_context;
+    planner_context.resource_id = topology_file;
+    planner_context.resource_path = map_directory;
+    worker->start(session_id, planner_context, std::move(worker_completion));
   } else {
     worker->start(session_id, std::move(worker_completion));
   }

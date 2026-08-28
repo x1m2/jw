@@ -14,6 +14,7 @@
 
 #include "slam_manager_interfaces/msg/worker_status.hpp"
 #include "slam_manager_interfaces/srv/set_worker_state.hpp"
+#include "slam_manager/worker_runtime.hpp"
 
 namespace slam_manager {
 
@@ -27,12 +28,8 @@ class ManagedWorker : public rclcpp::Node {
     std::function<void()> before_stop;
   };
 
-  // 启动上下文由 SlamManager 生成，算法不会直接接收 APP 文件路径。
-  struct StartContext {
-    std::string resource_id;
-    std::string resource_path;
-    bool use_initial_pose{false};
-  };
+  // 保留原名称供算法Worker使用，实际类型由控制端和Worker共享。
+  using StartContext = WorkerStartContext;
 
   using AlgorithmFactory =
       std::function<AlgorithmInstance(const StartContext &)>;
@@ -100,7 +97,8 @@ class ManagedWorker : public rclcpp::Node {
     std::string message;
     if (request->command == SetWorkerState::Request::START) {
       const StartContext context{request->resource_id, request->resource_path,
-                                 request->use_initial_pose};
+                                 request->use_initial_pose,
+                                 request->algorithm_profile};
       response->success =
           startAlgorithm(request->session_id, context, message);
     } else if (request->command == SetWorkerState::Request::STOP) {

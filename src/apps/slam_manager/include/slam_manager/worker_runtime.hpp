@@ -13,6 +13,14 @@
 
 namespace slam_manager {
 
+// Worker启动所需的统一上下文。控制器按业务填充，算法Worker按需读取。
+struct WorkerStartContext {
+  std::string resource_id;
+  std::string resource_path;
+  bool use_initial_pose{false};
+  std::string algorithm_profile;
+};
+
 // 共享给等待方和异步Controller的取消令牌。超时或新任务替代后，旧的
 // Controller回调必须停止继续启动后续Worker。
 class WorkerOperationToken {
@@ -65,19 +73,14 @@ class WorkerClient {
                rclcpp::CallbackGroup::SharedPtr callback_group);
 
   void start(uint64_t session_id, Completion completion);
-  void start(uint64_t session_id, const std::string &resource_id,
-             const std::string &resource_path, Completion completion);
-  void start(uint64_t session_id, const std::string &resource_id,
-             const std::string &resource_path, bool use_initial_pose,
+  void start(uint64_t session_id, const WorkerStartContext &context,
              Completion completion);
   void stop(uint64_t session_id, Completion completion);
 
  private:
   // 发送统一命令，并通过 completion 返回执行结果。
   void request(uint8_t command, uint64_t session_id,
-               const std::string &resource_id,
-               const std::string &resource_path, bool use_initial_pose,
-               Completion completion);
+               const WorkerStartContext &context, Completion completion);
 
   std::string service_name_;
   rclcpp::Client<SetWorkerState>::SharedPtr client_;

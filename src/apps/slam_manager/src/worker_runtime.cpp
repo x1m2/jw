@@ -120,31 +120,24 @@ WorkerClient::WorkerClient(rclcpp::Node *node, const std::string &service_name,
 }
 
 void WorkerClient::start(uint64_t session_id, Completion completion) {
-  start(session_id, {}, {}, false, std::move(completion));
+  start(session_id, WorkerStartContext{}, std::move(completion));
 }
 
-void WorkerClient::start(uint64_t session_id, const std::string &resource_id,
-                         const std::string &resource_path,
+void WorkerClient::start(uint64_t session_id,
+                         const WorkerStartContext &context,
                          Completion completion) {
-  start(session_id, resource_id, resource_path, false, std::move(completion));
-}
-
-void WorkerClient::start(uint64_t session_id, const std::string &resource_id,
-                         const std::string &resource_path,
-                         bool use_initial_pose, Completion completion) {
-  request(SetWorkerState::Request::START, session_id, resource_id,
-          resource_path, use_initial_pose, std::move(completion));
+  request(SetWorkerState::Request::START, session_id, context,
+          std::move(completion));
 }
 
 void WorkerClient::stop(uint64_t session_id, Completion completion) {
-  request(SetWorkerState::Request::STOP, session_id, {}, {}, false,
+  request(SetWorkerState::Request::STOP, session_id, WorkerStartContext{},
           std::move(completion));
 }
 
 void WorkerClient::request(uint8_t command, uint64_t session_id,
-                           const std::string &resource_id,
-                           const std::string &resource_path,
-                           bool use_initial_pose, Completion completion) {
+                           const WorkerStartContext &context,
+                           Completion completion) {
   // 服务未就绪时立即返回，避免控制流程无限等待。
   if (!client_->wait_for_service(std::chrono::seconds(3))) {
     completion(false, service_name_ + " is not ready");
@@ -154,9 +147,10 @@ void WorkerClient::request(uint8_t command, uint64_t session_id,
   auto request = std::make_shared<SetWorkerState::Request>();
   request->command = command;
   request->session_id = session_id;
-  request->resource_id = resource_id;
-  request->resource_path = resource_path;
-  request->use_initial_pose = use_initial_pose;
+  request->resource_id = context.resource_id;
+  request->resource_path = context.resource_path;
+  request->use_initial_pose = context.use_initial_pose;
+  request->algorithm_profile = context.algorithm_profile;
 
   // 异步响应继续驱动控制器中的下一步启动或停止操作。
   client_->async_send_request(

@@ -73,6 +73,7 @@ class SlamManagerNode : public rclcpp::Node {
     std::string map_id;
     std::filesystem::path map_path;
     bool use_initial_pose{false};
+    std::string algorithm_profile{"initial"};
     geometry_msgs::msg::Pose initial_pose;
     uint64_t generation{0U};
     std::shared_ptr<WorkerOperationToken> operation_token;

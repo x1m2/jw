@@ -14,8 +14,11 @@ void MappingController::start(uint64_t session_id, const std::string &map_id,
                               std::shared_ptr<WorkerOperationToken> operation_token,
                               Completion completion) {
   // PGO 先准备好，再启动产生建图数据的 FastLIO。
+  WorkerStartContext pgo_context;
+  pgo_context.resource_id = map_id;
+  pgo_context.resource_path = map_staging_path;
   pgo_worker_.start(
-      session_id, map_id, map_staging_path,
+      session_id, pgo_context,
       [this, session_id, operation_token,
        completion = std::move(completion)](
           bool pgo_ok, const std::string &pgo_message) mutable {

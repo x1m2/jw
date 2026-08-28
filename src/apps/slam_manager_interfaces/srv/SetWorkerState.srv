@@ -5,6 +5,7 @@ uint64 session_id
 string resource_id
 string resource_path
 bool use_initial_pose
+string algorithm_profile
 ---
 bool success
 uint8 actual_state
