@@ -196,7 +196,7 @@ public:
         for (int i = 0; i < measures->lidar->points.size(); i++)
             if (i % point_skip_num == 0)
             {
-                feats_down_lidar->points.push_back(measures->lidar->points[i]);
+                feats_down_lidar->push_back(measures->lidar->points[i]);
             }
         measures->lidar = feats_down_lidar;
         LOG_DEBUG("run fastlio 2");
