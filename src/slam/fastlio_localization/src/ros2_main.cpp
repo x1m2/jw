@@ -305,9 +305,11 @@ void FastlioLocalizationNode::sensor_data_process() {
 
       PointCloudType::Ptr cur_scan(new PointCloudType);
       *cur_scan = *slam.frontend->measures->lidar;
+      const V3D mean_acc =
+          System::mean_acceleration(*slam.frontend->measures);
       slam.relocalization_thread =
           std::thread(&System::run_relocalization, &slam, cur_scan,
-                      slam.frontend->measures->lidar_beg_time);
+                      slam.frontend->measures->lidar_beg_time, mean_acc);
     }
     // publish_module_status(slam.frontend->measures->lidar_end_time,
     // robot_msgs::Level::WARN);

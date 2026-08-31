@@ -21,6 +21,7 @@ struct BBS3DOptions
     // angular search range
     std::vector<double> min_rpy;
     std::vector<double> max_rpy;
+    bool gravity_align = false;
 
     // score threshold percentage
     double score_threshold_percentage;
@@ -66,6 +67,7 @@ public:
             std::cout << "[ERROR] Set min_rpy and max_rpy correctly" << std::endl;
             return false;
         }
+        gravity_align = bbs3d_option.gravity_align;
 
         std::cout << "[BBS3D] Loading score threshold percentage..." << std::endl;
         score_threshold_percentage = bbs3d_option.score_threshold_percentage;
@@ -182,6 +184,7 @@ public:
     // angular search range
     Eigen::Vector3d min_rpy;
     Eigen::Vector3d max_rpy;
+    bool gravity_align = false;
 
     // score threshold percentage
     double score_threshold_percentage;

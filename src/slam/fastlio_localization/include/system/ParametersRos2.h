@@ -104,6 +104,7 @@ inline void load_parameters(rclcpp::Node::SharedPtr &node, System &slam,
     node->declare_parameter("bbs3d_max_level", 6);
     node->declare_parameter("bbs3d_min_rpy", vector<double>());
     node->declare_parameter("bbs3d_max_rpy", vector<double>());
+    node->declare_parameter("bbs3d_gravity_align", true);
     node->declare_parameter("bbs3d_score_threshold_percentage", 0.9);
     node->declare_parameter("bbs3d_num_threads", 6);
     node->declare_parameter("bbs3d_tar_leaf_size", 0.1);
@@ -118,6 +119,7 @@ inline void load_parameters(rclcpp::Node::SharedPtr &node, System &slam,
     node->get_parameter("bbs3d_max_level", bbs3d_option.max_level);
     node->get_parameter("bbs3d_min_rpy", bbs3d_option.min_rpy);
     node->get_parameter("bbs3d_max_rpy", bbs3d_option.max_rpy);
+    node->get_parameter("bbs3d_gravity_align", bbs3d_option.gravity_align);
     node->get_parameter("bbs3d_score_threshold_percentage",
                         bbs3d_option.score_threshold_percentage);
     node->get_parameter("bbs3d_num_threads", bbs3d_option.num_threads);

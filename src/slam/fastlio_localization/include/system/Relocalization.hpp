@@ -25,7 +25,8 @@ public:
     void set_extrinsic(const V3D &transl, const M3D &rot);
     bool load_prior_map(const PointCloudType::Ptr &global_map);
     bool load_keyframe_descriptor(const std::string &path);
-    bool run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time);
+    bool run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result,
+             const double &lidar_beg_time, const V3D &mean_acc);
 
     void set_init_pose(const Pose &_imu_pose);
     void set_bnb3d_param(const BnbOptions &match_option, const Pose &lidar_pose);
@@ -50,7 +51,9 @@ public:
 private:
     bool fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const Eigen::Matrix4d &lidar_ext, const double &score);
     bool run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const double &lidar_beg_time, const Eigen::Matrix4d &lidar_ext, double &score);
-    bool run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
+    bool run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat,
+                   const Eigen::Matrix4d &lidar_ext, const V3D &mean_acc,
+                   double &score);
     bool run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
     bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
 
@@ -139,9 +142,47 @@ bool Relocalization::run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Ma
     return true;
 }
 
-bool Relocalization::run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score)
+bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
+                               Eigen::Matrix4d &rough_mat,
+                               const Eigen::Matrix4d &lidar_ext,
+                               const V3D &mean_acc, double &score)
 {
     pcl::PointCloud<pcl::PointXYZ>::Ptr bbs_input(new pcl::PointCloud<pcl::PointXYZ>());
+
+    Eigen::Matrix4d gravity_from_imu = Eigen::Matrix4d::Identity();
+    bool gravity_aligned = false;
+    if (bbs3d.gravity_align)
+    {
+        if (!mean_acc.allFinite() || mean_acc.norm() <= 1e-3)
+        {
+            LOG_ERROR("BBS3D gravity alignment failed: invalid mean_acc");
+            return false;
+        }
+        const Eigen::Quaterniond gravity_rotation =
+            Eigen::Quaterniond::FromTwoVectors(
+                (-mean_acc).normalized(), Eigen::Vector3d(0.0, 0.0, -1.0));
+        gravity_from_imu.topLeftCorner<3, 3>() =
+            gravity_rotation.normalized().toRotationMatrix();
+        gravity_aligned = true;
+
+        const Eigen::Matrix3d rotation =
+            gravity_from_imu.topLeftCorner<3, 3>();
+        const double gravity_roll = std::atan2(rotation(2, 1), rotation(2, 2));
+        const double gravity_pitch =
+            std::atan2(-rotation(2, 0),
+                       std::hypot(rotation(0, 0), rotation(1, 0)));
+        const double scale = G_m_s2 / mean_acc.norm();
+        const Eigen::Vector3d acc_world = rotation * (mean_acc * scale);
+        const Eigen::Vector3d residual =
+            acc_world + Eigen::Vector3d(0.0, 0.0, -G_m_s2);
+        LOG_WARN(
+            "BBS3D gravity alignment: roll=%.2f deg, pitch=%.2f deg, "
+            "mean_acc=[%.3f %.3f %.3f], residual_norm=%.4f",
+            RAD2DEG(gravity_roll), RAD2DEG(gravity_pitch), mean_acc.x(),
+            mean_acc.y(), mean_acc.z(), residual.norm());
+    }
+
+    const Eigen::Matrix4d gravity_from_lidar = gravity_from_imu * lidar_ext;
 
     pcl::PointXYZ tmp;
     for (auto &point : scan->points)
@@ -149,9 +190,12 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_
         auto norm = pcl::euclideanDistance(point, pcl::PointXYZ(0, 0, 0));
         if (norm < bbs3d.min_scan_range || norm > bbs3d.max_scan_range)
           continue;
-        tmp.x = point.x;
-        tmp.y = point.y;
-        tmp.z = point.z;
+        const Eigen::Vector4d point_lidar(point.x, point.y, point.z, 1.0);
+        const Eigen::Vector4d point_for_bbs =
+            gravity_aligned ? gravity_from_lidar * point_lidar : point_lidar;
+        tmp.x = point_for_bbs.x();
+        tmp.y = point_for_bbs.y();
+        tmp.z = point_for_bbs.z();
         bbs_input->push_back(tmp);
     }
 
@@ -163,14 +207,32 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_
         filter.filter(*bbs_input);
     }
 
+    const auto voxel_filtered_points = bbs_input->size();
+    const auto score_threshold = static_cast<std::size_t>(std::floor(
+        static_cast<double>(voxel_filtered_points) *
+        bbs3d.score_threshold_percentage));
+    LOG_WARN(
+        "BBS3D voxel filtered points = %zu (leaf = %.2f m), "
+        "score threshold = %zu (percentage = %.3f)",
+        voxel_filtered_points, bbs3d.src_leaf_size, score_threshold,
+        bbs3d.score_threshold_percentage);
+
     if (!bbs3d.run(bbs_input, rough_mat))
     {
         LOG_ERROR("bbs3d failed! Please move the vehicle to another position and try again.");
         return false;
     }
 
-    // lidar pose -> imu pose
-    rough_mat *= lidar_ext.inverse();
+    if (gravity_aligned)
+    {
+        // BBS returns T_map_gravity. Convert it to T_map_imu.
+        rough_mat *= gravity_from_imu;
+    }
+    else
+    {
+        // BBS returns T_map_lidar. Convert it to T_map_imu.
+        rough_mat *= lidar_ext.inverse();
+    }
 
     EigenMath::DecomposeAffineMatrix(rough_mat, rough_pose.x, rough_pose.y, rough_pose.z, rough_pose.roll, rough_pose.pitch, rough_pose.yaw);
     LOG_WARN("bbs3d success! res pose = (%.2lf,%.2lf,%.2lf,%.2lf,%.2lf,%.2lf)!",
@@ -269,7 +331,10 @@ bool Relocalization::run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d 
     return true;
 }
 
-bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time)
+bool Relocalization::run(const PointCloudType::Ptr &scan,
+                         Eigen::Matrix4d &result,
+                         const double &lidar_beg_time,
+                         const V3D &mean_acc)
 {
     Eigen::Matrix4d lidar_ext = lidar_extrinsic.toMatrix4d();
     bool success_flag = true;
@@ -285,7 +350,8 @@ bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &resul
 
     if (algorithm_type.compare("bbs3d") == 0)
     {
-        if (!run_bbs3d(scan, result, lidar_ext, score) || !fine_tune_pose(scan, result, lidar_ext, score))
+        if (!run_bbs3d(scan, result, lidar_ext, mean_acc, score) ||
+            !fine_tune_pose(scan, result, lidar_ext, score))
         {
 #ifdef DEDUB_MODE
             result = EigenMath::CreateAffineMatrix(V3D(rough_pose.x, rough_pose.y, rough_pose.z), V3D(rough_pose.roll, rough_pose.pitch, rough_pose.yaw));
