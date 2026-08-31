@@ -1211,25 +1211,29 @@ void SlamManagerNode::deleteMapCallback(
 
   std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
 
-  // 协议2.3：空闲且没有运行定位算法时才允许删除地图。
-  const SlamMode current_mode = state_machine_.mode();
-  if (current_mode != SlamMode::kIdle || relocalization_succeeded_.load()) {
-    response->success = false;
-    response->message =
-        "delete map rejected, robot must be idle without an active "
-        "localization algorithm, current state=" +
-        std::string(toString(current_mode));
-    return;
-  }
-
   const std::string &map_id = request->map_id;
   if (!validMapId(map_id, response->message)) {
     response->success = false;
     return;
   }
+
+  // 非当前使用的地图可在任意运行状态下删除；当前定位加载的地图和
+  // 正在写入的建图目录必须保留，避免运行中的算法访问已删除文件。
+  if (map_id == selected_map_id_) {
+    response->success = false;
+    response->message =
+        "delete map rejected, map is currently loaded: " + map_id;
+    return;
+  }
+  if (!active_map_id_.empty() && map_id == active_map_id_) {
+    response->success = false;
+    response->message =
+        "delete map rejected, map is currently being created: " + map_id;
+    return;
+  }
+
   response->success = map_storage_->deleteMap(map_id, response->message);
   if (response->success) {
-    if (selected_map_id_ == map_id) selected_map_id_.clear();
     RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Delete map rejected: %s",
