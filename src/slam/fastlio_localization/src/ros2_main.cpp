@@ -1,5 +1,6 @@
 #include "ros2_main.hpp"
 
+#include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <unistd.h>
@@ -52,6 +53,14 @@ void FastlioLocalizationNode::publish_cloud_world(
       new PointCloudType(laserCloud->size(), 1));
   pointcloudLidarToWorld(laserCloud, laserCloudWorld, state);
   publish_cloud(pubLaserCloudFull, laserCloudWorld, lidar_end_time, map_frame);
+}
+
+void FastlioLocalizationNode::publish_cloud_body(
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
+    PointCloudType::Ptr cloud, const double &lidar_end_time) {
+  PointCloudType::Ptr cloud_body(new PointCloudType());
+  pcl::transformPointCloud(*cloud, *cloud_body, T_base_lidar);
+  publish_cloud(publisher, cloud_body, lidar_end_time, baselink_frame);
 }
 
 template <typename T>
@@ -322,11 +331,11 @@ void FastlioLocalizationNode::sensor_data_process() {
       V3D baselink_pos;
       if (slam.run()) {
         const auto &state = slam.frontend->get_state();
-        LOG_INFO("location valid. feats_down = %d, match_score = %.3f, "
-                 "cost time = %.1fms.",
-                 slam.frontend->loger.feats_down_size,
-                 slam.frontend->get_match_score(),
-                 slam.frontend->loger.total_time);
+        LOG_INFO(
+            "location valid. feats_down = %d, match_score = %.3f, "
+            "cost time = %.1fms.",
+            slam.frontend->loger.feats_down_size,
+            slam.frontend->get_match_score(), slam.frontend->loger.total_time);
         slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
         /******* Publish odometry *******/
@@ -351,13 +360,16 @@ void FastlioLocalizationNode::sensor_data_process() {
                            slam.frontend->measures->lidar_end_time);
 
         /******* Publish points *******/
-        if (scan_pub_en)
+        if (scan_pub_en) {
+          publish_cloud_body(pubLaserCloudBody, slam.feats_undistort,
+                             slam.frontend->measures->lidar_end_time);
           if (dense_pub_en)
             publish_cloud_world(pubLaserCloudFull, slam.feats_undistort, state,
                                 slam.frontend->measures->lidar_end_time);
           else
             publish_cloud(pubLaserCloudFull, slam.frontend->feats_down_world,
                           slam.frontend->measures->lidar_end_time, map_frame);
+        }
       } else {
         LOG_ERROR("location invalid!");
 #ifdef WORK
@@ -388,11 +400,11 @@ void FastlioLocalizationNode::sensor_data_process() {
   V3D baselink_pos;
   if (slam.run()) {
     const auto &state = slam.frontend->get_state();
-    LOG_INFO("location valid. feats_down = %d, match_score = %.3f, "
-             "cost time = %.1fms.",
-             slam.frontend->loger.feats_down_size,
-             slam.frontend->get_match_score(),
-             slam.frontend->loger.total_time);
+    LOG_INFO(
+        "location valid. feats_down = %d, match_score = %.3f, "
+        "cost time = %.1fms.",
+        slam.frontend->loger.feats_down_size, slam.frontend->get_match_score(),
+        slam.frontend->loger.total_time);
     slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
     if (last_pose_record) {
@@ -426,13 +438,16 @@ void FastlioLocalizationNode::sensor_data_process() {
                        slam.frontend->lidar_end_time);
 
     /******* Publish points *******/
-    if (scan_pub_en)
+    if (scan_pub_en) {
+      publish_cloud_body(pubLaserCloudBody, slam.feats_undistort,
+                         slam.frontend->lidar_end_time);
       if (dense_pub_en)
         publish_cloud_world(pubLaserCloudFull, slam.feats_undistort, state,
                             slam.frontend->lidar_end_time);
       else
         publish_cloud(pubLaserCloudFull, slam.frontend->feats_down_world,
                       slam.frontend->lidar_end_time, map_frame);
+    }
   } else {
     LOG_ERROR("location invalid!");
 #ifdef WORK
@@ -693,6 +708,8 @@ void FastlioLocalizationNode::initialize() {
   }
   pubLaserCloudFull = node->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 1000);
+  pubLaserCloudBody = node->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/cloud_registered_body", 20);
   pubLidarOdom = node->create_publisher<nav_msgs::msg::Odometry>(
       "/lidar_localization", 1000);
   pubImuOdom = node->create_publisher<nav_msgs::msg::Odometry>(

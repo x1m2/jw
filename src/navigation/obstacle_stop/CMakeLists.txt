@@ -19,34 +19,28 @@ find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
-add_library(${PROJECT_NAME} SHARED
+add_executable(obstacle_stop_node
+  src/obstacle_stop_node.cpp
   src/obstacle_stop.cpp
 )
 
-target_include_directories(${PROJECT_NAME} PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+target_include_directories(obstacle_stop_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-ament_target_dependencies(${PROJECT_NAME}
+ament_target_dependencies(obstacle_stop_node
   geometry_msgs
   livox_ros_driver2
   rclcpp
   sensor_msgs
+  slam_manager
   std_msgs
   visualization_msgs
 )
-target_link_libraries(${PROJECT_NAME} Eigen3::Eigen)
-
-add_executable(obstacle_stop_node src/obstacle_stop_node.cpp)
-ament_target_dependencies(obstacle_stop_node rclcpp slam_manager)
-target_link_libraries(obstacle_stop_node ${PROJECT_NAME})
+target_link_libraries(obstacle_stop_node Eigen3::Eigen)
 
 install(
-  TARGETS ${PROJECT_NAME} obstacle_stop_node
-  EXPORT export_${PROJECT_NAME}
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
+  TARGETS obstacle_stop_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
@@ -60,12 +54,5 @@ if(BUILD_TESTING)
     test/test_directional_obstacle_policy.cpp)
   target_include_directories(test_directional_obstacle_policy PRIVATE include)
 endif()
-
-ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_libraries(${PROJECT_NAME})
-ament_export_include_directories(include)
-ament_export_dependencies(
-  Eigen3 geometry_msgs livox_ros_driver2 rclcpp sensor_msgs std_msgs
-  visualization_msgs)
 
 ament_package()

@@ -43,6 +43,9 @@ class FastlioLocalizationNode : public rclcpp::Node {
       rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
       PointCloudType::Ptr cloud, const state_ikfom &state,
       const double &lidar_end_time);
+  void publish_cloud_body(
+      rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
+      PointCloudType::Ptr cloud, const double &lidar_end_time);
   template <typename T>
   void set_posestamp(T &out, const QD &rotation, const V3D &position);
   void publish_tf(const QD &rotation, const V3D &position,
@@ -110,6 +113,8 @@ class FastlioLocalizationNode : public rclcpp::Node {
 
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudFull;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
+      pubLaserCloudBody;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr
       pubLidarOdom;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr

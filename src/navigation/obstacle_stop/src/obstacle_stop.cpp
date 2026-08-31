@@ -68,9 +68,10 @@ bool ObstacleStop::initialize() {
 
   RCLCPP_INFO(
       node_->get_logger(),
-      "Obstacle stop initialized: lidar=%s (type=%s), planned_cmd=%s, "
-      "safe_cmd=%s",
-      lidar_topic_.c_str(), lidar_type_ == 1 ? "Livox" : "PointCloud2",
+      "Obstacle stop initialized: lidar_topic=%s, lidar_type=%d (%s), "
+      "planned_cmd=%s, safe_cmd=%s",
+      lidar_topic_.c_str(), lidar_type_,
+      lidar_type_ == 1 ? "Livox CustomMsg" : "PointCloud2",
       planned_cmd_topic_.c_str(),
       safe_cmd_topic_.c_str());
   return true;
