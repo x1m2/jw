@@ -71,8 +71,8 @@ class PgoSc : public rclcpp::Node {
 
   ~PgoSc() override;
 
-  // OTA停止建图时由Worker同步保存当前地图。
-  void saveMap();
+  // finish_mapping通过Worker同步保存当前地图。
+  bool saveMap(const std::string &map_path);
 
  private:
   ///// Basic params
@@ -163,7 +163,7 @@ class PgoSc : public rclcpp::Node {
   void odomPcdCallback(
       const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg,
       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pcd_msg);
-  void saveFlagCallback();
+  bool saveFlagCallback();
   void loopTimerFunc();
   void visTimerFunc();
 };

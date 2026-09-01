@@ -7,14 +7,21 @@
 
 ```text
 APP /robot/start_mapping
-  -> 以map_id字符串直接创建目录（同名地图整体覆盖）
+  -> 记录map_id和未来保存路径（不创建目录、不覆盖同名地图）
   -> 启动PGO和FastLIO
   -> 开始建图
 
 APP /robot/finish_mapping
+  -> 创建map/task目录（同名地图在此时整体覆盖）
   -> 停止FastLIO
-  -> PGO保存globalmap.pcd
+  -> 显式调用PGO保存globalmap.pcd
+  -> 停止PGO
   -> 发布到 /robotfs/data/slam_data/<map_id>/map/
+
+APP /robot/cancel_mapping
+  -> 停止FastLIO和PGO
+  -> 跳过PGO地图保存
+  -> 不创建地图目录，回到IDLE
 
 APP /robot/load_map
   -> 内部状态IDLE切换为LOADING_MAP
@@ -106,9 +113,11 @@ A -> B为map_connection时：
 ## 地图目录
 
 `map_id`长度为1～64，可使用字母、数字、`_`和`-`，不再强制
-`map_`前缀。`start_mapping`会创建`map`和`task`子目录；同名目录
-存在时先删除旧地图再重建。`load_map`和`delete_map`使用相同的
-`map_id`规则。`log`为运行日志保留目录，不能作为`map_id`。
+`map_`前缀。`start_mapping`只记录保存路径，不创建目录；
+`finish_mapping`才创建`map`和`task`子目录，同名目录此时整体覆盖。
+`cancel_mapping`不创建目录，也不保存任何建图结果。`load_map`和
+`delete_map`使用相同的`map_id`规则。`log`为运行日志保留目录，不能作为
+`map_id`。
 
 ```text
 /robotfs/data/slam_data/<map_id>/

@@ -206,7 +206,9 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
       [this](std_msgs::msg::Empty::SharedPtr /*msg*/) {
         RCLCPP_INFO(this->get_logger(),
                     "Receive save trigger, start saving...");
-        this->saveFlagCallback();
+        if (!this->saveFlagCallback()) {
+          RCLCPP_ERROR(this->get_logger(), "Map save failed.");
+        }
       });
   save_done_pub_ = this->create_publisher<std_msgs::msg::Empty>(
       "/save_done", rclcpp::QoS(1).transient_local());
@@ -685,7 +687,7 @@ void PgoSc::publishKeyframe(const PosePcd &keyframe) {
   keyframe_cloud_pub_->publish(message);
 }
 // ====================== save callback ======================
-void PgoSc::saveFlagCallback() {
+bool PgoSc::saveFlagCallback() {
   if (package_path_.empty()) {
     throw std::runtime_error("basic.package_path is empty");
   }
@@ -714,14 +716,14 @@ void PgoSc::saveFlagCallback() {
       if (ec) {
         RCLCPP_ERROR(this->get_logger(), "Failed to remove directory %s: %s",
                      seq_directory.c_str(), ec.message().c_str());
-        return;
+        return false;
       }
     }
     fs::create_directories(scans_directory, ec);
     if (ec) {
       RCLCPP_ERROR(this->get_logger(), "Failed to create directory %s: %s",
                    scans_directory.c_str(), ec.message().c_str());
-      return;
+      return false;
     }
 
     std::ofstream kitti_pose_file(seq_directory + "/poses_kitti.txt");
@@ -729,7 +731,7 @@ void PgoSc::saveFlagCallback() {
     if (!kitti_pose_file.is_open() || !tum_pose_file.is_open()) {
       RCLCPP_ERROR(this->get_logger(), "Failed to open pose files in %s",
                    seq_directory.c_str());
-      return;
+      return false;
     }
     tum_pose_file << "#timestamp x y z qx qy qz qw\n";
     // 遍历关键帧保存点云和位姿
@@ -738,7 +740,7 @@ void PgoSc::saveFlagCallback() {
       if (keyframes_.empty()) {
         RCLCPP_WARN(this->get_logger(),
                     "No keyframes, skip saving KITTI/TUM scans.");
-        return;
+        return false;
       }
       for (size_t i = 0; i < keyframes_.size(); ++i) {
         // 保存 PCD
@@ -792,7 +794,7 @@ void PgoSc::saveFlagCallback() {
         RCLCPP_ERROR(this->get_logger(),
                      "Failed to remove existing bag directory: %s",
                      ec.message().c_str());
-        return;
+        return false;
       }
     }
     rosbag2_cpp::Writer writer;
@@ -873,7 +875,7 @@ void PgoSc::saveFlagCallback() {
       if (keyframes_.empty()) {
         RCLCPP_WARN(this->get_logger(),
                     "No keyframes, skip saving globalmap.pcd.");
-        return;
+        return false;
       }
       size_t reserve_size = 0;
       for (const auto &kf : keyframes_) {
@@ -893,7 +895,7 @@ void PgoSc::saveFlagCallback() {
         0) {
       RCLCPP_ERROR(this->get_logger(), "Failed to save result map: %s",
                    result_path.c_str());
-      return;
+      return false;
     }
 
     RCLCPP_INFO(this->get_logger(),
@@ -906,9 +908,24 @@ void PgoSc::saveFlagCallback() {
   save_done_pub_->publish(done_msg);
 
   RCLCPP_INFO(this->get_logger(), "Map save finished, published /save_done.");
+  return true;
 }
 
-void PgoSc::saveMap() { saveFlagCallback(); }
+bool PgoSc::saveMap(const std::string &map_path) {
+  if (map_path.empty()) {
+    throw std::invalid_argument("map save path is empty");
+  }
+  std::error_code directory_error;
+  if (!fs::is_directory(map_path, directory_error) || directory_error) {
+    throw std::runtime_error(
+        directory_error
+            ? "failed to inspect map save directory: " +
+                  directory_error.message()
+            : "map save directory does not exist: " + map_path);
+  }
+  package_path_ = map_path;
+  return saveFlagCallback();
+}
 
 // ====================== Keyframe Utilities ======================
 void PgoSc::updateOdomsAndPaths(const PosePcd &pose_pcd_in) {

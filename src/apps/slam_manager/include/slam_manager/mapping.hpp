@@ -19,10 +19,11 @@ class MappingController {
                     rclcpp::CallbackGroup::SharedPtr callback_group);
 
   void start(uint64_t session_id, const std::string &map_id,
-             const std::string &map_staging_path,
              std::shared_ptr<WorkerOperationToken> operation_token,
              Completion completion);
-  void stop(uint64_t session_id, Completion completion);
+  void finish(uint64_t session_id, const std::string &map_save_path,
+              Completion completion);
+  void cancel(uint64_t session_id, Completion completion);
 
  private:
   // PGO 先启动，FastLIO 后启动；停止时顺序相反。

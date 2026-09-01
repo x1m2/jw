@@ -10,13 +10,11 @@ MappingController::MappingController(
       fast_lio_worker_(node, "/fast_lio_worker/set_state", callback_group) {}
 
 void MappingController::start(uint64_t session_id, const std::string &map_id,
-                              const std::string &map_staging_path,
                               std::shared_ptr<WorkerOperationToken> operation_token,
                               Completion completion) {
   // PGO 先准备好，再启动产生建图数据的 FastLIO。
   WorkerStartContext pgo_context;
   pgo_context.resource_id = map_id;
-  pgo_context.resource_path = map_staging_path;
   pgo_worker_.start(
       session_id, pgo_context,
       [this, session_id, operation_token,
@@ -50,8 +48,48 @@ void MappingController::start(uint64_t session_id, const std::string &map_id,
       });
 }
 
-void MappingController::stop(uint64_t session_id, Completion completion) {
-  // 先停止 FastLIO 数据生产，再停止 PGO 数据处理。
+void MappingController::finish(uint64_t session_id,
+                               const std::string &map_save_path,
+                               Completion completion) {
+  // 先停止FastLIO冻结输入，再显式保存，最后停止PGO。
+  fast_lio_worker_.stop(
+      session_id,
+      [this, session_id, map_save_path, completion = std::move(completion)](
+          bool fast_lio_ok, const std::string &fast_lio_message) mutable {
+        if (!fast_lio_ok) {
+          pgo_worker_.stop(
+              session_id,
+              [completion = std::move(completion), fast_lio_message](
+                  bool pgo_ok, const std::string &pgo_message) mutable {
+                completion(false, "FastLIO stop failed: " + fast_lio_message +
+                                      "; PGO stop=" + pgo_message +
+                                      (pgo_ok ? "" : " (failed)"));
+              });
+          return;
+        }
+        pgo_worker_.save(
+            session_id, map_save_path,
+            [this, session_id, completion = std::move(completion)](
+                bool save_ok, const std::string &save_message) mutable {
+              pgo_worker_.stop(
+                  session_id,
+                  [completion = std::move(completion), save_ok,
+                   save_message](bool pgo_ok,
+                                 const std::string &pgo_message) mutable {
+                    if (save_ok && pgo_ok) {
+                      completion(true, "map saved and mapping workers stopped");
+                      return;
+                    }
+                    completion(false, "PGO save=" + save_message +
+                                          "; PGO stop=" + pgo_message +
+                                          (pgo_ok ? "" : " (failed)"));
+                  });
+            });
+      });
+}
+
+void MappingController::cancel(uint64_t session_id, Completion completion) {
+  // 取消时只按顺序停止两个Worker，不发送保存命令。
   fast_lio_worker_.stop(
       session_id,
       [this, session_id, completion = std::move(completion)](
@@ -62,10 +100,10 @@ void MappingController::stop(uint64_t session_id, Completion completion) {
              fast_lio_message](bool pgo_ok,
                                const std::string &pgo_message) mutable {
               if (fast_lio_ok && pgo_ok) {
-                completion(true, "mapping workers stopped");
+                completion(true, "mapping workers cancelled without saving");
                 return;
               }
-              completion(false, "stop failed: FastLIO=" + fast_lio_message +
+              completion(false, "cancel failed: FastLIO=" + fast_lio_message +
                                     ", PGO=" + pgo_message);
             });
       });

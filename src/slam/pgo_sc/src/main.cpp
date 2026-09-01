@@ -9,18 +9,14 @@ int main(int argc, char **argv) {
 
   auto worker = std::make_shared<slam_manager::ManagedWorker>(
       "pgo_worker",
-      [](const slam_manager::ManagedWorker::StartContext &context) {
+      [](const slam_manager::ManagedWorker::StartContext &) {
         slam_manager::ManagedWorker::AlgorithmInstance instance;
         rclcpp::NodeOptions options;
-        if (!context.resource_path.empty()) {
-          options.append_parameter_override("basic.package_path",
-                                            context.resource_path);
-        }
         auto pgo = std::make_shared<PgoSc>(options);
         instance.node = pgo;
-        if (!context.resource_path.empty()) {
-          instance.before_stop = [pgo]() { pgo->saveMap(); };
-        }
+        instance.save = [pgo](const std::string &map_path) {
+          return pgo->saveMap(map_path);
+        };
         return instance;
       });
 

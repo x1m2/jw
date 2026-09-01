@@ -76,6 +76,8 @@ class WorkerClient {
   void start(uint64_t session_id, const WorkerStartContext &context,
              Completion completion);
   void stop(uint64_t session_id, Completion completion);
+  void save(uint64_t session_id, const std::string &resource_path,
+            Completion completion);
 
  private:
   // 发送统一命令，并通过 completion 返回执行结果。

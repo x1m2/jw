@@ -88,8 +88,8 @@ bool MapStorage::countSavedMaps(std::size_t &count,
   return true;
 }
 
-bool MapStorage::prepareForMapping(const std::string &map_id,
-                                   std::string &message) const {
+bool MapStorage::prepareForSave(const std::string &map_id,
+                                std::string &message) const {
   const auto target = dataPath(map_id);
   std::error_code filesystem_error;
   const bool replacing = std::filesystem::exists(target, filesystem_error);
@@ -109,12 +109,24 @@ bool MapStorage::prepareForMapping(const std::string &map_id,
 
   std::filesystem::create_directories(mapPath(map_id), filesystem_error);
   if (filesystem_error) {
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(target, cleanup_error);
     message = "failed to create map directory: " + filesystem_error.message();
+    if (cleanup_error) {
+      message += "; failed to clean incomplete directory: " +
+                 cleanup_error.message();
+    }
     return false;
   }
   std::filesystem::create_directories(taskPath(map_id), filesystem_error);
   if (filesystem_error) {
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(target, cleanup_error);
     message = "failed to create task directory: " + filesystem_error.message();
+    if (cleanup_error) {
+      message += "; failed to clean incomplete directory: " +
+                 cleanup_error.message();
+    }
     return false;
   }
 
@@ -158,7 +170,7 @@ bool MapStorage::deleteMap(const std::string &map_id,
 bool MapStorage::finalize(const std::filesystem::path &map_path,
                           const std::string &map_id,
                           std::string &message) const {
-  // 目录由start_mapping预先创建，此处检查并写入保存结果。
+  // 目录由finish_mapping在停止Worker前创建，此处检查保存结果。
   if (map_id.empty() || map_path.empty()) {
     message = "no active map task";
     return false;

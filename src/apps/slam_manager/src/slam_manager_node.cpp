@@ -179,6 +179,11 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::finishMappingCallback, this,
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default, lifecycle_control_callback_group_);
+  cancel_mapping_service_ = create_service<Trigger>(
+      "/robot/cancel_mapping",
+      std::bind(&SlamManagerNode::cancelMappingCallback, this,
+                std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default, lifecycle_control_callback_group_);
   load_map_service_ = create_service<LoadMap>(
       "/robot/load_map",
       std::bind(&SlamManagerNode::loadMapCallback, this, std::placeholders::_1,
@@ -286,8 +291,7 @@ bool SlamManagerNode::isLifecycleCommandActive(
 
 bool SlamManagerNode::prepareForStartCommand(
     uint64_t generation,
-    const std::shared_ptr<WorkerOperationToken> &token, bool discard_mapping,
-    std::string &message) {
+    const std::shared_ptr<WorkerOperationToken> &token, std::string &message) {
   if (!isLifecycleCommandActive(generation, token)) {
     message = "lifecycle command superseded before teardown";
     return false;
@@ -306,7 +310,7 @@ bool SlamManagerNode::prepareForStartCommand(
     message = "lifecycle command superseded after teardown";
     return false;
   }
-  if (!clearRuntimeAfterTeardown(discard_mapping, message)) return false;
+  if (!clearRuntimeAfterTeardown(message)) return false;
   publishMode();
   if (!isLifecycleCommandActive(generation, token)) {
     message = "lifecycle command superseded after runtime reset";
@@ -344,7 +348,7 @@ bool SlamManagerNode::stopAllAlgorithms(std::string &message) {
       "mapping stop", finish_mapping_timeout_sec_,
       std::make_shared<WorkerOperationToken>(),
       [this](WorkerCompletion completion) {
-        mapping_controller_->stop(0U, std::move(completion));
+        mapping_controller_->cancel(0U, std::move(completion));
       });
   append_result("mapping", mapping_stop.success(), mapping_stop.message);
 
@@ -352,19 +356,18 @@ bool SlamManagerNode::stopAllAlgorithms(std::string &message) {
   return success;
 }
 
-bool SlamManagerNode::clearRuntimeAfterTeardown(bool discard_mapping,
-                                                std::string &message) {
-  if (discard_mapping && !active_map_id_.empty()) {
+bool SlamManagerNode::clearRuntimeAfterTeardown(std::string &message) {
+  if (active_map_directory_prepared_ && !active_map_id_.empty()) {
     std::string delete_message;
     if (!map_storage_->deleteMap(active_map_id_, delete_message)) {
-      message = "failed to discard interrupted map '" + active_map_id_ +
+      message = "failed to discard incomplete map '" + active_map_id_ +
                 "': " + delete_message;
       return false;
     }
   }
-
   active_map_id_.clear();
   active_map_path_.clear();
+  active_map_directory_prepared_ = false;
   relocalization_succeeded_.store(false);
   {
     std::lock_guard<std::mutex> lock(localization_result_mutex_);
@@ -453,7 +456,7 @@ void SlamManagerNode::startMappingCallback(
   }
 
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token, true,
+  if (!prepareForStartCommand(generation, operation_token,
                               teardown_message)) {
     if (!isLifecycleCommandActive(generation, operation_token)) {
       response->success = false;
@@ -474,16 +477,6 @@ void SlamManagerNode::startMappingCallback(
     return;
   }
 
-  // slam_manager统一负责目录准备：同名map_id直接覆盖，新map_id直接创建。
-  std::string prepare_message;
-  if (!map_storage_->prepareForMapping(map_id, prepare_message)) {
-    response->success = false;
-    response->message = "failed to prepare map directory: " + prepare_message;
-    enterError(RuntimeState::MAP_ERROR, response->message);
-    return;
-  }
-  RCLCPP_INFO(get_logger(), "%s", prepare_message.c_str());
-
   // 开始新建图后，之前由load_map记录的地图选择失效。
   if (!selected_map_id_.empty()) {
     selected_map_id_.clear();
@@ -494,56 +487,22 @@ void SlamManagerNode::startMappingCallback(
   const uint64_t session_id = session_id_;
   active_map_id_ = map_id;
   active_map_path_ = map_storage_->mapPath(active_map_id_);
-
-  // map/task目录已由slam_manager创建，启动Worker前再做完整性检查。
-  std::error_code directory_error;
-  const auto task_path = map_storage_->taskPath(active_map_id_);
-  if (!std::filesystem::is_directory(final_data_path, directory_error) ||
-      directory_error) {
-    response->success = false;
-    response->message =
-        directory_error
-            ? "failed to inspect map data directory: " +
-                  directory_error.message()
-            : "map data directory does not exist: " + final_data_path.string();
-    enterError(RuntimeState::MAP_ERROR, response->message);
-    return;
-  }
-  if (!std::filesystem::is_directory(active_map_path_, directory_error) ||
-      directory_error) {
-    response->success = false;
-    response->message =
-        directory_error
-            ? "failed to inspect map directory: " + directory_error.message()
-            : "map directory does not exist: " + active_map_path_.string();
-    enterError(RuntimeState::MAP_ERROR, response->message);
-    return;
-  }
-  if (!std::filesystem::is_directory(task_path, directory_error) ||
-      directory_error) {
-    response->success = false;
-    response->message =
-        directory_error
-            ? "failed to inspect task directory: " + directory_error.message()
-            : "task directory does not exist: " + task_path.string();
-    enterError(RuntimeState::MAP_ERROR, response->message);
-    return;
-  }
+  active_map_directory_prepared_ = false;
   publishMode();
 
-  // PGO先启动并接收暂存目录，随后启动FAST-LIO；两者节点级Ready后才响应APP。
+  // PGO建图期间不持有保存路径也不创建目录；随后启动FAST-LIO。
+  // 两者节点级Ready后才响应APP。
   const auto start_result = awaitWorkerCommand(
       "mapping workers start", start_mapping_timeout_sec_, operation_token,
       [this, session_id, operation_token](WorkerCompletion completion) {
-        mapping_controller_->start(
-            session_id, active_map_id_, active_map_path_.string(),
-            operation_token, std::move(completion));
+        mapping_controller_->start(session_id, active_map_id_, operation_token,
+                                   std::move(completion));
       },
       [this, generation, operation_token]() {
         return isLifecycleCommandActive(generation, operation_token);
       },
       [this, session_id](WorkerCompletion completion) {
-        mapping_controller_->stop(session_id, std::move(completion));
+        mapping_controller_->cancel(session_id, std::move(completion));
       },
       finish_mapping_timeout_sec_);
 
@@ -578,6 +537,25 @@ void SlamManagerNode::finishMappingCallback(
 
   std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
 
+  // 只有APP确认完成建图时才创建保存目录。同名地图也在此刻覆盖；准备
+  // 失败时保持MAPPING和Worker运行，允许APP修复存储问题后重试。
+  if (state_machine_.mode() != SlamMode::kMapping) {
+    response->success = false;
+    response->message = "finish mapping rejected, current state=" +
+                        std::string(toString(state_machine_.mode()));
+    return;
+  }
+  std::string prepare_message;
+  if (!map_storage_->prepareForSave(active_map_id_, prepare_message)) {
+    response->success = false;
+    response->message =
+        "failed to prepare map save directory: " + prepare_message;
+    RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+  active_map_directory_prepared_ = true;
+  RCLCPP_INFO(get_logger(), "%s", prepare_message.c_str());
+
   // 协议2.2：停止数据生产、触发PGO保存并发布正式地图目录。
   if (!state_machine_.beginStopMapping()) {
     response->success = false;
@@ -592,7 +570,8 @@ void SlamManagerNode::finishMappingCallback(
       "mapping workers stop", finish_mapping_timeout_sec_,
       std::make_shared<WorkerOperationToken>(),
       [this](WorkerCompletion completion) {
-        mapping_controller_->stop(session_id_, std::move(completion));
+        mapping_controller_->finish(session_id_, active_map_path_.string(),
+                                    std::move(completion));
       });
   if (!stop_result.success()) {
     response->success = false;
@@ -602,7 +581,7 @@ void SlamManagerNode::finishMappingCallback(
     return;
   }
 
-  // PGO停止时已将globalmap.pcd保存到start_mapping创建的map目录。
+  // PGO停止时已将globalmap.pcd保存到本次finish_mapping创建的map目录。
   std::string finalize_message;
   if (!map_storage_->finalize(active_map_path_, active_map_id_,
                               finalize_message)) {
@@ -614,6 +593,7 @@ void SlamManagerNode::finishMappingCallback(
   }
   active_map_id_.clear();
   active_map_path_.clear();
+  active_map_directory_prepared_ = false;
 
   state_machine_.mappingStopped();
   publishMode();
@@ -621,6 +601,89 @@ void SlamManagerNode::finishMappingCallback(
   response->message = finalize_message;
   RCLCPP_INFO(get_logger(), "%s; %s", stop_result.message.c_str(),
               finalize_message.c_str());
+}
+
+void SlamManagerNode::cancelMappingCallback(
+    const Trigger::Request::SharedPtr, Trigger::Response::SharedPtr response) {
+  RCLCPP_INFO(get_logger(),
+              "[APP][REQUEST] command=cancel_mapping mode=%s session=%llu "
+              "active_map='%s'",
+              std::string(toString(state_machine_.mode())).c_str(),
+              static_cast<unsigned long long>(session_id_),
+              active_map_id_.c_str());
+
+  const SlamMode current_mode = state_machine_.mode();
+  if (active_map_id_.empty() || current_mode != SlamMode::kMapping) {
+    response->success = false;
+    response->message = "cancel mapping rejected, current state=" +
+                        std::string(toString(current_mode));
+    return;
+  }
+
+  // 纳入生命周期命令序列，再串行执行Worker安全停止。
+  const uint64_t generation = beginLifecycleCommand("cancel_mapping");
+  std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
+  const auto operation_token = installLifecycleToken(generation);
+  if (!operation_token) {
+    response->success = false;
+    response->message = "cancel mapping superseded by a newer command";
+    return;
+  }
+
+  if (active_map_id_.empty() || !state_machine_.beginStopMapping()) {
+    response->success = false;
+    response->message = "cancel mapping rejected, current state=" +
+                        std::string(toString(state_machine_.mode()));
+    return;
+  }
+  publishMode();
+
+  const auto cancel_result = awaitWorkerCommand(
+      "mapping workers cancel", finish_mapping_timeout_sec_, operation_token,
+      [this](WorkerCompletion completion) {
+        mapping_controller_->cancel(session_id_, std::move(completion));
+      },
+      [this, generation, operation_token]() {
+        return isLifecycleCommandActive(generation, operation_token);
+      });
+  if (cancel_result.status == WorkerCommandStatus::kSuperseded ||
+      !isLifecycleCommandActive(generation, operation_token)) {
+    response->success = false;
+    response->message = "cancel mapping superseded by a newer command";
+    return;
+  }
+  if (!cancel_result.success()) {
+    response->success = false;
+    response->message = cancel_result.message;
+    enterError(RuntimeState::SLAM_ERROR, response->message);
+    return;
+  }
+
+  const std::string cancelled_map_id = active_map_id_;
+  if (active_map_directory_prepared_) {
+    std::string delete_message;
+    if (!map_storage_->deleteMap(active_map_id_, delete_message)) {
+      response->success = false;
+      response->message = "failed to discard incomplete map: " +
+                          delete_message;
+      enterError(RuntimeState::MAP_ERROR, response->message);
+      return;
+    }
+  }
+  active_map_id_.clear();
+  active_map_path_.clear();
+  active_map_directory_prepared_ = false;
+  if (!state_machine_.mappingStopped()) {
+    response->success = false;
+    response->message = "failed to enter idle state after cancelling mapping";
+    enterError(RuntimeState::SLAM_ERROR, response->message);
+    return;
+  }
+  publishMode();
+  response->success = true;
+  response->message =
+      "mapping cancelled without saving, map_id=" + cancelled_map_id;
+  RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
 void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
@@ -677,7 +740,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
   // load_map也是替换型生命周期命令：先完整销毁建图、定位和导航算法，
   // 再进入地图加载状态，但它本身不启动定位算法。
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token, true,
+  if (!prepareForStartCommand(generation, operation_token,
                               teardown_message)) {
     response->success = false;
     response->message = teardown_message;
@@ -783,7 +846,7 @@ void SlamManagerNode::startLocalizationCallback(
   }
 
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token, true,
+  if (!prepareForStartCommand(generation, operation_token,
                               teardown_message)) {
     if (!isLifecycleCommandActive(generation, operation_token)) {
       response->success = false;

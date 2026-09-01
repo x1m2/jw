@@ -21,9 +21,8 @@ class MapStorage {
   std::filesystem::path taskPath(const std::string &map_id) const;
 
   bool countSavedMaps(std::size_t &count, std::string &message) const;
-  // 开始建图前准备空目录：同名目录存在时整体覆盖，否则新建。
-  bool prepareForMapping(const std::string &map_id,
-                         std::string &message) const;
+  // 完成建图时准备空目录：同名目录存在时整体覆盖，否则新建。
+  bool prepareForSave(const std::string &map_id, std::string &message) const;
   bool deleteMap(const std::string &map_id, std::string &message) const;
   bool finalize(const std::filesystem::path &map_path,
                 const std::string &map_id, std::string &message) const;

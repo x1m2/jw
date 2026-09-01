@@ -104,6 +104,7 @@ class RuntimeTestNode(Node):
         self.service_clients = {
             'start_mapping': self.create_client(StartMapping, '/robot/start_mapping'),
             'finish_mapping': self.create_client(Trigger, '/robot/finish_mapping'),
+            'cancel_mapping': self.create_client(Trigger, '/robot/cancel_mapping'),
             'load_map': self.create_client(LoadMap, '/robot/load_map'),
             'delete_map': self.create_client(DeleteMap, '/robot/delete_map'),
             'start_localization': self.create_client(
@@ -358,8 +359,8 @@ class RuntimeTestNode(Node):
             if name == 'start_mapping' and success:
                 self.events.put(('start_pgo_rviz', None))
 
-            # 地图完成并保存成功后关闭PGO RViz。
-            if name == 'finish_mapping' and success:
+            # 地图完成或取消成功后关闭PGO RViz。
+            if name in ('finish_mapping', 'cancel_mapping') and success:
                 self.events.put(('stop_pgo_rviz', None))
 
             # 加载地图成功后，由GUI自行读取globalmap.pcd并启动RViz预览。
@@ -858,6 +859,12 @@ class RuntimeTestGui:
         )
         ttk.Button(
             mapping,
+            text='取消建图',
+            command=self.cancel_mapping,
+            style='Danger.TButton',
+        ).pack(fill=tk.X, pady=(0, 4))
+        ttk.Button(
+            mapping,
             text='加载地图',
             command=self.load_map,
             style='Primary.TButton',
@@ -1148,7 +1155,7 @@ class RuntimeTestGui:
             return
 
         try:
-            # 地图目录的新建/覆盖由start_mapping服务统一处理。
+            # 这里只准备独立日志目录；地图目录由finish_mapping创建。
             self._configure_log_for_map(map_id)
         except (RuntimeError, OSError) as error:
             messagebox.showerror('无法开始建图', str(error), parent=self.root)
@@ -1166,6 +1173,9 @@ class RuntimeTestGui:
 
     def finish_mapping(self):
         self.node.call_service('finish_mapping', Trigger.Request())
+
+    def cancel_mapping(self):
+        self.node.call_service('cancel_mapping', Trigger.Request())
 
     def load_map(self):
         map_id = self._prompt_map_id('加载地图', require_existing=True)

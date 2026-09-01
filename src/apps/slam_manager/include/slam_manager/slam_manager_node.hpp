@@ -96,6 +96,8 @@ class SlamManagerNode : public rclcpp::Node {
                             StartMapping::Response::SharedPtr response);
   void finishMappingCallback(const Trigger::Request::SharedPtr request,
                              Trigger::Response::SharedPtr response);
+  void cancelMappingCallback(const Trigger::Request::SharedPtr request,
+                             Trigger::Response::SharedPtr response);
   void deleteMapCallback(const DeleteMap::Request::SharedPtr request,
                          DeleteMap::Response::SharedPtr response);
   void loadMapCallback(const LoadMap::Request::SharedPtr request,
@@ -152,8 +154,7 @@ class SlamManagerNode : public rclcpp::Node {
                            const std::string &error_message = "");
   void enterError(int32_t error_code, const std::string &error_message);
   bool stopAllAlgorithms(std::string &message);
-  bool clearRuntimeAfterTeardown(bool discard_mapping,
-                                 std::string &message);
+  bool clearRuntimeAfterTeardown(std::string &message);
   uint64_t beginLifecycleCommand(const char *command_name);
   bool isLatestCommand(uint64_t generation) const;
   std::shared_ptr<WorkerOperationToken> installLifecycleToken(
@@ -164,7 +165,7 @@ class SlamManagerNode : public rclcpp::Node {
   bool prepareForStartCommand(
       uint64_t generation,
       const std::shared_ptr<WorkerOperationToken> &token,
-      bool discard_mapping, std::string &message);
+      std::string &message);
 
   SlamStateMachine state_machine_;
   uint64_t session_id_{0U};
@@ -179,6 +180,7 @@ class SlamManagerNode : public rclcpp::Node {
   double localization_stop_timeout_sec_{10.0};
   std::string active_map_id_;
   std::filesystem::path active_map_path_;
+  bool active_map_directory_prepared_{false};
   std::string selected_map_id_;
 
   std::mutex localization_result_mutex_;
@@ -212,6 +214,7 @@ class SlamManagerNode : public rclcpp::Node {
 
   rclcpp::Service<StartMapping>::SharedPtr start_mapping_service_;
   rclcpp::Service<Trigger>::SharedPtr finish_mapping_service_;
+  rclcpp::Service<Trigger>::SharedPtr cancel_mapping_service_;
   rclcpp::Service<LoadMap>::SharedPtr load_map_service_;
   rclcpp::Service<DeleteMap>::SharedPtr delete_map_service_;
   rclcpp::Service<StartLocalization>::SharedPtr start_localization_service_;

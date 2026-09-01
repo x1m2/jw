@@ -1,5 +1,6 @@
 uint8 STOP=0
 uint8 START=1
+uint8 SAVE=2
 uint8 command
 uint64 session_id
 string resource_id

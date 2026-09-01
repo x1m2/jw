@@ -21,11 +21,12 @@ namespace slam_manager {
 // 管理单个算法对象的创建、运行和销毁，供 platform 模式按需启停算法。
 class ManagedWorker : public rclcpp::Node {
  public:
-  // 同时保存 ROS 节点、算法对象所有权和停止前的安全处理函数。
+  // 同时保存ROS节点、算法对象所有权和可选生命周期函数。
   struct AlgorithmInstance {
     std::shared_ptr<rclcpp::Node> node;
     std::shared_ptr<void> owner;
     std::function<void()> before_stop;
+    std::function<bool(const std::string &)> save;
   };
 
   // 保留原名称供算法Worker使用，实际类型由控制端和Worker共享。
@@ -103,6 +104,9 @@ class ManagedWorker : public rclcpp::Node {
           startAlgorithm(request->session_id, context, message);
     } else if (request->command == SetWorkerState::Request::STOP) {
       response->success = stopAlgorithm(request->session_id, &message);
+    } else if (request->command == SetWorkerState::Request::SAVE) {
+      response->success = saveAlgorithm(request->session_id,
+                                        request->resource_path, message);
     } else {
       response->success = false;
       message = "unknown command";
@@ -110,6 +114,35 @@ class ManagedWorker : public rclcpp::Node {
     response->actual_state = state_.load();
     response->message = message;
     publishStatus();
+  }
+
+  bool saveAlgorithm(uint64_t requested_session_id,
+                     const std::string &resource_path,
+                     std::string &message) {
+    std::scoped_lock lock(mutex_);
+    if (!algorithm_instance_.node || state_.load() != WorkerStatus::RUNNING) {
+      message = "algorithm is not running";
+      return false;
+    }
+    if (requested_session_id != session_id_.load()) {
+      message = "stale save rejected: requested_session=" +
+                std::to_string(requested_session_id) +
+                ", running_session=" + std::to_string(session_id_.load());
+      return false;
+    }
+    if (!algorithm_instance_.save) {
+      message = "algorithm does not support saving";
+      return false;
+    }
+    try {
+      const bool saved = algorithm_instance_.save(resource_path);
+      message = saved ? "algorithm save completed" : "algorithm save failed";
+      return saved;
+    } catch (const std::exception &error) {
+      message = "algorithm save failed: " + std::string(error.what());
+      RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+      return false;
+    }
   }
 
   bool startAlgorithm(uint64_t session_id, const StartContext &context,
@@ -184,10 +217,10 @@ class ManagedWorker : public rclcpp::Node {
     state_.store(WorkerStatus::STOPPING);
     bool stop_hook_ok = true;
     std::string stop_hook_error;
-    // 先执行安全停止钩子，例如取消控制定时器并发布零速度。
-    if (algorithm_instance_.before_stop) {
+    const auto &stop_hook = algorithm_instance_.before_stop;
+    if (stop_hook) {
       try {
-        algorithm_instance_.before_stop();
+        stop_hook();
       } catch (const std::exception &error) {
         stop_hook_ok = false;
         stop_hook_error = error.what();
@@ -203,6 +236,7 @@ class ManagedWorker : public rclcpp::Node {
 
     algorithm_executor_->remove_node(algorithm_instance_.node);
     algorithm_instance_.before_stop = {};
+    algorithm_instance_.save = {};
     algorithm_instance_.owner.reset();
     algorithm_instance_.node.reset();
     algorithm_executor_.reset();

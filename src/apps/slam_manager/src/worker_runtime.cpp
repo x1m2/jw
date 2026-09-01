@@ -135,6 +135,14 @@ void WorkerClient::stop(uint64_t session_id, Completion completion) {
           std::move(completion));
 }
 
+void WorkerClient::save(uint64_t session_id, const std::string &resource_path,
+                        Completion completion) {
+  WorkerStartContext context;
+  context.resource_path = resource_path;
+  request(SetWorkerState::Request::SAVE, session_id, context,
+          std::move(completion));
+}
+
 void WorkerClient::request(uint8_t command, uint64_t session_id,
                            const WorkerStartContext &context,
                            Completion completion) {
