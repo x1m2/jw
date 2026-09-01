@@ -49,13 +49,17 @@ public:
     Eigen::Matrix4d extrinsic_imu2gnss;
 
 private:
+    bool compute_gravity_alignment(const V3D &mean_acc,
+                                   Eigen::Matrix4d &gravity_from_imu) const;
     bool fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const Eigen::Matrix4d &lidar_ext, const double &score);
     bool run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const double &lidar_beg_time, const Eigen::Matrix4d &lidar_ext, double &score);
     bool run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat,
                    const Eigen::Matrix4d &lidar_ext, const V3D &mean_acc,
                    double &score);
     bool run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
-    bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
+    bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat,
+                          const Eigen::Matrix4d &lidar_ext,
+                          const V3D &mean_acc, double &score);
 
     bool prior_pose_inited = false;
 
@@ -93,6 +97,41 @@ void Relocalization::set_extrinsic(const V3D &transl, const M3D &rot)
   extrinsic_imu2gnss.setIdentity();
   extrinsic_imu2gnss.topLeftCorner(3, 3) = rot;
   extrinsic_imu2gnss.topRightCorner(3, 1) = transl;
+}
+
+bool Relocalization::compute_gravity_alignment(
+    const V3D &mean_acc, Eigen::Matrix4d &gravity_from_imu) const
+{
+    gravity_from_imu.setIdentity();
+    if (!mean_acc.allFinite() || mean_acc.norm() <= 1e-3)
+    {
+        LOG_ERROR("gravity alignment failed: invalid mean_acc");
+        return false;
+    }
+
+    const Eigen::Quaterniond gravity_rotation =
+        Eigen::Quaterniond::FromTwoVectors(
+            (-mean_acc).normalized(), Eigen::Vector3d(0.0, 0.0, -1.0))
+            .normalized();
+    gravity_from_imu.topLeftCorner<3, 3>() =
+        gravity_rotation.toRotationMatrix();
+
+    const Eigen::Matrix3d rotation =
+        gravity_from_imu.topLeftCorner<3, 3>();
+    const double gravity_roll = std::atan2(rotation(2, 1), rotation(2, 2));
+    const double gravity_pitch =
+        std::atan2(-rotation(2, 0),
+                   std::hypot(rotation(0, 0), rotation(1, 0)));
+    const double scale = G_m_s2 / mean_acc.norm();
+    const Eigen::Vector3d acc_world = rotation * (mean_acc * scale);
+    const Eigen::Vector3d residual =
+        acc_world + Eigen::Vector3d(0.0, 0.0, -G_m_s2);
+    LOG_WARN(
+        "gravity alignment: roll=%.2f deg, pitch=%.2f deg, "
+        "mean_acc=[%.3f %.3f %.3f], residual_norm=%.4f",
+        RAD2DEG(gravity_roll), RAD2DEG(gravity_pitch), mean_acc.x(),
+        mean_acc.y(), mean_acc.z(), residual.norm());
+    return true;
 }
 
 bool Relocalization::run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const double &lidar_beg_time, const Eigen::Matrix4d &lidar_ext, double &score)
@@ -153,33 +192,9 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
     bool gravity_aligned = false;
     if (bbs3d.gravity_align)
     {
-        if (!mean_acc.allFinite() || mean_acc.norm() <= 1e-3)
-        {
-            LOG_ERROR("BBS3D gravity alignment failed: invalid mean_acc");
+        if (!compute_gravity_alignment(mean_acc, gravity_from_imu))
             return false;
-        }
-        const Eigen::Quaterniond gravity_rotation =
-            Eigen::Quaterniond::FromTwoVectors(
-                (-mean_acc).normalized(), Eigen::Vector3d(0.0, 0.0, -1.0));
-        gravity_from_imu.topLeftCorner<3, 3>() =
-            gravity_rotation.normalized().toRotationMatrix();
         gravity_aligned = true;
-
-        const Eigen::Matrix3d rotation =
-            gravity_from_imu.topLeftCorner<3, 3>();
-        const double gravity_roll = std::atan2(rotation(2, 1), rotation(2, 2));
-        const double gravity_pitch =
-            std::atan2(-rotation(2, 0),
-                       std::hypot(rotation(0, 0), rotation(1, 0)));
-        const double scale = G_m_s2 / mean_acc.norm();
-        const Eigen::Vector3d acc_world = rotation * (mean_acc * scale);
-        const Eigen::Vector3d residual =
-            acc_world + Eigen::Vector3d(0.0, 0.0, -G_m_s2);
-        LOG_WARN(
-            "BBS3D gravity alignment: roll=%.2f deg, pitch=%.2f deg, "
-            "mean_acc=[%.3f %.3f %.3f], residual_norm=%.4f",
-            RAD2DEG(gravity_roll), RAD2DEG(gravity_pitch), mean_acc.x(),
-            mean_acc.y(), mean_acc.z(), residual.norm());
     }
 
     const Eigen::Matrix4d gravity_from_lidar = gravity_from_imu * lidar_ext;
@@ -299,7 +314,10 @@ bool Relocalization::run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d 
     return true;
 }
 
-bool Relocalization::run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score)
+bool Relocalization::run_manually_set(PointCloudType::Ptr scan,
+                                      Eigen::Matrix4d &rough_mat,
+                                      const Eigen::Matrix4d &lidar_ext,
+                                      const V3D &mean_acc, double &score)
 {
     if (!prior_pose_inited)
     {
@@ -307,17 +325,39 @@ bool Relocalization::run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d 
         return false;
     }
 
+    Pose gravity_aligned_pose = manual_pose;
+    if (bbs3d.gravity_align)
+    {
+        Eigen::Matrix4d gravity_from_imu;
+        if (!compute_gravity_alignment(mean_acc, gravity_from_imu))
+            return false;
+
+        // Determine IMU roll/pitch from gravity while retaining the map yaw
+        // supplied by /initialpose. With R = Rz(yaw) * Ry(pitch) * Rx(roll),
+        // changing yaw does not change the aligned gravity direction.
+        const Eigen::Matrix3d gravity_rotation =
+            gravity_from_imu.topLeftCorner<3, 3>();
+        gravity_aligned_pose.roll =
+            std::atan2(gravity_rotation(2, 1), gravity_rotation(2, 2));
+        gravity_aligned_pose.pitch =
+            std::atan2(-gravity_rotation(2, 0),
+                       std::hypot(gravity_rotation(0, 0),
+                                  gravity_rotation(1, 0)));
+    }
+
     Timer timer;
     bool bnb_success = true;
-    if (!bnb3d->MatchWithMatchOptions(manual_pose, rough_pose, scan, bnb_option, lidar_ext, score))
+    if (!bnb3d->MatchWithMatchOptions(gravity_aligned_pose, rough_pose, scan,
+                                      bnb_option, lidar_ext, score))
     {
         auto bnb_opt_tmp = bnb_option;
         bnb_opt_tmp.min_score = 0.1;
         LOG_ERROR("bnb_failed, when bnb min_score = %.2f! min_score set to %.2f and try again.", bnb_option.min_score, bnb_opt_tmp.min_score);
-        if (!bnb3d->MatchWithMatchOptions(manual_pose, rough_pose, scan, bnb_opt_tmp, lidar_ext, score))
+        if (!bnb3d->MatchWithMatchOptions(gravity_aligned_pose, rough_pose,
+                                          scan, bnb_opt_tmp, lidar_ext, score))
         {
             bnb_success = false;
-            rough_pose = manual_pose;
+            rough_pose = gravity_aligned_pose;
             LOG_ERROR("bnb_failed, when bnb min_score = %.2f!", bnb_opt_tmp.min_score);
         }
     }
@@ -372,7 +412,7 @@ bool Relocalization::run(const PointCloudType::Ptr &scan,
     if (algorithm_type.compare("manually_set") == 0 || !success_flag)
     {
         success_flag = true;
-        if (!run_manually_set(scan, result, lidar_ext, score) || !fine_tune_pose(scan, result, lidar_ext, score))
+        if (!run_manually_set(scan, result, lidar_ext, mean_acc, score) || !fine_tune_pose(scan, result, lidar_ext, score))
         {
 #ifdef DEDUB_MODE
             result = EigenMath::CreateAffineMatrix(V3D(manual_pose.x, manual_pose.y, manual_pose.z), V3D(manual_pose.roll, manual_pose.pitch, manual_pose.yaw));

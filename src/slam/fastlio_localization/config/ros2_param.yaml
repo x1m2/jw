@@ -78,6 +78,7 @@ fastlio_localization:
         # 6.28 input is converted to 2*M_PI
         # true时输入点云已重力对齐，roll/pitch应配置为零附近的残差范围；
         # false时输入仍在原始雷达系，应改回雷达实际安装姿态范围。
+        # 同时控制BBS3D全局搜索和manually_set初始位姿BnB的重力对齐。
         bbs3d_gravity_align: true
         bbs3d_min_rpy: [-0.03,-0.03,0.0] # [roll, pitch, yaw]
         bbs3d_max_rpy: [0.03,0.03,6.28] # [roll, pitch, yaw]
