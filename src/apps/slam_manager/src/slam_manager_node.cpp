@@ -1,5 +1,7 @@
 #include "slam_manager/slam_manager_node.hpp"
 
+#include <tf2/utils.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -9,8 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-
-#include <tf2/utils.h>
 
 #include "slam_manager/pose_utils.hpp"
 
@@ -67,6 +67,9 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       "localization.relocalization_timeout_sec", 180.0);
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
+  body_cloud_publish_hz_ =
+      declare_parameter<double>("publish.body_cloud_hz", 5.0);
+
   const auto bbs_saver_executable = declare_parameter<std::string>(
       "localization.bbs.saver_executable",
       "/home/jw-zkl/robotics_platform/3rdparty/3d_bbs/test/build/saver");
@@ -160,7 +163,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::localizationPoseCallback, this,
                 std::placeholders::_1));
   body_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-      "/cloud_registered_body", rclcpp::QoS(20).best_effort(),
+      "/cloud_body_downsampled", rclcpp::QoS(20).best_effort(),
       std::bind(&SlamManagerNode::bodyCloudCallback, this,
                 std::placeholders::_1));
 
@@ -275,8 +278,8 @@ bool SlamManagerNode::isLatestCommand(uint64_t generation) const {
   return command_generation_.load() == generation;
 }
 
-std::shared_ptr<WorkerOperationToken>
-SlamManagerNode::installLifecycleToken(uint64_t generation) {
+std::shared_ptr<WorkerOperationToken> SlamManagerNode::installLifecycleToken(
+    uint64_t generation) {
   std::lock_guard<std::mutex> lock(lifecycle_token_mutex_);
   if (!isLatestCommand(generation)) return {};
   active_lifecycle_token_ = std::make_shared<WorkerOperationToken>();
@@ -290,8 +293,8 @@ bool SlamManagerNode::isLifecycleCommandActive(
 }
 
 bool SlamManagerNode::prepareForStartCommand(
-    uint64_t generation,
-    const std::shared_ptr<WorkerOperationToken> &token, std::string &message) {
+    uint64_t generation, const std::shared_ptr<WorkerOperationToken> &token,
+    std::string &message) {
   if (!isLifecycleCommandActive(generation, token)) {
     message = "lifecycle command superseded before teardown";
     return false;
@@ -304,8 +307,7 @@ bool SlamManagerNode::prepareForStartCommand(
     }
     return false;
   }
-  RCLCPP_INFO(get_logger(), "Stopped current algorithms: %s",
-              message.c_str());
+  RCLCPP_INFO(get_logger(), "Stopped current algorithms: %s", message.c_str());
   if (!isLifecycleCommandActive(generation, token)) {
     message = "lifecycle command superseded after teardown";
     return false;
@@ -450,18 +452,15 @@ void SlamManagerNode::startMappingCallback(
   const auto operation_token = installLifecycleToken(generation);
   if (!operation_token) {
     response->success = false;
-    response->message =
-        "mapping superseded by a newer start request";
+    response->message = "mapping superseded by a newer start request";
     return;
   }
 
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token,
-                              teardown_message)) {
+  if (!prepareForStartCommand(generation, operation_token, teardown_message)) {
     if (!isLifecycleCommandActive(generation, operation_token)) {
       response->success = false;
-      response->message =
-          "mapping superseded by a newer start request";
+      response->message = "mapping superseded by a newer start request";
       return;
     }
     response->success = false;
@@ -509,8 +508,7 @@ void SlamManagerNode::startMappingCallback(
   if (start_result.status == WorkerCommandStatus::kSuperseded ||
       !isLifecycleCommandActive(generation, operation_token)) {
     response->success = false;
-    response->message =
-        "mapping superseded by a newer start request";
+    response->message = "mapping superseded by a newer start request";
     return;
   }
   if (!start_result.success()) {
@@ -664,8 +662,7 @@ void SlamManagerNode::cancelMappingCallback(
     std::string delete_message;
     if (!map_storage_->deleteMap(active_map_id_, delete_message)) {
       response->success = false;
-      response->message = "failed to discard incomplete map: " +
-                          delete_message;
+      response->message = "failed to discard incomplete map: " + delete_message;
       enterError(RuntimeState::MAP_ERROR, response->message);
       return;
     }
@@ -740,8 +737,7 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
   // load_map也是替换型生命周期命令：先完整销毁建图、定位和导航算法，
   // 再进入地图加载状态，但它本身不启动定位算法。
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token,
-                              teardown_message)) {
+  if (!prepareForStartCommand(generation, operation_token, teardown_message)) {
     response->success = false;
     response->message = teardown_message;
     if (isLifecycleCommandActive(generation, operation_token)) {
@@ -778,11 +774,11 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
             return !isLifecycleCommandActive(generation, operation_token);
           })) {
     response->success = false;
-    response->message = isLifecycleCommandActive(generation, operation_token)
-                            ? "load map failed: 3D-BBS generation failed: " +
-                                  bbs_message
-                            : "load map superseded by a newer lifecycle "
-                              "command";
+    response->message =
+        isLifecycleCommandActive(generation, operation_token)
+            ? "load map failed: 3D-BBS generation failed: " + bbs_message
+            : "load map superseded by a newer lifecycle "
+              "command";
     finish_loading();
     if (isLifecycleCommandActive(generation, operation_token)) {
       RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
@@ -840,18 +836,15 @@ void SlamManagerNode::startLocalizationCallback(
   const auto operation_token = installLifecycleToken(generation);
   if (!operation_token) {
     response->success = false;
-    response->message =
-        "relocalization superseded by a newer start request";
+    response->message = "relocalization superseded by a newer start request";
     return;
   }
 
   std::string teardown_message;
-  if (!prepareForStartCommand(generation, operation_token,
-                              teardown_message)) {
+  if (!prepareForStartCommand(generation, operation_token, teardown_message)) {
     if (!isLifecycleCommandActive(generation, operation_token)) {
       response->success = false;
-      response->message =
-          "relocalization superseded by a newer start request";
+      response->message = "relocalization superseded by a newer start request";
       return;
     }
     response->success = false;
@@ -905,8 +898,7 @@ void SlamManagerNode::startLocalizationCallback(
   response->message = result.message;
 }
 
-SlamManagerNode::RelocalizationResult
-SlamManagerNode::runRelocalizationAttempt(
+SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     const RelocalizationOptions &options,
     std::unique_lock<std::mutex> lifecycle_lock) {
   RelocalizationResult result;
@@ -938,8 +930,7 @@ SlamManagerNode::runRelocalizationAttempt(
         },
         [this, generation = options.generation,
          token = options.operation_token]() {
-          return isLatestCommand(generation) &&
-                 (!token || token->active());
+          return isLatestCommand(generation) && (!token || token->active());
         });
     if (superseded()) {
       result.status = RelocalizationStatus::kSuperseded;
@@ -947,8 +938,8 @@ SlamManagerNode::runRelocalizationAttempt(
       return result;
     }
     if (!stop_result.success()) {
-      result.message = "failed to stop localization before " +
-                       options.source + ": " + stop_result.message;
+      result.message = "failed to stop localization before " + options.source +
+                       ": " + stop_result.message;
       enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
       return result;
     }
@@ -991,8 +982,8 @@ SlamManagerNode::runRelocalizationAttempt(
        operation_token = options.operation_token, localization_session_id,
        source = options.source, use_initial_pose = options.use_initial_pose,
        algorithm_profile = options.algorithm_profile,
-       initial_pose = options.initial_pose](
-          bool success, const std::string &worker_message) {
+       initial_pose = options.initial_pose](bool success,
+                                            const std::string &worker_message) {
         if (!isLatestCommand(generation) ||
             (operation_token && !operation_token->active())) {
           return;
@@ -1200,12 +1191,12 @@ bool SlamManagerNode::relocalizeForMapConnection(
   // 导航线程不能永久阻塞在生命周期锁上：新APP命令会先cancel导航，随后
   // 持锁调用stopAndWait；这里必须观察取消并退出，避免双方互相等待。
   std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_,
-                                               std::defer_lock);
+                                              std::defer_lock);
   while (!lifecycle_lock.try_lock()) {
-    if ((is_canceling && is_canceling()) ||
-        !isLatestCommand(generation)) {
-      message = "map_connection relocalization cancelled while waiting for "
-                "lifecycle access";
+    if ((is_canceling && is_canceling()) || !isLatestCommand(generation)) {
+      message =
+          "map_connection relocalization cancelled while waiting for "
+          "lifecycle access";
       return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1307,16 +1298,15 @@ void SlamManagerNode::deleteMapCallback(
 rclcpp_action::GoalResponse SlamManagerNode::handleNavigationGoal(
     const rclcpp_action::GoalUUID &,
     std::shared_ptr<const StartNavigation::Goal> goal) {
-  RCLCPP_INFO(get_logger(),
-              "[APP][ACTION_GOAL] command=start_navigation task_id='%s' "
-              "loop=%s nodes=%zu mode=%s session=%llu selected_map='%s' "
-              "reloc_success=%s",
-              goal->task_id.c_str(), goal->loop ? "true" : "false",
-              goal->nodes.size(),
-              std::string(toString(state_machine_.mode())).c_str(),
-              static_cast<unsigned long long>(session_id_),
-              selected_map_id_.c_str(),
-              relocalization_succeeded_.load() ? "true" : "false");
+  RCLCPP_INFO(
+      get_logger(),
+      "[APP][ACTION_GOAL] command=start_navigation task_id='%s' "
+      "loop=%s nodes=%zu mode=%s session=%llu selected_map='%s' "
+      "reloc_success=%s",
+      goal->task_id.c_str(), goal->loop ? "true" : "false", goal->nodes.size(),
+      std::string(toString(state_machine_.mode())).c_str(),
+      static_cast<unsigned long long>(session_id_), selected_map_id_.c_str(),
+      relocalization_succeeded_.load() ? "true" : "false");
 
   for (std::size_t i = 0; i < goal->nodes.size(); ++i) {
     const auto &node = goal->nodes[i];
@@ -1477,7 +1467,15 @@ void SlamManagerNode::publishCurrentPose(
 
 void SlamManagerNode::bodyCloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr message) {
-  // 协议2.11：转发FAST-LIO的IMU/机体坐标系实时点云。
+  // 协议2.11：按APP配置频率转发FAST-LIO的降采样机体点云。
+  const double message_time = rclcpp::Time(message->header.stamp).seconds();
+  const double publish_period = 1.0 / body_cloud_publish_hz_;
+  const bool timestamp_reset = last_body_cloud_publish_time_ > message_time;
+  if (last_body_cloud_publish_time_ >= 0.0 && !timestamp_reset &&
+      message_time - last_body_cloud_publish_time_ + 1e-6 < publish_period) {
+    return;
+  }
+  last_body_cloud_publish_time_ = message_time;
   body_cloud_pub_->publish(*message);
 }
 

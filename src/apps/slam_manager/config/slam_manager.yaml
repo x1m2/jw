@@ -27,3 +27,7 @@ slam_manager:
       # 首次执行巡检时，若当前二维位置距离首点不超过该阈值，则从第二点开始。
       enable_skip_first_target: true
       skip_first_target_threshold: 0.8
+
+    publish:
+      # /robot/cloud_body对APP的发布频率
+      body_cloud_hz: 5.0

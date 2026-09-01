@@ -178,6 +178,8 @@ class SlamManagerNode : public rclcpp::Node {
   double finish_mapping_timeout_sec_{300.0};
   double relocalization_timeout_sec_{180.0};
   double localization_stop_timeout_sec_{10.0};
+  double body_cloud_publish_hz_{5.0};
+  double last_body_cloud_publish_time_{-1.0};
   std::string active_map_id_;
   std::filesystem::path active_map_path_;
   bool active_map_directory_prepared_{false};

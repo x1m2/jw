@@ -210,6 +210,9 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   pubLaserCloudFull_body_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/cloud_registered_body", 20);
+  pubLaserCloudBodyDownsampled_ =
+      this->create_publisher<sensor_msgs::msg::PointCloud2>(
+          "/cloud_body_downsampled", 20);
   pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_effected", 20);
   pubLaserCloudMap_ =
@@ -1260,6 +1263,19 @@ void LaserMappingNode::publish_frame_body(
   laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
   laserCloudmsg.header.frame_id = "base_link";
   pubLaserCloudFull_body->publish(laserCloudmsg);
+
+  // 每帧发布1m叶素降采样点云。
+  constexpr float voxel_leaf_size = 1.0F;
+  pcl::VoxelGrid<PointType> voxel_filter;
+  voxel_filter.setLeafSize(voxel_leaf_size, voxel_leaf_size, voxel_leaf_size);
+  voxel_filter.setInputCloud(laserCloudIMUBody);
+  PointCloudXYZI downsampled_cloud;
+  voxel_filter.filter(downsampled_cloud);
+
+  sensor_msgs::msg::PointCloud2 downsampled_message;
+  pcl::toROSMsg(downsampled_cloud, downsampled_message);
+  downsampled_message.header = laserCloudmsg.header;
+  pubLaserCloudBodyDownsampled_->publish(downsampled_message);
   publish_count -= PUBFRAME_PERIOD;
 }
 
