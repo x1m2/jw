@@ -86,6 +86,8 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
   node_->declare_parameter<int>("lidar_type", 1);
   node_->declare_parameter<bool>("pointcloud2_in_base_frame", false);
+  node_->declare_parameter<bool>("pointcloud2_apply_height_filter", true);
+  node_->declare_parameter<bool>("clear_unobserved_rays", false);
 
   node_->declare_parameter<std::vector<double>>("lidar_to_base_T",
                                                 std::vector<double>());
@@ -109,7 +111,6 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<double>("inflation_radius", 0.5);
 
   node_->declare_parameter<double>("obstacle_max_age", 1.0);
-  node_->declare_parameter<double>("decay_rate", 0.80);
   node_->declare_parameter<bool>("use_time_decay", false);
 
   node_->declare_parameter<bool>("enable_pitch_detection", true);
@@ -123,6 +124,9 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("lidar_type", lidar_type_);
   node_->get_parameter("pointcloud2_in_base_frame",
                        pointcloud2_in_base_frame_);
+  node_->get_parameter("pointcloud2_apply_height_filter",
+                       pointcloud2_apply_height_filter_);
+  node_->get_parameter("clear_unobserved_rays", clear_unobserved_rays_);
 
   std::vector<double> lidar_to_base_T;
   std::vector<double> lidar_to_base_R;
@@ -145,7 +149,6 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("inflation_radius", inflation_radius_);
 
   node_->get_parameter("obstacle_max_age", obstacle_max_age_);
-  node_->get_parameter("decay_rate", decay_rate_);
   node_->get_parameter("use_time_decay", use_time_decay_);
 
   node_->get_parameter("enable_pitch_detection", enable_pitch_detection_);
@@ -299,8 +302,11 @@ void CostMap2D::projectLidarPoint(double x, double y, double z,
   if (lidar_type_ == 1 || !pointcloud2_in_base_frame_) {
     point_base = lidar_to_base_transform_ * point_base;
   }
-  if (point_base.z() < projection_config_.min_height ||
-      point_base.z() > projection_config_.max_height) {
+  const bool apply_height_filter =
+      lidar_type_ == 1 || pointcloud2_apply_height_filter_;
+  if (apply_height_filter &&
+      (point_base.z() < projection_config_.min_height ||
+       point_base.z() > projection_config_.max_height)) {
     return;
   }
 
@@ -369,13 +375,16 @@ void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
     clearCostMap();
     RCLCPP_DEBUG(node_->get_logger(), "Pitch angle exceeded, costmap cleared");
   } else {
+    // 膨胀层是由致命障碍派生的数据，每帧重建，避免障碍移动后旧膨胀代价
+    // 留在地图上。致命障碍本身仍由有效射线或时间保留策略管理。
+    clearInflatedCosts();
     raytraceFreespace(scan_msg, map_from_base);
     markObstacles(scan_msg, map_from_base);
-    inflateObstacles();
 
     if (use_time_decay_) {
       decayObstacles();
     }
+    inflateObstacles();
   }
 
   publishCostMap();
@@ -383,6 +392,14 @@ void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
 
 void CostMap2D::clearCostMap() {
   std::fill(costmap_.begin(), costmap_.end(), FREE_SPACE);
+}
+
+void CostMap2D::clearInflatedCosts() {
+  for (auto& cost : costmap_) {
+    if (cost != LETHAL_OBSTACLE) {
+      cost = FREE_SPACE;
+    }
+  }
 }
 
 void CostMap2D::markObstacles(const sensor_msgs::msg::LaserScan& scan,
@@ -445,6 +462,9 @@ void CostMap2D::inflateObstacles() {
       const auto index = static_cast<std::size_t>(ny * width_ + nx);
       if (costmap_[index] != LETHAL_OBSTACLE && offset.cost > costmap_[index]) {
         costmap_[index] = offset.cost;
+        const auto lethal_index = static_cast<std::size_t>(
+            lethal_cell.second * width_ + lethal_cell.first);
+        obstacle_timestamps_[index] = obstacle_timestamps_[lethal_index];
       }
     }
   }
@@ -588,34 +608,15 @@ bool CostMap2D::isPitchAngleExceeded(
 }
 
 void CostMap2D::decayObstacles() {
-  rclcpp::Time current_time = node_->now();
+  const rclcpp::Time current_time = node_->now();
 
   for (int i = 0; i < width_ * height_; ++i) {
-    if (costmap_[i] > FREE_SPACE && costmap_[i] <= LETHAL_OBSTACLE) {
-      double age = (current_time - obstacle_timestamps_[i]).seconds();
-
-      if (age > obstacle_max_age_) {
-        costmap_[i] = FREE_SPACE;
-      } else if (age > 0.0) {
-        double decay_factor = std::exp(-decay_rate_ * age);
-
-        if (costmap_[i] == LETHAL_OBSTACLE) {
-          if (decay_factor < 0.8) {
-            unsigned char new_cost = static_cast<unsigned char>(
-                FREE_SPACE +
-                (INSCRIBED_INFLATED_OBSTACLE - FREE_SPACE) * decay_factor);
-
-            costmap_[i] =
-                std::max(static_cast<unsigned char>(FREE_SPACE), new_cost);
-          }
-        } else {
-          unsigned char new_cost =
-              static_cast<unsigned char>(costmap_[i] * decay_factor);
-
-          costmap_[i] =
-              std::max(static_cast<unsigned char>(FREE_SPACE), new_cost);
-        }
-      }
+    if (costmap_[i] != LETHAL_OBSTACLE) {
+      continue;
+    }
+    const double age = (current_time - obstacle_timestamps_[i]).seconds();
+    if (age > obstacle_max_age_) {
+      costmap_[i] = FREE_SPACE;
     }
   }
 }
@@ -638,9 +639,14 @@ void CostMap2D::raytraceFreespace(const sensor_msgs::msg::LaserScan& scan,
     float range = scan.ranges[i];
 
     bool valid_range = range >= scan.range_min && range <= scan.range_max;
-    bool inf_range = std::isinf(range) || range > scan.range_max;
+    const bool inf_range = std::isinf(range) || range > scan.range_max;
 
     if (!valid_range && !inf_range) {
+      continue;
+    }
+    // PointCloud/语义障碍点云没有“最大量程无回波=确认自由”的语义。
+    // 跳过这些角度可避免稀疏点云在相邻帧把真实障碍立即擦掉。
+    if (inf_range && !clear_unobserved_rays_) {
       continue;
     }
 

@@ -52,6 +52,8 @@ ros2 launch pure_pursuit pure_pursuit.launch.py
 /obstacle_stop/enabled std_msgs/msg/Bool
 local_path        nav_msgs/msg/Path
 local_path_astar  nav_msgs/msg/Path
+local_astar_raw_path nav_msgs/msg/Path
+local_astar_bezier_path nav_msgs/msg/Path
 local_goal_marker visualization_msgs/msg/Marker
 ```
 

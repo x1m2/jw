@@ -67,6 +67,9 @@ class ObstacleStop {
     bool directional_release_enabled{true};
     double directional_center_half_width{0.20};
     double directional_escape_velocity_threshold{0.05};
+    bool center_lateral_escape_enabled{false};
+    double center_escape_max_forward_velocity{0.02};
+    double center_escape_max_angular_velocity{0.10};
 
     // 数据时效和调试参数。
     double lidar_timeout_sec{0.30};
@@ -109,7 +112,8 @@ class ObstacleStop {
       std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
   void addBasePointToGrid(double x, double y, double z,
                           std::vector<uint8_t> &grid,
-                          std::vector<GridCell> &occupied_cells) const;
+                          std::vector<GridCell> &occupied_cells,
+                          bool apply_height_filter = true) const;
   void processObstacleGrid(std::vector<uint8_t> &grid,
                            std::vector<GridCell> &occupied_cells,
                            bool input_valid);
@@ -151,6 +155,7 @@ class ObstacleStop {
   std::string safe_cmd_topic_;
   std::string base_frame_;
   int lidar_type_{1};  // 1: Livox CustomMsg，其他: base_link PointCloud2
+  bool pointcloud2_apply_height_filter_{true};
   // MID360坐标系到机器人base_link坐标系的固定外参。
   Eigen::Isometry3d lidar_to_base_{Eigen::Isometry3d::Identity()};
   ObstacleStopConfig config_;
@@ -170,6 +175,7 @@ class ObstacleStop {
   bool has_command_{false};
   bool hard_stop_active_{false};
   bool slowdown_active_{false};
+  bool directional_escape_release_active_{false};
   bool emergency_stop_active_{false};
   bool obstacle_stop_enabled_{true};
   State last_state_{State::kWaitingForCommand};

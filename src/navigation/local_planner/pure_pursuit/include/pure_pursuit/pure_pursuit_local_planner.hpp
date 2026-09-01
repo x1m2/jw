@@ -75,6 +75,7 @@ struct PlannerConfig {
   double final_yaw_min_angular_velocity = 0.28;
   double local_avoidance_align_enter_angle = 0.524;
   double local_avoidance_align_exit_angle = 0.105;
+  double local_avoidance_min_align_angular_velocity = 0.35;
   double local_avoidance_lookahead_distance = 0.25;
   double local_avoidance_min_linear_velocity = 0.4;
   double local_avoidance_max_linear_velocity = 0.5;

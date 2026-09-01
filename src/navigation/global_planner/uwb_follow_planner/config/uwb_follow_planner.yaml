@@ -65,15 +65,18 @@ uwb_follow_planner_node:
     target_angle_update_threshold_degrees: 10.0
     # 即使方向不变，实时候选目标相对已锁定目标移动超过该距离也更新（米）
     target_position_update_threshold: 0.4
-    # 超过该时间未收到有效 UWB 数据则认为目标丢失，并暂停跟随（秒）
+    # 超过该时间未收到有效 UWB 数据则认为目标丢失（秒）
     uwb_timeout: 0.5
+    # 目标丢失但已有已发布的跟随目标时，继续行驶至该旧目标；到达后停车。
+    # false 时保持旧行为：UWB 超时立即暂停 Pure Pursuit。
+    continue_to_last_goal_on_uwb_timeout: true
     # 超过该时间未收到有效机器人位姿则认为定位失效，并暂停跟随（秒）
     pose_timeout: 0.5
     # 跟随路径的计算与发布频率（赫兹）
     planning_frequency: 8.0
 
     # ==================== Pure Pursuit 联动 ====================
-    # true：在保持状态、UWB 超时或定位超时时，主动暂停 Pure Pursuit；
+    # true：在保持状态、定位超时或未保留旧目标的 UWB 超时时，主动暂停 Pure Pursuit；
     # false：只停止更新跟随路径，不管理 Pure Pursuit 的暂停状态。
     manage_pure_pursuit_pause: true
 

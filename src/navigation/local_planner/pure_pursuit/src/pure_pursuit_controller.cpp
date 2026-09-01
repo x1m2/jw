@@ -88,7 +88,8 @@ bool PurePursuitController::computeCommand(
                    tf2Degrees(yaw_error));
     } else {
       cmd_vel.angular.z = angular_gain * yaw_error;
-      const double min_avoid_align_wz = 0.22;
+      const double min_avoid_align_wz =
+          config_.local_avoidance_min_align_angular_velocity;
       if (std::abs(cmd_vel.angular.z) < min_avoid_align_wz) {
         cmd_vel.angular.z = std::copysign(min_avoid_align_wz, yaw_error);
       }
@@ -184,17 +185,18 @@ void PurePursuitController::applyVelocityLimits(
     const geometry_msgs::msg::Twist &last_cmd_vel, double dt,
     double linear_velocity_limit, double angular_velocity_limit,
     geometry_msgs::msg::Twist &cmd_vel) const {
+  // 即使控制时钟尚未推进或发生回拨，也不能让横移分量绕过限速出口。
+  cmd_vel.linear.y = 0.0;
   if (dt <= 0.0) return;
   const double effective_linear_velocity =
       std::clamp(linear_velocity_limit, 0.0, config_.max_linear_velocity);
-  const double effective_linear_velocity_y =
-      std::min(effective_linear_velocity, config_.max_linear_velocity_y);
   const double effective_angular_velocity =
       std::clamp(angular_velocity_limit, 0.0, config_.max_angular_velocity);
   cmd_vel.linear.x = std::clamp(cmd_vel.linear.x, -effective_linear_velocity,
                                 effective_linear_velocity);
-  cmd_vel.linear.y = std::clamp(cmd_vel.linear.y, -effective_linear_velocity_y,
-                                effective_linear_velocity_y);
+  // 当前机器为非全向四轮足，底盘不执行linear.y。无论上层配置如何，
+  // 都在最终限速出口强制清零，防止再次出现“规划器以为正在横移、实车不动”。
+  cmd_vel.linear.y = 0.0;
 
   const double velocity_diff_x = cmd_vel.linear.x - last_cmd_vel.linear.x;
   const bool accelerating_x =
@@ -208,29 +210,11 @@ void PurePursuitController::applyVelocityLimits(
                        std::copysign(max_velocity_change_x, velocity_diff_x);
   }
 
-  const double velocity_diff_y = cmd_vel.linear.y - last_cmd_vel.linear.y;
-  const bool accelerating_y =
-      std::abs(cmd_vel.linear.y) > std::abs(last_cmd_vel.linear.y);
-  const double max_velocity_change_y =
-      (accelerating_y ? config_.acceleration_limit
-                      : config_.deceleration_limit) *
-      dt;
-  if (std::abs(velocity_diff_y) > max_velocity_change_y) {
-    cmd_vel.linear.y = last_cmd_vel.linear.y +
-                       std::copysign(max_velocity_change_y, velocity_diff_y);
-  }
   cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -effective_angular_velocity,
                                  effective_angular_velocity);
   cmd_vel.linear.x = std::clamp(cmd_vel.linear.x, -effective_linear_velocity,
                                 effective_linear_velocity);
-  cmd_vel.linear.y = std::clamp(cmd_vel.linear.y, -effective_linear_velocity_y,
-                                effective_linear_velocity_y);
-  const double linear_speed = std::hypot(cmd_vel.linear.x, cmd_vel.linear.y);
-  if (linear_speed > effective_linear_velocity && linear_speed > 1e-9) {
-    const double scale = effective_linear_velocity / linear_speed;
-    cmd_vel.linear.x *= scale;
-    cmd_vel.linear.y *= scale;
-  }
+  cmd_vel.linear.y = 0.0;
 }
 
 bool PurePursuitController::isTargetOrientationReached(

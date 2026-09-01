@@ -27,6 +27,9 @@ def generate_launch_description():
     runtime_profile = LaunchConfiguration('runtime_profile')
     lidar_type = LaunchConfiguration('lidar_type')
     lidar_topic = LaunchConfiguration('lidar_topic')
+    pointcloud2_apply_height_filter = LaunchConfiguration(
+        'pointcloud2_apply_height_filter'
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -54,6 +57,11 @@ def generate_launch_description():
             default_value='/obstacle_cloud',
             description='Input Livox or semantic obstacle cloud topic',
         ),
+        DeclareLaunchArgument(
+            'pointcloud2_apply_height_filter',
+            default_value='true',
+            description='Apply min/max height clipping to PointCloud2 input',
+        ),
         Node(
             package='obstacle_stop',
             executable='obstacle_stop_node',
@@ -65,6 +73,9 @@ def generate_launch_description():
                     'runtime_profile': runtime_profile,
                     'lidar_type': ParameterValue(lidar_type, value_type=int),
                     'lidar_topic': lidar_topic,
+                    'pointcloud2_apply_height_filter': ParameterValue(
+                        pointcloud2_apply_height_filter, value_type=bool
+                    ),
                 },
             ],
         ),

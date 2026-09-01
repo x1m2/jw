@@ -27,9 +27,11 @@ protected:
     PurePursuitControllerConfig config;
     config.lookahead_distance_max = 0.7;
     config.max_linear_velocity = 0.6;
+    config.max_linear_velocity_y = 0.3;
     config.max_angular_velocity = 0.7;
     config.local_avoidance_align_enter_angle = 30.0 * M_PI / 180.0;
-    config.local_avoidance_align_exit_angle = 6.0 * M_PI / 180.0;
+    config.local_avoidance_align_exit_angle = 10.0 * M_PI / 180.0;
+    config.local_avoidance_min_align_angular_velocity = 0.35;
     config.local_avoidance_min_linear_velocity = 0.4;
     ASSERT_TRUE(controller_.initialize(node_, config));
   }
@@ -62,6 +64,43 @@ TEST_F(PurePursuitControllerTest, NewAvoidanceSegmentFullyAlignsBeforeMoving) {
   EXPECT_GT(exit_command.linear.x, 0.0);
 }
 
+TEST_F(PurePursuitControllerTest, AvoidanceNeverCommandsLateralMotion) {
+  PurePursuitController controller;
+  PurePursuitControllerConfig config;
+  config.lookahead_distance_max = 0.7;
+  config.max_linear_velocity = 0.6;
+  config.max_linear_velocity_y = 0.3;
+  config.max_angular_velocity = 0.7;
+  config.local_avoidance_align_enter_angle = 30.0 * M_PI / 180.0;
+  config.local_avoidance_align_exit_angle = 10.0 * M_PI / 180.0;
+  ASSERT_TRUE(controller.initialize(node_, config));
+  controller.startLocalAvoidanceAlignment();
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.orientation.w = 1.0;
+  geometry_msgs::msg::PointStamped lookahead;
+  lookahead.point.x = 0.05;
+  lookahead.point.y = 0.25;
+  geometry_msgs::msg::Twist command;
+  ASSERT_TRUE(controller.computeCommand(robot_pose, lookahead, 0.5, 0.7, 1,
+                                        true, 0U, 0, command));
+  EXPECT_DOUBLE_EQ(command.linear.x, 0.0);
+  EXPECT_DOUBLE_EQ(command.linear.y, 0.0);
+  EXPECT_GT(command.angular.z, 0.0);
+
+  // 最终限速出口也必须拒绝任何误传入的横移分量。
+  geometry_msgs::msg::Twist previous;
+  geometry_msgs::msg::Twist limited;
+  limited.linear.x = 0.2;
+  limited.linear.y = 0.3;
+  controller.applyVelocityLimits(previous, 0.1, 0.6, 0.7, limited);
+  EXPECT_DOUBLE_EQ(limited.linear.y, 0.0);
+
+  limited.linear.y = -0.3;
+  controller.applyVelocityLimits(previous, 0.0, 0.6, 0.7, limited);
+  EXPECT_DOUBLE_EQ(limited.linear.y, 0.0);
+}
+
 TEST_F(PurePursuitControllerTest, LargeAvoidanceTurnUsesAlignmentHysteresis) {
   controller_.startLocalAvoidanceAlignment();
 
@@ -75,6 +114,26 @@ TEST_F(PurePursuitControllerTest, LargeAvoidanceTurnUsesAlignmentHysteresis) {
 
   const auto exit_command = commandAtAngle(4.0);
   EXPECT_GT(exit_command.linear.x, 0.0);
+}
+
+TEST_F(PurePursuitControllerTest,
+       AvoidanceAlignmentClearsSmallResidualErrorWithoutDeadlock) {
+  controller_.startLocalAvoidanceAlignment();
+
+  // 实车日志中误差长期波动在8°～15°。8°时应开始边走边修正，
+  // 不再因原6°阈值一直锁存在原地对齐。
+  const auto command = commandAtAngle(8.0);
+  EXPECT_GT(command.linear.x, 0.0);
+  EXPECT_GT(command.angular.z, 0.0);
+}
+
+TEST_F(PurePursuitControllerTest,
+       AvoidanceAlignmentUsesAngularVelocityAboveChassisDeadband) {
+  controller_.startLocalAvoidanceAlignment();
+
+  const auto command = commandAtAngle(15.0);
+  EXPECT_DOUBLE_EQ(command.linear.x, 0.0);
+  EXPECT_NEAR(command.angular.z, 0.35, 1e-6);
 }
 
 TEST_F(PurePursuitControllerTest, SharpLocalCornerRealignsInPlace) {

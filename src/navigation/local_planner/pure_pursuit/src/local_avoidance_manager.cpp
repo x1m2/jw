@@ -61,6 +61,12 @@ bool LocalAvoidanceManager::initialize(
   avoidance_stall_yaw_change_ = std::clamp(
       declareOrGetParameter(node_, "avoidance_stall_yaw_degrees", 5.0),
       1.0, 45.0) * M_PI / 180.0;
+  local_avoidance_lookahead_distance_ = std::max(
+      0.05, declareOrGetParameter(
+                node_, "local_avoidance_lookahead_distance", 0.25));
+  avoidance_path_blocked_confirmations_ = std::clamp(
+      declareOrGetParameter(node_, "avoidance_path_blocked_confirmations", 3),
+      1, 10);
   if (avoidance_failure_retry_cooldown_ < 0.0 ||
       avoidance_max_planning_failures_ < 1) {
     RCLCPP_ERROR(node_->get_logger(),
@@ -110,6 +116,35 @@ bool LocalAvoidanceManager::initialize(
   path_planner_config.return_obstacle_clearance =
       avoidance_return_obstacle_clearance_;
   path_planner_config.obstacle_threshold = avoidance_obstacle_threshold_;
+  path_planner_config.bezier_smoothing_enabled = declareOrGetParameter(
+      node_, "local_astar_bezier_enabled", true);
+  path_planner_config.bezier_corner_distance = declareOrGetParameter(
+      node_, "local_astar_bezier_corner_distance", 0.80);
+  path_planner_config.bezier_sample_spacing = declareOrGetParameter(
+      node_, "local_astar_bezier_sample_spacing", 0.05);
+  path_planner_config.bezier_simplify_tolerance = declareOrGetParameter(
+      node_, "local_astar_bezier_simplify_tolerance", 0.10);
+  path_planner_config.bezier_target_turn_radius = declareOrGetParameter(
+      node_, "local_astar_bezier_target_turn_radius", 1.15);
+  path_planner_config.bezier_min_turn_radius = declareOrGetParameter(
+      node_, "local_astar_bezier_min_turn_radius", 0.30);
+  path_planner_config.bezier_max_deviation = declareOrGetParameter(
+      node_, "local_astar_bezier_max_deviation", 0.25);
+  path_planner_config.bezier_visualization_enabled = declareOrGetParameter(
+      node_, "local_astar_bezier_visualization", true);
+  path_planner_config.bezier_corner_distance =
+      std::max(0.005, path_planner_config.bezier_corner_distance);
+  path_planner_config.bezier_sample_spacing =
+      std::max(0.01, path_planner_config.bezier_sample_spacing);
+  path_planner_config.bezier_simplify_tolerance =
+      std::max(0.0, path_planner_config.bezier_simplify_tolerance);
+  path_planner_config.bezier_min_turn_radius =
+      std::max(0.0, path_planner_config.bezier_min_turn_radius);
+  path_planner_config.bezier_target_turn_radius = std::max(
+      path_planner_config.bezier_min_turn_radius,
+      path_planner_config.bezier_target_turn_radius);
+  path_planner_config.bezier_max_deviation =
+      std::max(0.0, path_planner_config.bezier_max_deviation);
   avoidance_path_planner_ = std::make_unique<AvoidancePathPlanner>();
   if (!avoidance_path_planner_->initialize(node_, path_planner_config)) {
     RCLCPP_ERROR(node_->get_logger(),
@@ -141,6 +176,17 @@ bool LocalAvoidanceManager::initialize(
               avoidance_goal_tolerance_, avoidance_return_goal_clearance_,
               avoidance_return_obstacle_clearance_,
               avoidance_near_stop_clearance_ + avoidance_near_stop_margin_);
+  RCLCPP_INFO(node_->get_logger(),
+              "Local A* Bezier smoothing: enabled=%d corner=%.3f "
+              "spacing=%.3f simplify=%.3f radius_target/min=%.2f/%.2fm "
+              "max_deviation=%.3f",
+              path_planner_config.bezier_smoothing_enabled ? 1 : 0,
+              path_planner_config.bezier_corner_distance,
+              path_planner_config.bezier_sample_spacing,
+              path_planner_config.bezier_simplify_tolerance,
+              path_planner_config.bezier_target_turn_radius,
+              path_planner_config.bezier_min_turn_radius,
+              path_planner_config.bezier_max_deviation);
   return true;
 }
 
@@ -641,6 +687,7 @@ bool LocalAvoidanceManager::startAvoidance(
     avoidance_side_ = side;
     avoidance_corridor_selected_ = false;
     consecutive_planning_failures_ = 0;
+    consecutive_blocked_path_checks_ = 0;
     avoidance_side_path_.poses.clear();
     avoidance_return_path_.poses.clear();
   }
@@ -667,6 +714,7 @@ void LocalAvoidanceManager::resetAvoidance() {
     avoidance_side_ = AvoidanceSide::NONE;
     avoidance_corridor_selected_ = false;
     consecutive_planning_failures_ = 0;
+    consecutive_blocked_path_checks_ = 0;
     avoidance_side_path_.poses.clear();
     avoidance_return_path_.poses.clear();
   }
@@ -890,6 +938,31 @@ bool LocalAvoidanceManager::computeLocalPath() {
       return false;
     }
 
+    geometry_msgs::msg::Point initial_return_target =
+        return_path.poses.back().pose.position;
+    for (const auto &pose : return_path.poses) {
+      if (calculateDistance(robot_pose.pose.position, pose.pose.position) >=
+          local_avoidance_lookahead_distance_) {
+        initial_return_target = pose.pose.position;
+        break;
+      }
+    }
+    const double initial_return_yaw = std::atan2(
+        initial_return_target.y - robot_pose.pose.position.y,
+        initial_return_target.x - robot_pose.pose.position.x);
+    const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+    if (!avoidance_path_planner_->isRotationCollisionFree(
+            robot_pose.pose.position, robot_yaw, initial_return_yaw)) {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[AVOID_ROTATION_BLOCKED] return turn %.1fdeg -> %.1fdeg "
+                  "sweeps the footprint into an obstacle",
+                  robot_yaw * 180.0 / M_PI,
+                  initial_return_yaw * 180.0 / M_PI);
+      markAvoidanceFailed("return rotation blocked");
+      local_path_valid_ = false;
+      return false;
+    }
+
     {
       std::lock_guard<std::mutex> lock(avoidance_mutex_);
       if (!avoidance_active_ ||
@@ -1011,7 +1084,26 @@ bool LocalAvoidanceManager::computeLocalPath() {
         selected_segment.poses.begin() + static_cast<std::ptrdiff_t>(copy_start),
         selected_segment.poses.end());
 
-    if (!avoidance_path_planner_->isPathCollisionFree(remaining_path)) {
+    const bool initial_escape =
+        planning_stage == AvoidanceStage::FIRST_SIDE_GOAL;
+    const bool remaining_path_safe =
+        initial_escape
+            ? avoidance_path_planner_->isInitialEscapePathCollisionFree(
+                  remaining_path, obstacle_center, avoidance_path_clearance_)
+            : avoidance_path_planner_->isPathCollisionFree(remaining_path);
+    if (!remaining_path_safe) {
+      const int blocked_checks =
+          consecutive_blocked_path_checks_.fetch_add(1) + 1;
+      if (blocked_checks < avoidance_path_blocked_confirmations_) {
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 500,
+            "[AVOID_PATH_UNSTABLE] latest Costmap blocked local path "
+            "%d/%d; retaining path pending confirmation",
+            blocked_checks,
+            avoidance_path_blocked_confirmations_);
+        return true;
+      }
+      consecutive_blocked_path_checks_ = 0;
       RCLCPP_WARN_THROTTLE(
           node_->get_logger(), *node_->get_clock(), 500,
           "[AVOID_REPLAN_LOCAL] locked local path is blocked on latest "
@@ -1037,6 +1129,8 @@ bool LocalAvoidanceManager::computeLocalPath() {
         return false;
       }
       same_stage_path_replanned = true;
+    } else {
+      consecutive_blocked_path_checks_ = 0;
     }
   }
 
@@ -1066,30 +1160,76 @@ bool LocalAvoidanceManager::computeLocalPath() {
           robot_pose.pose.position.y, first_side_goal.x, first_side_goal.y);
       if (first_ok && first_path.poses.size() >= 2) {
         double minimum_obstacle_clearance = 0.0;
-        const bool path_safe =
+        const bool raw_path_safe =
             avoidance_path_planner_->isPathOutsideObstacleRadius(
                 first_path, obstacle_center, avoidance_path_clearance_,
                 &minimum_obstacle_clearance, true);
-        if (!path_safe) {
+        if (!raw_path_safe) {
           RCLCPP_WARN(node_->get_logger(),
                       "[AVOID_PLAN] side path rejected: "
                       "minimum_clearance=%.2f required=%.2f",
                       minimum_obstacle_clearance, avoidance_path_clearance_);
         } else {
-          const double start_clearance = std::hypot(
-              first_path.poses.front().pose.position.x - obstacle_center.x,
-              first_path.poses.front().pose.position.y - obstacle_center.y);
-          if (start_clearance < avoidance_path_clearance_) {
-            RCLCPP_WARN(node_->get_logger(),
-                        "[AVOID_PLAN] accepting outward escape path: "
-                        "start_clearance=%.2f minimum_clearance=%.2f "
-                        "target_clearance=%.2f",
-                        start_clearance, minimum_obstacle_clearance,
-                        avoidance_path_clearance_);
+          nav_msgs::msg::Path smoothed_first_path;
+          if (avoidance_path_planner_->smoothPathWithBezier(
+                  first_path, smoothed_first_path)) {
+            double smoothed_minimum_clearance = 0.0;
+            if (avoidance_path_planner_->isPathOutsideObstacleRadius(
+                    smoothed_first_path, obstacle_center,
+                    avoidance_path_clearance_, &smoothed_minimum_clearance,
+                    true)) {
+              first_path = std::move(smoothed_first_path);
+              minimum_obstacle_clearance = smoothed_minimum_clearance;
+            } else {
+              RCLCPP_WARN(
+                  node_->get_logger(),
+                  "[BEZIER_CLEARANCE_FALLBACK] side path smooth_min=%.3f "
+                  "required=%.3f; using raw A*",
+                  smoothed_minimum_clearance, avoidance_path_clearance_);
+            }
           }
-          new_local_path = first_path;
-          published_goal = first_side_goal;
-          planning_success = true;
+          // 控制器刚接管局部路径时会朝固定短前瞻点转向。非全向长车体
+          // 必须在规划阶段检查这次原地转向的完整角点扫掠，而不只检查
+          // A*平移路径上的起止朝向。
+          geometry_msgs::msg::Point initial_target =
+              first_path.poses.back().pose.position;
+          for (const auto &pose : first_path.poses) {
+            if (calculateDistance(robot_pose.pose.position,
+                                  pose.pose.position) >=
+                local_avoidance_lookahead_distance_) {
+              initial_target = pose.pose.position;
+              break;
+            }
+          }
+          const double initial_path_yaw = std::atan2(
+              initial_target.y - robot_pose.pose.position.y,
+              initial_target.x - robot_pose.pose.position.x);
+          const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+          if (!avoidance_path_planner_->isRotationCollisionFree(
+                  robot_pose.pose.position, robot_yaw, initial_path_yaw)) {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "[AVOID_ROTATION_BLOCKED] initial turn %.1fdeg -> %.1fdeg "
+                "sweeps the footprint into an obstacle; rejecting path",
+                robot_yaw * 180.0 / M_PI,
+                initial_path_yaw * 180.0 / M_PI);
+            planning_success = false;
+          } else {
+            const double start_clearance = std::hypot(
+                first_path.poses.front().pose.position.x - obstacle_center.x,
+                first_path.poses.front().pose.position.y - obstacle_center.y);
+            if (start_clearance < avoidance_path_clearance_) {
+              RCLCPP_WARN(node_->get_logger(),
+                          "[AVOID_PLAN] accepting outward escape path: "
+                          "start_clearance=%.2f minimum_clearance=%.2f "
+                          "target_clearance=%.2f",
+                          start_clearance, minimum_obstacle_clearance,
+                          avoidance_path_clearance_);
+            }
+            new_local_path = first_path;
+            published_goal = first_side_goal;
+            planning_success = true;
+          }
         }
       } else {
         RCLCPP_WARN(node_->get_logger(),
@@ -1131,8 +1271,8 @@ bool LocalAvoidanceManager::computeLocalPath() {
       return false;
     }
 
-    // 绕障路径很短且贴近障碍物，简单移动平均会把折角拉偏，甚至把点拉回障碍附近。
-    // 这里直接使用 A* 原始路径，保证可视化和跟踪都忠实于栅格规划结果。
+    // 路径已在生成阶段完成贝塞尔平滑、footprint检查和净空检查；
+    // 任一检查失败时生成阶段会保留原始A*路径。
     nav_msgs::msg::Path planned_path = new_local_path;
 
     // 更新局部路径。状态检查与路径提交按avoidance->path的固定锁顺序

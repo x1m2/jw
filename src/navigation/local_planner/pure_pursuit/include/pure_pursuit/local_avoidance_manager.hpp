@@ -107,6 +107,9 @@ private:
   double avoidance_stall_timeout_{1.5};
   double avoidance_stall_distance_{0.05};
   double avoidance_stall_yaw_change_{0.0872664626};
+  double local_avoidance_lookahead_distance_{0.25};
+  int avoidance_path_blocked_confirmations_{3};
+  std::atomic<int> consecutive_blocked_path_checks_{0};
 
   // 控制层状态也由Manager唯一持有，避免PurePursuit再维护镜像布尔量。
   bool tracking_local_;

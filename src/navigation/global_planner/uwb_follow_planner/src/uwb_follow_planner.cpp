@@ -66,6 +66,8 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   uwb_timeout_ = declare_parameter<double>("uwb_timeout", 0.5);
   pose_timeout_ = declare_parameter<double>("pose_timeout", 0.5);
   planning_frequency_ = declare_parameter<double>("planning_frequency", 3.0);
+  continue_to_last_goal_on_uwb_timeout_ =
+      declare_parameter<bool>("continue_to_last_goal_on_uwb_timeout", true);
   manage_pure_pursuit_pause_ =
       declare_parameter<bool>("manage_pure_pursuit_pause", true);
   obstacle_stop_enabled_ =
@@ -435,12 +437,24 @@ void UwbFollowPlanner::planningTimerCallback() {
   }
 
   if ((current_time - last_uwb_time_).seconds() > uwb_timeout_) {
-    has_follow_goal_ = false;
     setState(FollowState::kTargetLost);
     valid_message.data = false;
     valid_publisher_->publish(valid_message);
-    requestPurePursuitPause(true);
     movement_candidate_active_ = false;
+    if (continue_to_last_goal_on_uwb_timeout_ && has_follow_goal_) {
+      // 保持最后一次已经发布给PP的动态路径。它的终点就是丢失前锁定的
+      // follow_goal_，PP会照常做碰撞检查/局部绕障，并在该点停车。
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "UWB target timed out; continuing toward last follow goal "
+          "(%.3f, %.3f)",
+          follow_goal_.x, follow_goal_.y);
+      requestPurePursuitPause(false);
+      return;
+    }
+
+    has_follow_goal_ = false;
+    requestPurePursuitPause(true);
     return;
   }
 

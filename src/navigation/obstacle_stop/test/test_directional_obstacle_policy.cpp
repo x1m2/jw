@@ -51,6 +51,60 @@ TEST(DirectionalObstaclePolicy, CenterObstacleAlwaysStops) {
                   .active);
 }
 
+TEST(DirectionalObstaclePolicy, CenterObstacleAllowsPureLateralEscape) {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.center = true;
+  const DirectionalEscapeMotion motion{0.0, 0.20, 0.0};
+  const auto decision = evaluateDirectionalEscape(
+      occupancy, motion, kEscapeVelocity, 0.02, 0.10, true, true);
+  EXPECT_FALSE(decision.active);
+  EXPECT_TRUE(decision.released_center);
+}
+
+TEST(DirectionalObstaclePolicy, CenterObstacleRejectsForwardMotion) {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.center = true;
+  const DirectionalEscapeMotion motion{0.10, 0.20, 0.0};
+  EXPECT_TRUE(evaluateDirectionalEscape(
+                  occupancy, motion, kEscapeVelocity, 0.02, 0.10, true, true)
+                  .active);
+}
+
+TEST(DirectionalObstaclePolicy, CenterObstacleRejectsReverseMotion) {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.center = true;
+  const DirectionalEscapeMotion motion{-0.10, 0.20, 0.0};
+  EXPECT_TRUE(evaluateDirectionalEscape(
+                  occupancy, motion, kEscapeVelocity, 0.02, 0.10, true, true)
+                  .active);
+}
+
+TEST(DirectionalObstaclePolicy, CenterObstacleRejectsRotation) {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.center = true;
+  const DirectionalEscapeMotion motion{0.0, 0.20, 0.20};
+  EXPECT_TRUE(evaluateDirectionalEscape(
+                  occupancy, motion, kEscapeVelocity, 0.02, 0.10, true, true)
+                  .active);
+}
+
+TEST(DirectionalObstaclePolicy, CenterAndLeftRequiresRightEscape) {
+  DirectionalZoneOccupancy occupancy;
+  occupancy.left = true;
+  occupancy.center = true;
+  const DirectionalEscapeMotion right_motion{0.0, -0.20, 0.0};
+  EXPECT_FALSE(evaluateDirectionalEscape(
+                   occupancy, right_motion, kEscapeVelocity, 0.02, 0.10,
+                   true, true)
+                   .active);
+
+  const DirectionalEscapeMotion left_motion{0.0, 0.20, 0.0};
+  EXPECT_TRUE(evaluateDirectionalEscape(
+                  occupancy, left_motion, kEscapeVelocity, 0.02, 0.10,
+                  true, true)
+                  .active);
+}
+
 TEST(DirectionalObstaclePolicy, ObstaclesOnBothSidesAlwaysStop) {
   DirectionalZoneOccupancy occupancy;
   occupancy.left = true;

@@ -118,6 +118,9 @@ class UwbFollowPlanner : public rclcpp::Node {
   double uwb_timeout_;
   double pose_timeout_;
   double planning_frequency_;
+  // UWB短时丢失时，继续执行最近一次已经发布的跟随目标；到达该目标后
+  // 由Pure Pursuit的目标到达逻辑停车。BLE暂停/停止和定位超时不受影响。
+  bool continue_to_last_goal_on_uwb_timeout_;
   bool manage_pure_pursuit_pause_;
   bool obstacle_stop_enabled_;
   bool obstacle_avoidance_enabled_;

@@ -506,7 +506,8 @@ bool AStarPlanner::isObstacleWithDiagnostics(
   return blocked;
 }
 
-bool AStarPlanner::isPathCollisionFree(const nav_msgs::msg::Path &path) {
+bool AStarPlanner::isPathCollisionFree(const nav_msgs::msg::Path &path,
+                                       bool allow_initial_escape) {
   CostmapConstPtr costmap_snapshot;
   std::shared_ptr<const std::vector<uint8_t>> footprint_mask_snapshot;
   {
@@ -525,6 +526,7 @@ bool AStarPlanner::isPathCollisionFree(const nav_msgs::msg::Path &path) {
   // 按不大于半个栅格的间隔检查整条线段，避免平滑路径或稀疏路径的两个
   // 离散点均安全、但二者之间穿过障碍物。
   const double sample_step = costmap.info.resolution * 0.5;
+  bool reached_strictly_free_sample = !allow_initial_escape;
   for (size_t pose_index = 0; pose_index < path.poses.size(); ++pose_index) {
     const auto &end = path.poses[pose_index].pose.position;
     const auto &start =
@@ -555,10 +557,60 @@ bool AStarPlanner::isPathCollisionFree(const nav_msgs::msg::Path &path) {
       point.y = start.y + ratio * dy;
       int grid_x, grid_y;
       worldToGrid(point, costmap, grid_x, grid_y);
-      if (isRectangleFootprintBlocked(grid_x, grid_y, path_yaw, costmap,
-                                      footprint_mask)) {
-        return false;
+      const bool footprint_blocked = isRectangleFootprintBlocked(
+          grid_x, grid_y, path_yaw, costmap, footprint_mask);
+      if (footprint_blocked) {
+        // A*允许机器人从一个中心栅格安全、但带padding的矩形footprint与
+        // 近障碍相交的起点向外脱困。复检必须采用相同语义：在首次进入
+        // 严格安全区域前允许这个连续前缀；一旦已经安全，后续任何碰撞
+        // 仍立即判失败。
+        if (reached_strictly_free_sample ||
+            !isStartPositionValid(grid_x, grid_y, costmap, footprint_mask)) {
+          return false;
+        }
+      } else {
+        reached_strictly_free_sample = true;
       }
+    }
+  }
+  return reached_strictly_free_sample;
+}
+
+bool AStarPlanner::isRotationCollisionFree(
+    const geometry_msgs::msg::Point &center, double start_yaw,
+    double end_yaw) const {
+  CostmapConstPtr costmap_snapshot;
+  std::shared_ptr<const std::vector<uint8_t>> footprint_mask_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    if (!prepared_costmap_.valid()) return false;
+    costmap_snapshot = prepared_costmap_.costmap;
+    footprint_mask_snapshot = prepared_costmap_.footprint_mask;
+  }
+
+  const auto &costmap = *costmap_snapshot;
+  const auto &footprint_mask = *footprint_mask_snapshot;
+  if (costmap.info.resolution <= 0.0) return false;
+
+  int center_x = 0;
+  int center_y = 0;
+  worldToGrid(center, costmap, center_x, center_y);
+  if (!isValidCell(center_x, center_y, costmap)) return false;
+
+  const double yaw_delta = std::atan2(std::sin(end_yaw - start_yaw),
+                                      std::cos(end_yaw - start_yaw));
+  // 角点沿圆弧每移动不超过半个栅格就检查一次，并限制在1~5度之间。
+  const double angular_step = std::clamp(
+      costmap.info.resolution / std::max(2.0 * footprint_radius_, 1e-6),
+      M_PI / 180.0, 5.0 * M_PI / 180.0);
+  const int sample_count = std::max(
+      1, static_cast<int>(std::ceil(std::abs(yaw_delta) / angular_step)));
+  for (int sample = 0; sample <= sample_count; ++sample) {
+    const double ratio = static_cast<double>(sample) / sample_count;
+    const double yaw = start_yaw + ratio * yaw_delta;
+    if (isRectangleFootprintBlocked(center_x, center_y, yaw, costmap,
+                                    footprint_mask)) {
+      return false;
     }
   }
   return true;

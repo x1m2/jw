@@ -104,6 +104,8 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
       config_.local_avoidance_align_enter_angle;
   controller_config.local_avoidance_align_exit_angle =
       config_.local_avoidance_align_exit_angle;
+  controller_config.local_avoidance_min_align_angular_velocity =
+      config_.local_avoidance_min_align_angular_velocity;
   controller_config.local_avoidance_min_linear_velocity =
       config_.local_avoidance_min_linear_velocity;
   controller_ = std::make_unique<PurePursuitController>();
@@ -269,7 +271,7 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.max_linear_velocity =
       declareOrGetParameter(node_, "max_linear_velocity", 0.8);
   config_.max_linear_velocity_y =
-      declareOrGetParameter(node_, "max_linear_velocity_y", 0.5);
+      declareOrGetParameter(node_, "max_linear_velocity_y", 0.0);
   config_.max_angular_velocity =
       declareOrGetParameter(node_, "max_angular_velocity", 0.8);
   config_.acceleration_limit =
@@ -300,6 +302,10 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.local_avoidance_align_exit_angle = std::clamp(
       config_.local_avoidance_align_exit_angle, 1.0 * M_PI / 180.0,
       config_.local_avoidance_align_enter_angle);
+  config_.local_avoidance_min_align_angular_velocity = std::clamp(
+      declareOrGetParameter(
+          node_, "local_avoidance_min_align_angular_velocity", 0.35),
+      0.0, config_.max_angular_velocity);
   config_.local_avoidance_lookahead_distance = std::clamp(
       declareOrGetParameter(node_, "local_avoidance_lookahead_distance", 0.25),
       0.05, config_.lookahead_distance_max);
@@ -435,10 +441,10 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     if (output.realign_local_path && !output.entered_local_tracking) {
       current_path_index_ = 0;
       smoothed_local_path_received_ = false;
-      // 阶段切换或同阶段重规划都会产生一条全新的局部路径，必须从新路径
-      // 起点重新投影并原地对准。
+      // 新路径要重新投影和检查对齐，但不要先清空上一帧速度。若新路径
+      // 航向连续，限速器可平滑接续；若航向变化较大，控制器会输出纯旋转，
+      // 下方逻辑仍会在转向前清掉线速度。
       if (controller_) controller_->startLocalAvoidanceAlignment();
-      last_cmd_vel_ = geometry_msgs::msg::Twist();
       RCLCPP_INFO(node_->get_logger(),
                   "[AVOID_PATH] local path replaced, tracking index reset");
     }

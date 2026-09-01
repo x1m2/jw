@@ -20,6 +20,14 @@ struct AvoidancePathPlannerConfig {
   double return_goal_clearance{0.8}; // 回归点周围的机器人安全半径
   double return_obstacle_clearance{2.0}; // 回归点到本次障碍中心的最小距离
   double obstacle_threshold{50.0}; // Costmap障碍阈值
+  bool bezier_smoothing_enabled{true}; // 是否平滑局部A*折角
+  double bezier_corner_distance{0.8}; // 拐点前后切线段的最大长度
+  double bezier_sample_spacing{0.05}; // 贝塞尔曲线最大采样间隔
+  double bezier_simplify_tolerance{0.10}; // 平滑前消除栅格阶梯的最大偏差
+  double bezier_target_turn_radius{1.15}; // 根据局部速度/角速度期望的转弯半径
+  double bezier_min_turn_radius{0.30}; // 低于该半径不冒充平滑曲线
+  double bezier_max_deviation{0.25}; // 曲线偏离原始折线的上限
+  bool bezier_visualization_enabled{true};
 };
 
 // 同步绕障路径计算层：负责目标点几何计算和A*调用。
@@ -60,11 +68,22 @@ public:
                 const geometry_msgs::msg::Point &goal,
                 nav_msgs::msg::Path &path,
                 double goal_yaw = std::numeric_limits<double>::quiet_NaN());
+  // 先在偏差和footprint碰撞约束内消除A*栅格阶梯，再对剩余折角做分段
+  // 三次贝塞尔圆弧近似。曲线同时受可用直线长度、目标/最小转弯半径、
+  // 偏离量和footprint碰撞约束。
+  bool smoothPathWithBezier(const nav_msgs::msg::Path &raw_path,
+                            nav_msgs::msg::Path &smoothed_path);
   bool isPointInObstacle(const geometry_msgs::msg::Point &point);
   bool isPointInObstacleWithDiagnostics(
       const geometry_msgs::msg::Point &point, const char *point_name,
       double yaw = 0.0);
   bool isPathCollisionFree(const nav_msgs::msg::Path &path) const;
+  bool isRotationCollisionFree(const geometry_msgs::msg::Point &center,
+                               double start_yaw, double end_yaw) const;
+  bool isInitialEscapePathCollisionFree(
+      const nav_msgs::msg::Path &path,
+      const geometry_msgs::msg::Point &obstacle_center,
+      double required_clearance) const;
   // 候选走廊不能进入控制阶段的近障停车半径。若机器人触发规划时已经
   // 位于该半径内，allow_initial_escape可允许一条不再靠近障碍、并最终
   // 退出净空圈的脱离路径。返回整条折线路径到障碍中心的最小距离。
@@ -84,10 +103,14 @@ private:
                            double clearance_radius) const;
   static double calculateDistance(const geometry_msgs::msg::Point &p1,
                                   const geometry_msgs::msg::Point &p2);
+  void publishSmoothingPaths(const nav_msgs::msg::Path &raw_path,
+                             const nav_msgs::msg::Path &smoothed_path);
 
   rclcpp::Node::SharedPtr node_;
   std::unique_ptr<AStarPlanner> astar_planner_;
   AvoidancePathPlannerConfig config_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr smoothed_path_pub_;
 
 };
 

@@ -21,6 +21,7 @@ struct PurePursuitControllerConfig {
   double final_yaw_min_angular_velocity{0.28};
   double local_avoidance_align_enter_angle{0.524};
   double local_avoidance_align_exit_angle{0.105};
+  double local_avoidance_min_align_angular_velocity{0.35};
   double local_avoidance_min_linear_velocity{0.4};
 };
 
@@ -33,7 +34,8 @@ public:
 
   // 新全局路径或退出局部绕障时，清除控制器的对齐/修正锁存。
   void resetTrackingState();
-  // 切入局部绕障路径时，保持原逻辑：先原地对齐局部路径方向。
+  // 切入局部绕障路径时请求重新对齐。该控制器按非全向底盘工作，
+  // 只输出前后速度和角速度，不输出横移速度。
   void startLocalAvoidanceAlignment();
   bool isAligning() const { return aligning_; }
 

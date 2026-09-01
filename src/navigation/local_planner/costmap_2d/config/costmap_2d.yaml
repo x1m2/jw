@@ -36,6 +36,5 @@
     pitch_recovery_time: 2.0
 
     # 时间衰减参数
-    use_time_decay: false
-    obstacle_max_age: 1.0
-    decay_rate: 0.80
+    use_time_decay: true
+    obstacle_max_age: 0.8

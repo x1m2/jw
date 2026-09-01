@@ -15,7 +15,14 @@ struct DirectionalZoneOccupancy {
 struct DirectionalObstacleDecision {
   bool active{false};
   bool released_left{false};
+  bool released_center{false};
   bool released_right{false};
+};
+
+struct DirectionalEscapeMotion {
+  double forward_velocity{0.0};
+  double lateral_velocity{0.0};
+  double angular_velocity{0.0};
 };
 
 // lateral_velocity是检测区域中心在base_link中的瞬时横向速度：
@@ -47,6 +54,52 @@ inline DirectionalObstacleDecision evaluateDirectionalObstacle(
   }
 
   decision.active = true;
+  return decision;
+}
+
+// 未完成，未测试。
+// 全向脱困专用策略。中央近障碍只允许“零前进、低角速度”的纯横移，
+// 防止把普通前进或原地旋转误放行。中央同时延伸到单侧时，横移方向还
+// 必须远离该侧；左右同时占用仍无条件停车。
+inline DirectionalObstacleDecision evaluateDirectionalEscape(
+    const DirectionalZoneOccupancy &occupancy,
+    const DirectionalEscapeMotion &motion, double minimum_escape_velocity,
+    double maximum_forward_velocity, double maximum_angular_velocity,
+    bool directional_release_enabled, bool center_lateral_release_enabled) {
+  if (!occupancy.center) {
+    return evaluateDirectionalObstacle(
+        occupancy,
+        motion.lateral_velocity + motion.angular_velocity,
+        minimum_escape_velocity, directional_release_enabled);
+  }
+
+  DirectionalObstacleDecision decision;
+  decision.active = true;
+  if (!directional_release_enabled || !center_lateral_release_enabled ||
+      (occupancy.left && occupancy.right)) {
+    return decision;
+  }
+
+  const double threshold = std::max(0.0, minimum_escape_velocity);
+  if (std::abs(motion.forward_velocity) >
+          std::max(0.0, maximum_forward_velocity) ||
+      std::abs(motion.angular_velocity) >
+          std::max(0.0, maximum_angular_velocity) ||
+      std::abs(motion.lateral_velocity) < threshold) {
+    return decision;
+  }
+
+  if (occupancy.left && motion.lateral_velocity > -threshold) {
+    return decision;
+  }
+  if (occupancy.right && motion.lateral_velocity < threshold) {
+    return decision;
+  }
+
+  decision.active = false;
+  decision.released_left = occupancy.left;
+  decision.released_center = true;
+  decision.released_right = occupancy.right;
   return decision;
 }
 

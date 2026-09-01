@@ -70,7 +70,11 @@ class AStarPlanner {
   bool isObstacleWithDiagnostics(const geometry_msgs::msg::Point &point,
                                  const char *point_name,
                                  double yaw = 0.0);
-  bool isPathCollisionFree(const nav_msgs::msg::Path &path);
+  bool isPathCollisionFree(const nav_msgs::msg::Path &path,
+                           bool allow_initial_escape = false);
+  // 在固定位置采样起止航向之间的最短旋转，检查长方形车体角点的扫掠区。
+  bool isRotationCollisionFree(const geometry_msgs::msg::Point &center,
+                               double start_yaw, double end_yaw) const;
 
   // 可视化
   void publishVisualization(const geometry_msgs::msg::Point &start,

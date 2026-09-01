@@ -55,8 +55,12 @@ locked control target, while `3` pauses without clearing the target so a later
   `FOLLOWING`, `TARGET_LOST`, `COMMAND_STOPPED`, or `COMMAND_PAUSED`.
 - `/uwb_follow/target_valid`: freshness/validity of the current UWB target.
 
-The planner requests `/pure_pursuit/set_paused` while holding or when UWB or
-FAST-LIO odometry is stale, so the controller cannot continue an old path.
+The planner requests `/pure_pursuit/set_paused` while holding, on an explicit
+BLE pause/stop, or when FAST-LIO odometry is stale. By default, a UWB timeout
+does not interrupt an already published path: `pure_pursuit` continues to the
+last locked follow goal and stops there. Set
+`continue_to_last_goal_on_uwb_timeout: false` to restore immediate stopping on
+UWB timeout.
 
 The default input is the mapping node's `/Odometry`, not
 `/pose_stamped_localization`. In UWB follow mode, configure the path smoother,

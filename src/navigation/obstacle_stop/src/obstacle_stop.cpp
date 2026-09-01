@@ -81,6 +81,8 @@ void ObstacleStop::loadParameters() {
   lidar_topic_ =
       node_->declare_parameter<std::string>("lidar_topic", "/livox/lidar");
   lidar_type_ = node_->declare_parameter<int>("lidar_type", 1);
+  pointcloud2_apply_height_filter_ =
+      node_->declare_parameter<bool>("pointcloud2_apply_height_filter", true);
   planned_cmd_topic_ = node_->declare_parameter<std::string>(
       "planned_cmd_topic", "/cmd_vel_planned");
   safe_cmd_topic_ =
@@ -150,6 +152,17 @@ void ObstacleStop::loadParameters() {
       0.0, node_->declare_parameter<double>(
                "directional_escape_velocity_threshold",
                config_.directional_escape_velocity_threshold));
+  config_.center_lateral_escape_enabled = node_->declare_parameter<bool>(
+      "center_lateral_escape_enabled",
+      config_.center_lateral_escape_enabled);
+  config_.center_escape_max_forward_velocity = std::max(
+      0.0, node_->declare_parameter<double>(
+               "center_escape_max_forward_velocity",
+               config_.center_escape_max_forward_velocity));
+  config_.center_escape_max_angular_velocity = std::max(
+      0.0, node_->declare_parameter<double>(
+               "center_escape_max_angular_velocity",
+               config_.center_escape_max_angular_velocity));
   config_.lidar_timeout_sec = node_->declare_parameter<double>(
       "lidar_timeout_sec", config_.lidar_timeout_sec);
   config_.command_timeout_sec = node_->declare_parameter<double>(
@@ -257,14 +270,26 @@ void ObstacleStop::processObstacleGrid(
   const double slowdown_lateral_velocity =
       planned_snapshot.linear.y +
       planned_snapshot.angular.z * slowdown_center_x;
-  const auto hard_decision = evaluateDirectionalObstacle(
-      hard_occupancy, hard_lateral_velocity,
+  const DirectionalEscapeMotion hard_motion{
+      planned_snapshot.linear.x, planned_snapshot.linear.y,
+      planned_snapshot.angular.z * hard_center_x};
+  const DirectionalEscapeMotion slowdown_motion{
+      planned_snapshot.linear.x, planned_snapshot.linear.y,
+      planned_snapshot.angular.z * slowdown_center_x};
+  const auto hard_decision = evaluateDirectionalEscape(
+      hard_occupancy, hard_motion,
       config_.directional_escape_velocity_threshold,
-      config_.directional_release_enabled);
-  const auto slowdown_decision = evaluateDirectionalObstacle(
-      slowdown_occupancy, slowdown_lateral_velocity,
+      config_.center_escape_max_forward_velocity,
+      config_.center_escape_max_angular_velocity * hard_center_x,
+      config_.directional_release_enabled,
+      config_.center_lateral_escape_enabled);
+  const auto slowdown_decision = evaluateDirectionalEscape(
+      slowdown_occupancy, slowdown_motion,
       config_.directional_escape_velocity_threshold,
-      config_.directional_release_enabled);
+      config_.center_escape_max_forward_velocity,
+      config_.center_escape_max_angular_velocity * slowdown_center_x,
+      config_.directional_release_enabled,
+      config_.center_lateral_escape_enabled);
   const bool raw_hard_stop = hard_decision.active;
   const bool raw_slowdown = slowdown_decision.active;
   const auto now = node_->now();
@@ -280,11 +305,15 @@ void ObstacleStop::processObstacleGrid(
     }
     hard_stop = hard_stop_active_;
     slowdown = slowdown_active_;
+    directional_escape_release_active_ =
+        hard_decision.released_left || hard_decision.released_center ||
+        hard_decision.released_right;
     last_lidar_time_ = now;
   }
 
-  if (hard_decision.released_left || hard_decision.released_right ||
-      slowdown_decision.released_left || slowdown_decision.released_right) {
+  if (hard_decision.released_left || hard_decision.released_center ||
+      hard_decision.released_right || slowdown_decision.released_left ||
+      slowdown_decision.released_center || slowdown_decision.released_right) {
     RCLCPP_INFO_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 500,
         "[OBSTACLE_DIRECTIONAL_RELEASE] planned=(vy=%.3f,wz=%.3f), "
@@ -358,7 +387,8 @@ bool ObstacleStop::buildObstacleGrid(
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(message, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iter_z(message, "z");
     for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-      addBasePointToGrid(*iter_x, *iter_y, *iter_z, grid, occupied_cells);
+      addBasePointToGrid(*iter_x, *iter_y, *iter_z, grid, occupied_cells,
+                         pointcloud2_apply_height_filter_);
     }
   } catch (const std::runtime_error &error) {
     RCLCPP_ERROR(node_->get_logger(),
@@ -370,9 +400,12 @@ bool ObstacleStop::buildObstacleGrid(
 
 void ObstacleStop::addBasePointToGrid(
     double x, double y, double z, std::vector<uint8_t> &grid,
-    std::vector<GridCell> &occupied_cells) const {
-  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
-      z < config_.min_height || z > config_.max_height) {
+    std::vector<GridCell> &occupied_cells, bool apply_height_filter) const {
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    return;
+  }
+  if (apply_height_filter &&
+      (z < config_.min_height || z > config_.max_height)) {
     return;
   }
 
@@ -502,6 +535,7 @@ void ObstacleStop::controlCallback() {
   bool slowdown = false;
   bool emergency_stop = false;
   bool obstacle_stop_enabled = true;
+  bool directional_escape_release = false;
   rclcpp::Time lidar_time(0, 0, node_->get_clock()->get_clock_type());
   rclcpp::Time command_time(0, 0, node_->get_clock()->get_clock_type());
   {
@@ -514,6 +548,7 @@ void ObstacleStop::controlCallback() {
     slowdown = slowdown_active_;
     emergency_stop = emergency_stop_active_;
     obstacle_stop_enabled = obstacle_stop_enabled_;
+    directional_escape_release = directional_escape_release_active_;
     lidar_time = last_lidar_time_;
     command_time = last_command_time_;
   }
@@ -548,9 +583,12 @@ void ObstacleStop::controlCallback() {
   } else if (!lidar_valid) {
     state = State::kSensorFault;
     reason = "MID360 point cloud is empty";
-  } else if (hard_stop) {
+  } else if (hard_stop && !directional_escape_release) {
     state = State::kObstacleStop;
     reason = "obstacle in hard stop rectangle";
+  } else if (hard_stop && directional_escape_release) {
+    safe_command = planned;
+    reason = "directional escape away from side obstacle";
   } else if (slowdown) {
     safe_command = planned;
     // 远矩形有障碍时降低速度，近矩形仍具有更高优先级。

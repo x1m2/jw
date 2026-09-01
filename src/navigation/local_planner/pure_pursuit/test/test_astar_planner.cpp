@@ -171,6 +171,29 @@ TEST_F(AStarPlannerTest, RejectsObstacleBetweenSparsePathPoses) {
       context.planner->isPathCollisionFree(makeGlobalPath(start, goal)));
 }
 
+TEST_F(AStarPlannerTest, InitialEscapeAllowsOnlyContinuousBlockedPrefix) {
+  auto context = makePlanner("astar_initial_escape_test");
+  auto costmap = makeCostmap();
+  costmap.data[40 * costmap.info.width + 40] = 100;
+  context.planner->setCostmap(costmap);
+
+  geometry_msgs::msg::Point start;
+  start.x = 4.65;
+  start.y = 4.05;
+  geometry_msgs::msg::Point goal;
+  goal.x = 6.0;
+  goal.y = 4.05;
+  const auto escape_path = makeGlobalPath(start, goal);
+
+  EXPECT_FALSE(context.planner->isPathCollisionFree(escape_path));
+  EXPECT_TRUE(context.planner->isPathCollisionFree(escape_path, true));
+
+  // 一旦路径进入严格安全区，后续再次撞到硬障碍仍必须失败。
+  costmap.data[40 * costmap.info.width + 55] = 100;
+  context.planner->setCostmap(costmap);
+  EXPECT_FALSE(context.planner->isPathCollisionFree(escape_path, true));
+}
+
 TEST_F(AStarPlannerTest, RejectsCoordinateJustOutsideMap) {
   auto context = makePlanner("astar_bounds_test");
   context.planner->setCostmap(makeCostmap());
@@ -178,6 +201,25 @@ TEST_F(AStarPlannerTest, RejectsCoordinateJustOutsideMap) {
   outside.x = -0.01;
   outside.y = 4.0;
   EXPECT_TRUE(context.planner->isObstacle(outside));
+}
+
+TEST_F(AStarPlannerTest, RotationChecksIntermediateFootprintSweep) {
+  auto context = makePlanner("astar_rotation_sweep_test");
+  auto costmap = makeCostmap();
+  geometry_msgs::msg::Point center;
+  center.x = 4.05;
+  center.y = 4.05;
+
+  // 障碍位于车体对角方向：0度和90度的矩形均不覆盖它，但旋转过程中的
+  // 中间角度会让车体角点扫过该栅格。
+  costmap.data[46 * costmap.info.width + 46] = 100;
+  context.planner->setCostmap(costmap);
+  EXPECT_FALSE(context.planner->isObstacle(center, 0.0));
+  EXPECT_FALSE(context.planner->isObstacle(center, M_PI_2));
+  EXPECT_FALSE(context.planner->isRotationCollisionFree(center, 0.0, M_PI_2));
+
+  context.planner->setCostmap(makeCostmap());
+  EXPECT_TRUE(context.planner->isRotationCollisionFree(center, 0.0, M_PI_2));
 }
 
 TEST_F(AStarPlannerTest, RejectsStartAboveConfiguredStartThreshold) {

@@ -37,6 +37,10 @@ def generate_launch_description():
     pointcloud2_in_base_frame = LaunchConfiguration(
         'pointcloud2_in_base_frame'
     )
+    pointcloud2_apply_height_filter = LaunchConfiguration(
+        'pointcloud2_apply_height_filter'
+    )
+    clear_unobserved_rays = LaunchConfiguration('clear_unobserved_rays')
 
     package_share = get_package_share_directory('costmap_2d')
     default_config_file = os.path.join(
@@ -88,6 +92,16 @@ def generate_launch_description():
             default_value='true',
             description='PointCloud2 input is already expressed in base_link'
         ),
+        DeclareLaunchArgument(
+            'pointcloud2_apply_height_filter',
+            default_value='true',
+            description='Apply min/max height clipping to PointCloud2 input'
+        ),
+        DeclareLaunchArgument(
+            'clear_unobserved_rays',
+            default_value='false',
+            description='Treat empty projected angle bins as confirmed free rays'
+        ),
 
         Node(
             package='costmap_2d',
@@ -104,6 +118,12 @@ def generate_launch_description():
                     'lidar_frame': lidar_frame,
                     'pointcloud2_in_base_frame': ParameterValue(
                         pointcloud2_in_base_frame, value_type=bool
+                    ),
+                    'pointcloud2_apply_height_filter': ParameterValue(
+                        pointcloud2_apply_height_filter, value_type=bool
+                    ),
+                    'clear_unobserved_rays': ParameterValue(
+                        clear_unobserved_rays, value_type=bool
                     ),
                 }
             ]

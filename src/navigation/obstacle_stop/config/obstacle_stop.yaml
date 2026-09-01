@@ -23,9 +23,9 @@
 
     safety_margin: 0.05
     # 近矩形：从车体前缘开始，检测到障碍后强制停车。
-    hard_stop_distance: 0.10
+    hard_stop_distance: 0.15
     # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
-    slowdown_distance: 0.20
+    slowdown_distance: 0.25
     obstacle_ratio_threshold: 0.10
 
     linear_velocity_factor: 0.40
@@ -40,6 +40,10 @@
     directional_center_half_width: 0.20
     # 检测区域中心横向速度 |vy + wz*x| 至少达到该值才认为正在脱离（m/s）。
     directional_escape_velocity_threshold: 0.05
+    # 非全向底盘不使用中央横移脱困；中央近障碍始终由硬停保护。
+    center_lateral_escape_enabled: false
+    center_escape_max_forward_velocity: 0.02
+    center_escape_max_angular_velocity: 0.10
 
     lidar_timeout_sec: 0.30
     command_timeout_sec: 0.30
