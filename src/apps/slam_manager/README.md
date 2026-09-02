@@ -86,7 +86,9 @@ A -> B为map_connection时：
 - JSON中没有该节点时，使用Action携带的`x/y/z/theta`和默认策略。
 - `NavigationNode.stop_duration_sec`表示到点后的停留秒数；JSON命中节点
   时使用JSON值，JSON中没有该节点时使用Action消息中的值。
-- `<task_id>.json`不存在时拒绝启动导航。
+- `<task_id>.json`不存在时，直接使用Action携带的`nodes[]`位姿和停留时间
+  继续导航，并为相邻节点生成默认双向直线边；该模式不加载自定义边和区域设置，
+  边参数使用`TaskEdgePolicy`默认值。
 - 相邻的两个JSON节点必须存在唯一的直接有向边，不使用多边间接路径。
 - 校验和合并完成后，原子写入`task/topology_map.json`。
 - `map_connection`表示物理位置相同、统一`map`坐标发生跳转的虚拟连接。
@@ -112,6 +114,8 @@ A -> B为map_connection时：
 - 暂停只停止Pure Pursuit速度输出，不销毁导航Worker。
 - 取消任务会中断到点等待或`map_connection`重定位，停止相关Worker并返回
   `CANCELED`。
+- `load_map`、`start_localization`等生命周期命令会先停止正在执行的导航；
+  旧导航Action返回`ABORTED`，不会被误报为客户端取消。
 - 正常完成返回`SUCCEEDED`，规划失败或超时返回`ABORTED`。
 
 ## 地图目录

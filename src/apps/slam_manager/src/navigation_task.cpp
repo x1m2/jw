@@ -774,13 +774,18 @@ void NavigationTaskExecutor::executePatrolAction(
     }
     topology_written = topology_writer_->write(graph, topology_message);
   } else {
-    result->success = false;
-    result->completed_count = 0U;
-    result->message = "task JSON does not exist for task_id=" + goal->task_id +
-                      ": " + task_json_file.string();
-    goal_handle->abort(result);
-    releaseOperation();
-    return;
+    // 没有任务JSON时保留基础巡检能力：直接使用Action数组，并为相邻节点
+    // 生成默认双向直线边。此路径没有自定义边策略和区域配置。
+    patrol_nodes.assign(goal->nodes.begin(), goal->nodes.end());
+    topology_written = topology_writer_->write(patrol_nodes, topology_message);
+    if (topology_written) {
+      RCLCPP_WARN(node_->get_logger(),
+                  "[APP][NAVIGATION_FALLBACK] task JSON does not exist for "
+                  "task_id='%s': %s; using %zu Action nodes with default "
+                  "straight edges and no region settings",
+                  goal->task_id.c_str(), task_json_file.string().c_str(),
+                  patrol_nodes.size());
+    }
   }
 
   if (!topology_written) {
@@ -1073,15 +1078,25 @@ void NavigationTaskExecutor::executePatrolAction(
 
   result->completed_count = completed_count;
   if (cancelled) {
+    const bool client_cancel = goal_handle->is_canceling();
     result->success = false;
-    result->message = stopped ? "navigation cancelled"
-                              : "navigation cancelled; " + stop_message;
+    const std::string interruption_message =
+        client_cancel ? "navigation cancelled by client"
+                      : "navigation preempted by lifecycle command";
+    result->message = stopped ? interruption_message
+                              : interruption_message + "; " + stop_message;
     if (!stopped) {
       callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
     } else {
       callbacks_.publish_mode();
     }
-    goal_handle->canceled(result);
+    // CANCELED只允许从CANCELING状态进入。load_map等生命周期命令只是
+    // 内部请求导航线程退出，此时Action仍为EXECUTING，必须使用ABORTED。
+    if (client_cancel) {
+      goal_handle->canceled(result);
+    } else {
+      goal_handle->abort(result);
+    }
   } else if (failed) {
     result->success = false;
     result->message = failure_message;
@@ -1169,9 +1184,16 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
         cancel_requested_ || shutting_down_ || goal_handle->is_canceling();
   }
   if (cancelled_before_start) {
+    const bool client_cancel = goal_handle->is_canceling();
     result->success = false;
-    result->message = "navigation cancelled";
-    goal_handle->canceled(result);
+    result->message = client_cancel
+                          ? "navigation cancelled by client"
+                          : "navigation preempted by lifecycle command";
+    if (client_cancel) {
+      goal_handle->canceled(result);
+    } else {
+      goal_handle->abort(result);
+    }
     releaseOperation();
     return;
   }
@@ -1219,15 +1241,23 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   if (stopped) state_machine_->navigationStopped();
 
   if (cancelled) {
+    const bool client_cancel = goal_handle->is_canceling();
     result->success = false;
-    result->message = stopped ? "navigation cancelled"
-                              : "navigation cancelled; " + stop_message;
+    const std::string interruption_message =
+        client_cancel ? "navigation cancelled by client"
+                      : "navigation preempted by lifecycle command";
+    result->message = stopped ? interruption_message
+                              : interruption_message + "; " + stop_message;
     if (stopped) {
       callbacks_.publish_mode();
     } else {
       callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
     }
-    goal_handle->canceled(result);
+    if (client_cancel) {
+      goal_handle->canceled(result);
+    } else {
+      goal_handle->abort(result);
+    }
   } else if (!reached || !stopped) {
     result->success = false;
     result->message = !reached ? "navigation timed out"
