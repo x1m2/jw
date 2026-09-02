@@ -6,3 +6,6 @@ float64 theta
 ---
 bool success
 string message
+---
+float32 elapsed_time
+string message

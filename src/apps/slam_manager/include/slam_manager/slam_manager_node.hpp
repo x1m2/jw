@@ -17,6 +17,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <string>
+#include <thread>
 
 #include "slam_manager/localization.hpp"
 #include "slam_manager/map_check.hpp"
@@ -24,6 +25,7 @@
 #include "slam_manager/navigation_task.hpp"
 #include "slam_manager/slam_mode.hpp"
 #include "slam_manager_interfaces/action/navigate_to_pose.hpp"
+#include "slam_manager_interfaces/action/start_localization.hpp"
 #include "slam_manager_interfaces/action/start_navigation.hpp"
 #include "slam_manager_interfaces/msg/localization_pose.hpp"
 #include "slam_manager_interfaces/msg/map_keyframe.hpp"
@@ -32,7 +34,6 @@
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
 #include "slam_manager_interfaces/srv/delete_map.hpp"
 #include "slam_manager_interfaces/srv/load_map.hpp"
-#include "slam_manager_interfaces/srv/start_localization.hpp"
 #include "slam_manager_interfaces/srv/start_mapping.hpp"
 
 namespace slam_manager {
@@ -52,11 +53,14 @@ class SlamManagerNode : public rclcpp::Node {
   using NavigateToPose = slam_manager_interfaces::action::NavigateToPose;
   using RobotPose = slam_manager_interfaces::msg::RobotPose;
   using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
-  using StartLocalization = slam_manager_interfaces::srv::StartLocalization;
+  using StartLocalization =
+      slam_manager_interfaces::action::StartLocalization;
   using StartMapping = slam_manager_interfaces::srv::StartMapping;
   using StartNavigation = slam_manager_interfaces::action::StartNavigation;
   using StartNavigationGoalHandle =
       rclcpp_action::ServerGoalHandle<StartNavigation>;
+  using StartLocalizationGoalHandle =
+      rclcpp_action::ServerGoalHandle<StartLocalization>;
   using NavigateToPoseGoalHandle =
       rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
@@ -79,6 +83,7 @@ class SlamManagerNode : public rclcpp::Node {
     std::shared_ptr<WorkerOperationToken> operation_token;
     bool stop_existing_worker{false};
     std::function<bool()> is_canceling;
+    std::function<void(const std::string &)> publish_feedback;
   };
 
   struct RelocalizationResult {
@@ -91,7 +96,7 @@ class SlamManagerNode : public rclcpp::Node {
     }
   };
 
-  // 协议2.1～2.5：地图生命周期和重定位Service入口。
+  // 协议2.1～2.5：地图生命周期Service入口。
   void startMappingCallback(const StartMapping::Request::SharedPtr request,
                             StartMapping::Response::SharedPtr response);
   void finishMappingCallback(const Trigger::Request::SharedPtr request,
@@ -102,15 +107,23 @@ class SlamManagerNode : public rclcpp::Node {
                          DeleteMap::Response::SharedPtr response);
   void loadMapCallback(const LoadMap::Request::SharedPtr request,
                        LoadMap::Response::SharedPtr response);
-  void startLocalizationCallback(
-      const StartLocalization::Request::SharedPtr request,
-      StartLocalization::Response::SharedPtr response);
   RelocalizationResult runRelocalizationAttempt(
       const RelocalizationOptions &options,
       std::unique_lock<std::mutex> lifecycle_lock);
   bool relocalizeForMapConnection(
       const slam_manager_interfaces::msg::NavigationNode &node,
       const std::function<bool()> &is_canceling, std::string &message);
+
+  // 协议2.6：重定位Action的接收、取消和异步执行入口。
+  rclcpp_action::GoalResponse handleLocalizationGoal(
+      const rclcpp_action::GoalUUID &uuid,
+      std::shared_ptr<const StartLocalization::Goal> goal);
+  rclcpp_action::CancelResponse handleLocalizationCancel(
+      const std::shared_ptr<StartLocalizationGoalHandle> goal_handle);
+  void handleLocalizationAccepted(
+      const std::shared_ptr<StartLocalizationGoalHandle> goal_handle);
+  void executeLocalizationAction(
+      const std::shared_ptr<StartLocalizationGoalHandle> goal_handle);
   // 协议2.8～2.9：暂停和继续当前导航Action。
   void pauseNavigationCallback(const Trigger::Request::SharedPtr request,
                                Trigger::Response::SharedPtr response);
@@ -176,7 +189,7 @@ class SlamManagerNode : public rclcpp::Node {
   std::shared_ptr<WorkerOperationToken> active_lifecycle_token_;
   double start_mapping_timeout_sec_{30.0};
   double finish_mapping_timeout_sec_{300.0};
-  double relocalization_timeout_sec_{180.0};
+  double relocalization_timeout_sec_{60.0};
   double localization_stop_timeout_sec_{10.0};
   double body_cloud_publish_hz_{5.0};
   double last_body_cloud_publish_time_{-1.0};
@@ -194,6 +207,10 @@ class SlamManagerNode : public rclcpp::Node {
   bool localization_result_success_{false};
   std::string localization_result_message_;
   std::atomic_bool relocalization_succeeded_{false};
+  std::atomic_bool localization_action_active_{false};
+  std::atomic_bool shutting_down_{false};
+  std::mutex localization_action_thread_mutex_;
+  std::thread localization_action_thread_;
 
   std::mutex current_pose_mutex_;
   geometry_msgs::msg::PoseStamped current_pose_;
@@ -219,11 +236,12 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Service<Trigger>::SharedPtr cancel_mapping_service_;
   rclcpp::Service<LoadMap>::SharedPtr load_map_service_;
   rclcpp::Service<DeleteMap>::SharedPtr delete_map_service_;
-  rclcpp::Service<StartLocalization>::SharedPtr start_localization_service_;
   rclcpp::Service<Trigger>::SharedPtr pause_navigation_service_;
   rclcpp::Service<Trigger>::SharedPtr resume_navigation_service_;
   rclcpp_action::Server<StartNavigation>::SharedPtr start_navigation_action_;
   rclcpp_action::Server<NavigateToPose>::SharedPtr navigate_to_pose_action_;
+  rclcpp_action::Server<StartLocalization>::SharedPtr
+      start_localization_action_;
 
   rclcpp::Publisher<RuntimeState>::SharedPtr runtime_state_pub_;
   rclcpp::Publisher<MapKeyframe>::SharedPtr keyframe_cloud_pub_;

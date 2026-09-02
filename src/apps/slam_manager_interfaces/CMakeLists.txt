@@ -16,11 +16,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RuntimeState.msg"
   "msg/WorkerStatus.msg"
   "action/NavigateToPose.action"
+  "action/StartLocalization.action"
   "action/StartNavigation.action"
   "srv/DeleteMap.srv"
   "srv/LoadMap.srv"
   "srv/SetWorkerState.srv"
-  "srv/StartLocalization.srv"
   "srv/StartMapping.srv"
   DEPENDENCIES action_msgs builtin_interfaces geometry_msgs sensor_msgs
 )

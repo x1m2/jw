@@ -64,7 +64,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   finish_mapping_timeout_sec_ = declare_parameter<double>(
       "map_storage.finish_mapping_timeout_sec", 300.0);
   relocalization_timeout_sec_ = declare_parameter<double>(
-      "localization.relocalization_timeout_sec", 180.0);
+      "localization.relocalization_timeout_sec", 60.0);
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
   body_cloud_publish_hz_ =
@@ -103,7 +103,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   // generation并取消旧token；真正的启停过程仍由lifecycle_mutex_串行化。
   lifecycle_control_callback_group_ =
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  // start_localization会同步等待结果，结果订阅必须位于独立回调组。
+  // 重定位Action会异步等待结果，结果订阅必须位于独立回调组。
   localization_result_callback_group_ =
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   navigation_result_callback_group_ =
@@ -197,11 +197,6 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::deleteMapCallback, this,
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default, lifecycle_control_callback_group_);
-  start_localization_service_ = create_service<StartLocalization>(
-      "/robot/start_localization",
-      std::bind(&SlamManagerNode::startLocalizationCallback, this,
-                std::placeholders::_1, std::placeholders::_2),
-      rmw_qos_profile_services_default, lifecycle_control_callback_group_);
   pause_navigation_service_ = create_service<Trigger>(
       "/robot/pause_navigation",
       std::bind(&SlamManagerNode::pauseNavigationCallback, this,
@@ -233,6 +228,16 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::handleNavigateToPoseAccepted, this,
                 std::placeholders::_1));
 
+  // 协议2.6：重定位使用Action，执行期间支持反馈和取消。
+  start_localization_action_ = rclcpp_action::create_server<StartLocalization>(
+      this, "/robot/start_localization",
+      std::bind(&SlamManagerNode::handleLocalizationGoal, this,
+                std::placeholders::_1, std::placeholders::_2),
+      std::bind(&SlamManagerNode::handleLocalizationCancel, this,
+                std::placeholders::_1),
+      std::bind(&SlamManagerNode::handleLocalizationAccepted, this,
+                std::placeholders::_1));
+
   // fastlio_localization 重定位成功后回到空闲态，并记录导航许可标志。
   rclcpp::SubscriptionOptions reloc_subscription_options;
   reloc_subscription_options.callback_group =
@@ -256,7 +261,14 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   RCLCPP_INFO(get_logger(), "Robot runtime ready");
 }
 
-SlamManagerNode::~SlamManagerNode() = default;
+SlamManagerNode::~SlamManagerNode() {
+  shutting_down_.store(true);
+  localization_result_cv_.notify_all();
+  std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
+  if (localization_action_thread_.joinable()) {
+    localization_action_thread_.join();
+  }
+}
 
 uint64_t SlamManagerNode::beginLifecycleCommand(const char *command_name) {
   const uint64_t generation = command_generation_.fetch_add(1U) + 1U;
@@ -809,25 +821,104 @@ void SlamManagerNode::loadMapCallback(const LoadMap::Request::SharedPtr request,
   RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
-void SlamManagerNode::startLocalizationCallback(
-    const StartLocalization::Request::SharedPtr request,
-    StartLocalization::Response::SharedPtr response) {
-  RCLCPP_INFO(get_logger(),
-              "[APP][REQUEST] command=start_localization "
-              "use_initial_pose=%s pose=(%.6f,%.6f,%.6f,%.6f) mode=%s "
-              "session=%llu selected_map='%s' reloc_success=%s",
-              request->use_initial_pose ? "true" : "false", request->x,
-              request->y, request->z, request->theta,
-              std::string(toString(state_machine_.mode())).c_str(),
-              static_cast<unsigned long long>(session_id_),
-              selected_map_id_.c_str(),
-              relocalization_succeeded_.load() ? "true" : "false");
+rclcpp_action::GoalResponse SlamManagerNode::handleLocalizationGoal(
+    const rclcpp_action::GoalUUID &,
+    std::shared_ptr<const StartLocalization::Goal> goal) {
+  RCLCPP_INFO(
+      get_logger(),
+      "[APP][ACTION_GOAL] command=start_localization "
+      "use_initial_pose=%s pose=(%.6f,%.6f,%.6f,%.6f) mode=%s "
+      "session=%llu selected_map='%s' reloc_success=%s",
+      goal->use_initial_pose ? "true" : "false", goal->x, goal->y, goal->z,
+      goal->theta, std::string(toString(state_machine_.mode())).c_str(),
+      static_cast<unsigned long long>(session_id_), selected_map_id_.c_str(),
+      relocalization_succeeded_.load() ? "true" : "false");
 
-  const bool use_initial_pose = request->use_initial_pose;
-  if (use_initial_pose &&
-      !finitePoseFields(request->x, request->y, request->z, request->theta)) {
-    response->success = false;
-    response->message = "initial pose x/y/z/theta contain non-finite values";
+  if (goal->use_initial_pose &&
+      !finitePoseFields(goal->x, goal->y, goal->z, goal->theta)) {
+    RCLCPP_WARN(get_logger(),
+                "Reject localization goal: initial pose contains non-finite "
+                "values");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (shutting_down_.load() || localization_action_active_.exchange(true)) {
+    RCLCPP_WARN(get_logger(),
+                "Reject localization goal: another localization action is "
+                "active or the node is shutting down");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse SlamManagerNode::handleLocalizationCancel(
+    const std::shared_ptr<StartLocalizationGoalHandle>) {
+  RCLCPP_INFO(get_logger(),
+              "[APP][ACTION_CANCEL] command=start_localization mode=%s "
+              "session=%llu",
+              std::string(toString(state_machine_.mode())).c_str(),
+              static_cast<unsigned long long>(session_id_));
+  localization_result_cv_.notify_all();
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void SlamManagerNode::handleLocalizationAccepted(
+    const std::shared_ptr<StartLocalizationGoalHandle> goal_handle) {
+  std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
+  if (localization_action_thread_.joinable()) {
+    localization_action_thread_.join();
+  }
+  try {
+    localization_action_thread_ = std::thread(
+        &SlamManagerNode::executeLocalizationAction, this, goal_handle);
+  } catch (const std::exception &error) {
+    localization_action_active_.store(false);
+    auto result = std::make_shared<StartLocalization::Result>();
+    result->success = false;
+    result->message =
+        std::string("failed to start localization action thread: ") +
+        error.what();
+    goal_handle->abort(result);
+  }
+}
+
+void SlamManagerNode::executeLocalizationAction(
+    const std::shared_ptr<StartLocalizationGoalHandle> goal_handle) {
+  const auto goal = goal_handle->get_goal();
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto publish_feedback = [goal_handle,
+                                 started_at](const std::string &message) {
+    if (!goal_handle->is_active()) return;
+    auto feedback = std::make_shared<StartLocalization::Feedback>();
+    feedback->elapsed_time = std::chrono::duration<float>(
+                                 std::chrono::steady_clock::now() - started_at)
+                                 .count();
+    feedback->message = message;
+    goal_handle->publish_feedback(feedback);
+  };
+  const auto finish_action = [this, goal_handle](
+                                 const RelocalizationResult &attempt_result) {
+    auto result = std::make_shared<StartLocalization::Result>();
+    result->success = attempt_result.success();
+    result->message = attempt_result.message;
+    if (goal_handle->is_active()) {
+      if (attempt_result.status == RelocalizationStatus::kSucceeded) {
+        goal_handle->succeed(result);
+      } else if (attempt_result.status == RelocalizationStatus::kCancelled ||
+                 goal_handle->is_canceling()) {
+        goal_handle->canceled(result);
+      } else {
+        goal_handle->abort(result);
+      }
+    }
+    localization_action_active_.store(false);
+  };
+
+  publish_feedback("starting localization");
+  if (goal_handle->is_canceling() || shutting_down_.load()) {
+    RelocalizationResult result;
+    result.status = RelocalizationStatus::kCancelled;
+    result.message = "app relocalization cancelled";
+    finish_action(result);
     return;
   }
 
@@ -835,28 +926,33 @@ void SlamManagerNode::startLocalizationCallback(
   std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
   const auto operation_token = installLifecycleToken(generation);
   if (!operation_token) {
-    response->success = false;
-    response->message = "relocalization superseded by a newer start request";
+    RelocalizationResult result;
+    result.status = RelocalizationStatus::kSuperseded;
+    result.message = "relocalization superseded by a newer start request";
+    finish_action(result);
     return;
   }
 
   std::string teardown_message;
   if (!prepareForStartCommand(generation, operation_token, teardown_message)) {
+    RelocalizationResult result;
     if (!isLifecycleCommandActive(generation, operation_token)) {
-      response->success = false;
-      response->message = "relocalization superseded by a newer start request";
+      result.status = RelocalizationStatus::kSuperseded;
+      result.message = "relocalization superseded by a newer start request";
+      finish_action(result);
       return;
     }
-    response->success = false;
-    response->message = teardown_message;
-    enterError(RuntimeState::LOCALIZATION_ERROR, response->message);
+    result.message = teardown_message;
+    enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
+    finish_action(result);
     return;
   }
 
   // 运行时前置条件在统一生命周期锁内检查，避免load_map并发修改选择结果。
   if (selected_map_id_.empty()) {
-    response->success = false;
-    response->message = "no map selected; call /robot/load_map first";
+    RelocalizationResult result;
+    result.message = "no map selected; call /robot/load_map first";
+    finish_action(result);
     return;
   }
   const std::string selected_map_id = selected_map_id_;
@@ -865,37 +961,40 @@ void SlamManagerNode::startLocalizationCallback(
   if (!std::filesystem::exists(selected_map_path / "globalmap.pcd",
                                exists_error) ||
       exists_error) {
-    response->success = false;
-    response->message =
+    RelocalizationResult result;
+    result.message =
         exists_error
             ? "failed to inspect selected map: " + exists_error.message()
             : "selected map no longer exists: " + selected_map_id;
+    finish_action(result);
     return;
   }
 
   geometry_msgs::msg::Pose initial_pose;
   initial_pose.orientation.w = 1.0;
-  if (use_initial_pose) {
-    initial_pose = pose_utils::fromXyzTheta(request->x, request->y, request->z,
-                                            request->theta);
+  if (goal->use_initial_pose) {
+    initial_pose =
+        pose_utils::fromXyzTheta(goal->x, goal->y, goal->z, goal->theta);
   }
 
   RelocalizationOptions options;
   options.source = "app";
   options.map_id = selected_map_id;
   options.map_path = selected_map_path;
-  options.use_initial_pose = use_initial_pose;
+  options.use_initial_pose = goal->use_initial_pose;
   options.algorithm_profile = "initial";
   options.initial_pose = initial_pose;
   options.generation = generation;
   options.operation_token = operation_token;
   options.stop_existing_worker = false;
-  options.is_canceling = []() { return false; };
+  options.is_canceling = [this, goal_handle]() {
+    return goal_handle->is_canceling() || shutting_down_.load();
+  };
+  options.publish_feedback = publish_feedback;
 
-  const auto result =
+  const auto attempt_result =
       runRelocalizationAttempt(options, std::move(lifecycle_lock));
-  response->success = result.success();
-  response->message = result.message;
+  finish_action(attempt_result);
 }
 
 SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
@@ -1065,6 +1164,8 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   const auto deadline =
       std::chrono::steady_clock::now() +
       std::chrono::duration<double>(relocalization_timeout_sec_);
+  auto next_feedback =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
   {
     std::unique_lock<std::mutex> lock(localization_result_mutex_);
     while (localization_attempt_session_id_ == localization_session_id &&
@@ -1076,6 +1177,16 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
         break;
       }
       localization_result_cv_.wait_for(lock, std::chrono::milliseconds(100));
+      const auto current_time = std::chrono::steady_clock::now();
+      if (options.publish_feedback && current_time >= next_feedback) {
+        const std::string feedback_message = localization_result_armed_
+                                                 ? "relocalizing"
+                                                 : "starting localization";
+        lock.unlock();
+        options.publish_feedback(feedback_message);
+        lock.lock();
+        next_feedback = current_time + std::chrono::seconds(1);
+      }
     }
     if (localization_attempt_session_id_ != localization_session_id) {
       was_superseded = true;

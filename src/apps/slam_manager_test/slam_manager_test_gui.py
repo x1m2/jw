@@ -31,14 +31,18 @@ from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
-from slam_manager_interfaces.action import NavigateToPose, StartNavigation
+from slam_manager_interfaces.action import (
+    NavigateToPose,
+    StartLocalization,
+    StartNavigation,
+)
 from slam_manager_interfaces.msg import (
     MapKeyframe,
     NavigationNode,
     RobotPose,
 )
 from slam_manager_interfaces.msg import RuntimeState, WorkerStatus
-from slam_manager_interfaces.srv import DeleteMap, LoadMap, StartLocalization, StartMapping
+from slam_manager_interfaces.srv import DeleteMap, LoadMap, StartMapping
 
 
 RUNTIME_STATE_NAMES = {
@@ -107,9 +111,6 @@ class RuntimeTestNode(Node):
             'cancel_mapping': self.create_client(Trigger, '/robot/cancel_mapping'),
             'load_map': self.create_client(LoadMap, '/robot/load_map'),
             'delete_map': self.create_client(DeleteMap, '/robot/delete_map'),
-            'start_localization': self.create_client(
-                StartLocalization, '/robot/start_localization'
-            ),
             'pause_navigation': self.create_client(
                 Trigger, '/robot/pause_navigation'
             ),
@@ -123,6 +124,9 @@ class RuntimeTestNode(Node):
         self.pose_action = ActionClient(
             self, NavigateToPose, '/robot/navigate_to_pose'
         )
+        self.localization_action = ActionClient(
+            self, StartLocalization, '/robot/start_localization'
+        )
         marker_qos = QoSProfile(depth=1)
         marker_qos.reliability = ReliabilityPolicy.RELIABLE
         marker_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
@@ -134,6 +138,9 @@ class RuntimeTestNode(Node):
             1.0, self._republish_task_markers
         )
         self.active_goal_handle = None
+        self.localization_goal_handle = None
+        self.localization_goal_future = None
+        self.localization_cancel_requested = False
 
         self.create_subscription(
             RuntimeState, '/robot/runtime_state', self._runtime_state_cb, 10
@@ -334,13 +341,11 @@ class RuntimeTestNode(Node):
     def call_service(self, name, request):
         client = self.service_clients[name]
         if not client.service_is_ready():
-            self.events.put(('log', f'[FAIL] {name}: service is not ready'))
-            if name == 'start_localization':
+            message = f'{name} service is not ready'
+            self.events.put(('log', f'[FAIL] {message}'))
+            if name in ('start_mapping', 'finish_mapping', 'cancel_mapping'):
                 self.events.put(
-                    (
-                        'localization_service_result',
-                        (False, 'start_localization service is not ready'),
-                    )
+                    ('mapping_service_result', (name, False, message))
                 )
             return
         self.events.put(('log', f'[CALL] {name}'))
@@ -355,29 +360,107 @@ class RuntimeTestNode(Node):
             tag = 'PASS' if success else 'REJECT'
             self.events.put(('log', f'[{tag}] {name}: {message}'))
 
-            # 只有真正进入建图后才启动PGO RViz，避免start_mapping被拒绝时留下RViz。
-            if name == 'start_mapping' and success:
-                self.events.put(('start_pgo_rviz', None))
-
-            # 地图完成或取消成功后关闭PGO RViz。
-            if name in ('finish_mapping', 'cancel_mapping') and success:
-                self.events.put(('stop_pgo_rviz', None))
-
             # 加载地图成功后，由GUI自行读取globalmap.pcd并启动RViz预览。
             if name == 'load_map' and success:
                 self.events.put(('load_map_success', None))
 
-            if name == 'start_localization':
+            if name in ('start_mapping', 'finish_mapping', 'cancel_mapping'):
                 self.events.put(
-                    ('localization_service_result', (success, message))
+                    ('mapping_service_result', (name, success, message))
                 )
 
         except Exception as error:
             self.events.put(('log', f'[ERROR] {name}: {error}'))
-            if name == 'start_localization':
+            if name in ('start_mapping', 'finish_mapping', 'cancel_mapping'):
                 self.events.put(
-                    ('localization_service_result', (False, str(error)))
+                    ('mapping_service_result', (name, False, str(error)))
                 )
+
+    def send_localization_goal(self, goal):
+        if not self.localization_action.server_is_ready():
+            message = 'start_localization action is not ready'
+            self.events.put(('log', f'[FAIL] {message}'))
+            self.events.put(('localization_action_result', (False, message)))
+            return
+        self.events.put(('log', '[CALL] start_localization'))
+        self.localization_cancel_requested = False
+        self.localization_goal_future = self.localization_action.send_goal_async(
+            goal, feedback_callback=self._localization_feedback
+        )
+        self.localization_goal_future.add_done_callback(
+            self._localization_goal_response
+        )
+
+    def _localization_goal_response(self, future):
+        try:
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                message = 'start_localization action goal rejected'
+                self.events.put(('log', f'[REJECT] {message}'))
+                self.events.put(('localization_action_result', (False, message)))
+                self.localization_goal_future = None
+                self.localization_cancel_requested = False
+                return
+            self.localization_goal_handle = goal_handle
+            self.localization_goal_future = None
+            self.events.put(('log', '[PASS] start_localization goal accepted'))
+            result_future = goal_handle.get_result_async()
+            result_future.add_done_callback(self._localization_result)
+            if self.localization_cancel_requested:
+                self.cancel_localization()
+        except Exception as error:
+            self.localization_goal_future = None
+            self.localization_cancel_requested = False
+            self.events.put(('log', f'[ERROR] localization action: {error}'))
+            self.events.put(('localization_action_result', (False, str(error))))
+
+    def _localization_feedback(self, feedback):
+        message = feedback.feedback
+        self.events.put(
+            (
+                'localization_action_feedback',
+                (message.elapsed_time, message.message),
+            )
+        )
+
+    def _localization_result(self, future):
+        try:
+            wrapped = future.result()
+            result = wrapped.result
+            self.events.put(
+                (
+                    'log',
+                    f'[RESULT] start_localization status={wrapped.status}, '
+                    f'success={result.success}, message={result.message}',
+                )
+            )
+            self.events.put(
+                ('localization_action_result', (result.success, result.message))
+            )
+        except Exception as error:
+            self.events.put(('log', f'[ERROR] localization result: {error}'))
+            self.events.put(('localization_action_result', (False, str(error))))
+        self.localization_goal_handle = None
+        self.localization_goal_future = None
+        self.localization_cancel_requested = False
+
+    def cancel_localization(self):
+        if self.localization_goal_handle is None:
+            if self.localization_goal_future is not None:
+                self.localization_cancel_requested = True
+                self.events.put(
+                    ('log', '[CALL] cancel localization after goal acceptance')
+                )
+                return
+            self.events.put(('log', '[INFO] no active localization goal'))
+            return
+        self.localization_cancel_requested = False
+        future = self.localization_goal_handle.cancel_goal_async()
+        future.add_done_callback(
+            lambda _done: self.events.put(
+                ('log', '[CALL] cancel localization goal')
+            )
+        )
 
     def send_pose_goal(self, goal):
         if not self.pose_action.server_is_ready():
@@ -440,6 +523,7 @@ class RuntimeTestNode(Node):
             for name, client in self.service_clients.items()
         }
         actions = {
+            'start_localization': self.localization_action.server_is_ready(),
             'start_navigation': self.patrol_action.server_is_ready(),
             'navigate_to_pose': self.pose_action.server_is_ready(),
         }
@@ -507,6 +591,8 @@ class RuntimeTestGui:
         self._configure_button_styles()
 
         self.current_map_id = None
+        self.mapping_request_active = False
+        self.mapping_start_pending = False
         self.initial_pose_enabled = tk.BooleanVar(value=False)
         self.localization_request_active = False
         self.localization_session_started = False
@@ -733,9 +819,17 @@ class RuntimeTestGui:
                 self.node.call_service(service_name, request)
                 return
             if datetime.datetime.now().timestamp() >= deadline:
-                self._append_log(
-                    f'[FAIL] 等待 {service_name} service 超时（{timeout_sec:.0f}s）'
+                message = (
+                    f'等待 {service_name} service 超时（{timeout_sec:.0f}s）'
                 )
+                self._append_log(f'[FAIL] {message}')
+                if service_name == 'start_mapping':
+                    self.events.put(
+                        (
+                            'mapping_service_result',
+                            (service_name, False, message),
+                        )
+                    )
                 messagebox.showerror(
                     '平台启动超时',
                     f'等待 {service_name} 服务超过 {timeout_sec:.0f} 秒。\n\n'
@@ -843,12 +937,13 @@ class RuntimeTestGui:
 
         mapping = ttk.LabelFrame(controls, text='1. 建图', padding=8)
         mapping.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
-        ttk.Button(
+        self.mapping_button = ttk.Button(
             mapping,
             text='开始建图',
             command=self.start_mapping,
             style='Primary.TButton',
-        ).pack(fill=tk.X)
+        )
+        self.mapping_button.pack(fill=tk.X)
         ttk.Button(
             mapping,
             text='完成并保存',
@@ -857,12 +952,6 @@ class RuntimeTestGui:
         ).pack(
             fill=tk.X, pady=4
         )
-        ttk.Button(
-            mapping,
-            text='取消建图',
-            command=self.cancel_mapping,
-            style='Danger.TButton',
-        ).pack(fill=tk.X, pady=(0, 4))
         ttk.Button(
             mapping,
             text='加载地图',
@@ -1149,6 +1238,30 @@ class RuntimeTestGui:
             self.current_map_id = map_id
             return map_id
 
+    def _set_mapping_active(self, active, enabled=True):
+        self.mapping_request_active = active
+        self.mapping_button.configure(
+            text='取消建图' if active else '开始建图',
+            command=self.cancel_mapping if active else self.start_mapping,
+            style='Danger.TButton' if active else 'Primary.TButton',
+            state=tk.NORMAL if enabled else tk.DISABLED,
+        )
+
+    def _handle_mapping_service_result(self, name, success, _message):
+        if name == 'start_mapping':
+            self.mapping_start_pending = False
+            self._set_mapping_active(success)
+            if success:
+                # 让按钮先完成重绘，再启动建图RViz。
+                self.root.after(50, self._start_pgo_rviz)
+        elif success:
+            self.mapping_start_pending = False
+            self._set_mapping_active(False)
+            # 关闭RViz最多会等待数秒，延后执行以确保按钮立即恢复。
+            self.root.after(50, self._stop_pgo_rviz)
+        else:
+            self._set_mapping_active(self.mapping_request_active)
+
     def start_mapping(self):
         map_id = self._prompt_map_id('开始建图')
         if map_id is None:
@@ -1169,12 +1282,18 @@ class RuntimeTestGui:
         request = StartMapping.Request()
         request.map_id = map_id
         self._append_log(f'[CALL] 准备开始建图: map_id={map_id}')
+        # 立即切换为取消语义，但在START响应前禁止点击，避免MAPPING状态
+        # 尚未建立时过早调用cancel_mapping。
+        self.mapping_start_pending = True
+        self._set_mapping_active(True, enabled=False)
         self._call_service_after_platform_ready('start_mapping', request)
 
     def finish_mapping(self):
+        self.mapping_button.configure(state=tk.DISABLED)
         self.node.call_service('finish_mapping', Trigger.Request())
 
     def cancel_mapping(self):
+        self.mapping_button.configure(state=tk.DISABLED)
         self.node.call_service('cancel_mapping', Trigger.Request())
 
     def load_map(self):
@@ -1218,6 +1337,21 @@ class RuntimeTestGui:
         self._append_log(f'[CALL] 准备删除地图: map_id={map_id}')
         self._call_service_after_platform_ready('delete_map', request)
 
+    def _set_localization_action_active(self, active, enabled=True):
+        self.localization_button.configure(
+            text='取消重定位' if active else '启动重定位',
+            command=(
+                self.cancel_localization if active else self.start_localization
+            ),
+            style='Danger.TButton' if active else 'Primary.TButton',
+            state=tk.NORMAL if enabled else tk.DISABLED,
+        )
+
+    def cancel_localization(self):
+        self.localization_status.set('状态：正在取消重定位…')
+        self._set_localization_action_active(True, enabled=False)
+        self.node.cancel_localization()
+
     def start_localization(self):
         if self.localization_request_active:
             messagebox.showwarning(
@@ -1235,9 +1369,9 @@ class RuntimeTestGui:
             return
         try:
             x, y, z, theta = self._pose_values(self.localization_pose_vars)
-            request = StartLocalization.Request()
-            request.use_initial_pose = self.initial_pose_enabled.get()
-            request.x, request.y, request.z, request.theta = x, y, z, theta
+            goal = StartLocalization.Goal()
+            goal.use_initial_pose = self.initial_pose_enabled.get()
+            goal.x, goal.y, goal.z, goal.theta = x, y, z, theta
             localization_worker = self.node.worker_states.get(
                 'fastlio_localization_worker'
             )
@@ -1250,11 +1384,13 @@ class RuntimeTestGui:
             self.initial_pose_prompt_shown = False
             self.localization_success_shown = False
             self.localization_status.set('状态：正在启动重定位…')
-            self.localization_button.configure(state=tk.DISABLED)
+            # Action Goal发送后立即允许用户通过同一个按钮取消；Goal尚未被
+            # Server接受时，RuntimeTestNode会记录请求并在接受后补发Cancel。
+            self._set_localization_action_active(True)
             self._append_log(
                 '[INFO] 正在启动重定位；定位Worker就绪后GUI会提示何时设置初始位姿'
             )
-            self.node.call_service('start_localization', request)
+            self.node.send_localization_goal(goal)
         except ValueError as error:
             messagebox.showerror('参数错误', str(error))
 
@@ -1303,10 +1439,10 @@ class RuntimeTestGui:
             parent=self.root,
         )
 
-    def _handle_localization_service_result(self, success, message):
+    def _handle_localization_action_result(self, success, message):
         self.localization_request_active = False
         self.localization_session_started = False
-        self.localization_button.configure(state=tk.NORMAL)
+        self._set_localization_action_active(False)
         if success:
             self.localization_status.set('状态：重定位成功，纯定位运行中')
             if not self.localization_success_shown:
@@ -2251,6 +2387,15 @@ Window Geometry:
                     self.runtime_label.set(
                         f'Runtime: {state}  error={payload.error_code} {payload.error_msg}'
                     )
+                    if payload.state == RuntimeState.MAPPING:
+                        self.mapping_start_pending = False
+                        self._set_mapping_active(True)
+                    elif (
+                        payload.state == RuntimeState.IDLE
+                        and self.mapping_request_active
+                        and not self.mapping_start_pending
+                    ):
+                        self._set_mapping_active(False)
                     if (
                         self.localization_request_active
                         and payload.state == RuntimeState.RELOCALIZING
@@ -2323,9 +2468,21 @@ Window Geometry:
                         '重定位初始位姿，已勾选“使用初始位姿”: '
                         f'x={x:.2f} y={y:.2f} z={z:.2f} theta={theta:.2f}'
                     )
-                elif kind == 'localization_service_result':
+                elif kind == 'localization_action_feedback':
+                    elapsed_time, message = payload
+                    self.localization_status.set(
+                        f'状态：{message}（{elapsed_time:.1f}s）'
+                    )
+                    self._append_log(
+                        f'[FEEDBACK] start_localization elapsed_time='
+                        f'{elapsed_time:.1f}s message={message}'
+                    )
+                elif kind == 'localization_action_result':
                     success, message = payload
-                    self._handle_localization_service_result(success, message)
+                    self._handle_localization_action_result(success, message)
+                elif kind == 'mapping_service_result':
+                    name, success, message = payload
+                    self._handle_mapping_service_result(name, success, message)
                 elif kind == 'keyframe':
                     _message, count = payload
                     if count == 1 or count % 10 == 0:
@@ -2352,10 +2509,6 @@ Window Geometry:
                     self._append_log(
                         f'[RESULT] 键盘控制终端已关闭，返回码={payload}'
                     )
-                elif kind == 'start_pgo_rviz':
-                    self._start_pgo_rviz()
-                elif kind == 'stop_pgo_rviz':
-                    self._stop_pgo_rviz()
                 elif kind == 'pgo_rviz_done':
                     self.pgo_rviz_process = None
                     self._append_log(

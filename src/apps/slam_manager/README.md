@@ -34,6 +34,10 @@ APP /robot/load_map
 APP /robot/start_localization
   -> 使用最近一次load_map成功的地图启动定位
   -> use_initial_pose=true时使用APP给出的x/y/z/theta
+  -> Action执行期间每秒反馈elapsed_time和当前阶段message
+  -> 60秒内成功则返回SUCCEEDED，定位算法继续运行
+  -> 失败或超时返回ABORTED并停止定位
+  -> APP取消则返回CANCELED、停止定位并回到IDLE
 ```
 
 APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
