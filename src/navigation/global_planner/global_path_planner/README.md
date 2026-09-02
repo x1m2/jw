@@ -49,6 +49,15 @@ topology_map.json + globalmap.pcd
 - `linear_velocity`、`angular_velocity`最终不会超过Pure Pursuit配置的最大值。
 - `motion_direction=1`输出正线速度，`motion_direction=-1`输出负线速度。
 
+## 区域策略
+
+运行时拓扑可选包含互不重叠的`regions[]`。规划器对每个插值路径点执行
+多边形包含判断：区域外保留当前边`EdgePolicy`；区域内只用`param`中实际
+提供的`linear_velocity`、`angular_velocity`和
+`obstacle_avoidance_distance_m`覆盖边策略。`obstacle_avoidance`区域自动
+开启主动绕障，`stop`区域开启停障并关闭主动绕障，`speed_limit`只做参数
+覆盖。生成的策略仍与`PathWithPolicy.path.poses[]`逐点对齐。
+
 生成的路径交给`path_smoother`平滑；平滑器保持当前边策略不变，最终由
 Pure Pursuit执行。
 

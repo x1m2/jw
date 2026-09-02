@@ -39,3 +39,22 @@
 急停、指令超时和雷达异常不受方向释放影响。
 
 机器人尺寸和雷达安装外参统一配置在 `src/config/robot_param.yaml`。
+
+## 地图区域配置
+
+平台导航启动时，Worker会把当前运行时`topology_map.json`路径传给本节点。
+节点订阅`/pose_stamped_localization`，根据`regions[].polygon`判断机器人
+实际所在区域：
+
+- 节点根据区域ID读取运行时拓扑同级目录下的
+  `region_obstacle_stop/<region_id>.yaml`，覆盖默认配置中的五个停障参数并
+  重新计算停止区和减速区；
+- `enabled=false`的区域不会加载或校验对应ID的YAML；
+- 区域YAML不存在时继续使用启动时`obstacle_stop.yaml`参数；
+- 区域YAML存在但不可读、包含未知参数或参数越界时，Worker启动失败并把原因
+  返回给`slam_manager`，导航不会开始；
+- 离开所有区域后恢复启动时默认配置。
+
+区域YAML由本节点直接读取和校验，`slam_manager`不解析其中的停障参数。
+配置切换只影响停止距离、减速距离、占用阈值及线/角速度倍率，不改变点云
+话题、坐标系、超时和控制频率。

@@ -1,12 +1,15 @@
 #pragma once
 
 #include <Eigen/Geometry>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -23,7 +26,7 @@ class ObstacleStop {
  public:
   explicit ObstacleStop(rclcpp::Node::SharedPtr node);
 
-  bool initialize();
+  bool initialize(std::string &message);
   void stop();
 
  private:
@@ -89,8 +92,21 @@ class ObstacleStop {
     std::vector<std::size_t> right;
   };
 
+  struct RegionProfile {
+    int id{0};
+    bool enabled{true};
+    std::vector<std::array<double, 2>> polygon;
+    ObstacleStopConfig config;
+    bool has_custom_config{false};
+  };
+
   void loadParameters();
+  bool loadRegionProfiles(std::string &message);
   void initializeGridLookup();
+  void localizationPoseCallback(
+      const geometry_msgs::msg::PoseStamped::ConstSharedPtr message);
+  const RegionProfile *findRegion(double x, double y) const;
+  void applyRegionProfile(const RegionProfile *region);
   void lidarCallback(
       const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr message);
   void pointCloud2Callback(
@@ -104,12 +120,12 @@ class ObstacleStop {
   void controlCallback();
 
   // 过滤MID360点云并直接构建临时局部障碍栅格。
-  void buildObstacleGrid(
-      const livox_ros_driver2::msg::CustomMsg &message,
-      std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
-  bool buildObstacleGrid(
-      const sensor_msgs::msg::PointCloud2 &message,
-      std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells) const;
+  void buildObstacleGrid(const livox_ros_driver2::msg::CustomMsg &message,
+                         std::vector<uint8_t> &grid,
+                         std::vector<GridCell> &occupied_cells) const;
+  bool buildObstacleGrid(const sensor_msgs::msg::PointCloud2 &message,
+                         std::vector<uint8_t> &grid,
+                         std::vector<GridCell> &occupied_cells) const;
   void addBasePointToGrid(double x, double y, double z,
                           std::vector<uint8_t> &grid,
                           std::vector<GridCell> &occupied_cells,
@@ -123,7 +139,7 @@ class ObstacleStop {
                                                      double y_min,
                                                      double y_max) const;
   DirectionalZoneCells buildDirectionalZoneCells(double x_min,
-                                                  double x_max) const;
+                                                 double x_max) const;
   DirectionalZoneOccupancy measureDirectionalZone(
       const std::vector<uint8_t> &grid,
       const DirectionalZoneCells &zone_cells) const;
@@ -145,6 +161,8 @@ class ObstacleStop {
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
       obstacle_stop_enabled_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+      localization_pose_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr safe_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_active_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
@@ -154,11 +172,18 @@ class ObstacleStop {
   std::string planned_cmd_topic_;
   std::string safe_cmd_topic_;
   std::string base_frame_;
+  std::string global_frame_;
+  std::string pose_topic_;
+  std::string topology_map_file_;
   int lidar_type_{1};  // 1: Livox CustomMsg，其他: base_link PointCloud2
   bool pointcloud2_apply_height_filter_{true};
   // MID360坐标系到机器人base_link坐标系的固定外参。
   Eigen::Isometry3d lidar_to_base_{Eigen::Isometry3d::Identity()};
   ObstacleStopConfig config_;
+  ObstacleStopConfig default_config_;
+  std::vector<RegionProfile> region_profiles_;
+  std::optional<int> active_region_id_;
+  mutable std::mutex config_mutex_;
   std::vector<GridCell> inflation_offsets_;
   DirectionalZoneCells hard_stop_zone_cells_;
   DirectionalZoneCells slowdown_zone_cells_;

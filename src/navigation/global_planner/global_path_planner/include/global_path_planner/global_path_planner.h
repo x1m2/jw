@@ -22,6 +22,7 @@
 #include <navigation_interfaces/edge_policy_utils.hpp>
 #include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
+#include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -70,6 +71,16 @@ struct TopologyEdge {
         bidirectional(_bi),
         policy(navigation_interfaces::makeDefaultEdgePolicy()),
         has_bezier_control_points(false) {}
+};
+
+struct TopologyRegion {
+  int id{0};
+  std::string region_type;
+  bool enabled{true};
+  std::vector<geometry_msgs::msg::Point> polygon;
+  std::optional<double> linear_velocity;
+  std::optional<double> angular_velocity;
+  std::optional<double> obstacle_avoidance_distance_m;
 };
 
 class GlobalPathPlanner : public rclcpp::Node {
@@ -129,6 +140,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   // 数据
   std::vector<TopologyNode> nodes_;
   std::vector<TopologyEdge> edges_;
+  std::vector<TopologyRegion> regions_;
   std::unordered_map<int, std::size_t> node_index_;
   EdgeAdjacency base_adjacency_;
   int max_node_id_{-1};
@@ -185,6 +197,11 @@ class GlobalPathPlanner : public rclcpp::Node {
       const geometry_msgs::msg::Point &position) const;
   static void inheritEdgePolicy(const TopologyEdge *source,
                                 TopologyEdge &destination);
+  const TopologyRegion *findRegion(
+      const geometry_msgs::msg::Point &point) const;
+  navigation_interfaces::msg::EdgePolicy applyRegionPolicy(
+      const navigation_interfaces::msg::EdgePolicy &edge_policy,
+      const geometry_msgs::msg::Point &point) const;
 
   // 新的边合法性检查方法
   bool isEdgeLegal(const TopologyNode &node1, const TopologyNode &node2);

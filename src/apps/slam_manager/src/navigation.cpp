@@ -79,12 +79,15 @@ void NavigationController::startNext(uint64_t session_id, std::size_t index,
                   operation_token, std::move(completion));
       };
 
-  // 全局规划器按当前map_id动态加载task拓扑和map可行域点云。
-  if (worker == &global_planner_worker_) {
-    WorkerStartContext planner_context;
-    planner_context.resource_id = topology_file;
-    planner_context.resource_path = map_directory;
-    worker->start(session_id, planner_context, std::move(worker_completion));
+  // 全局规划器和停障节点加载同一份运行时拓扑。规划器额外需要地图目录；
+  // 停障节点从拓扑文件的同级目录自行解析区域ID对应的YAML。
+  if (worker == &global_planner_worker_ || worker == &obstacle_stop_worker_) {
+    WorkerStartContext worker_context;
+    worker_context.resource_id = topology_file;
+    if (worker == &global_planner_worker_) {
+      worker_context.resource_path = map_directory;
+    }
+    worker->start(session_id, worker_context, std::move(worker_completion));
   } else {
     worker->start(session_id, std::move(worker_completion));
   }

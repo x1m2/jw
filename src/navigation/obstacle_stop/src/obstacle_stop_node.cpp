@@ -1,7 +1,6 @@
 #include <memory>
-#include <stdexcept>
-
 #include <rclcpp/rclcpp.hpp>
+#include <stdexcept>
 
 #include "obstacle_stop/obstacle_stop.hpp"
 #include "slam_manager/managed_worker.hpp"
@@ -10,11 +9,19 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   try {
     auto worker = std::make_shared<slam_manager::ManagedWorker>(
-        "obstacle_stop_worker", []() {
-          auto node = std::make_shared<rclcpp::Node>("obstacle_stop");
-          auto obstacle_stop = std::make_shared<obstacle_stop::ObstacleStop>(node);
-          if (!obstacle_stop->initialize()) {
-            throw std::runtime_error("failed to initialize obstacle stop");
+        "obstacle_stop_worker",
+        [](const slam_manager::ManagedWorker::StartContext &context) {
+          rclcpp::NodeOptions options;
+          if (!context.resource_id.empty()) {
+            options.append_parameter_override("topology_map_file",
+                                              context.resource_id);
+          }
+          auto node = std::make_shared<rclcpp::Node>("obstacle_stop", options);
+          auto obstacle_stop =
+              std::make_shared<obstacle_stop::ObstacleStop>(node);
+          std::string initialization_message;
+          if (!obstacle_stop->initialize(initialization_message)) {
+            throw std::runtime_error(initialization_message);
           }
           slam_manager::ManagedWorker::AlgorithmInstance instance;
           instance.node = node;

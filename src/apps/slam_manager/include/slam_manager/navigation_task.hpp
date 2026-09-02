@@ -1,15 +1,16 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <string>
@@ -44,9 +45,24 @@ struct TaskTopologyEdge {
   std::array<std::array<double, 3>, 2> bezier_control_points{};
 };
 
+struct TaskRegionParameters {
+  std::optional<double> linear_velocity;
+  std::optional<double> angular_velocity;
+  std::optional<double> obstacle_avoidance_distance_m;
+};
+
+struct TaskTopologyRegion {
+  uint32_t id{0U};
+  std::string region_type;
+  bool enabled{true};
+  std::vector<std::array<double, 2>> polygon;
+  TaskRegionParameters parameters;
+};
+
 struct TaskTopologyGraph {
   std::vector<slam_manager_interfaces::msg::NavigationNode> nodes;
   std::vector<TaskTopologyEdge> edges;
+  std::vector<TaskTopologyRegion> regions;
 };
 
 using DirectedEdgeIndex = std::unordered_map<uint64_t, std::size_t>;
@@ -67,8 +83,9 @@ class TopologyFileWriter {
 
   void setOutputFile(std::filesystem::path output_file);
   const std::filesystem::path &outputFile() const;
-  bool write(const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
-             std::string &message) const;
+  bool write(
+      const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
+      std::string &message) const;
   bool write(const TaskTopologyGraph &graph, std::string &message) const;
 
  private:

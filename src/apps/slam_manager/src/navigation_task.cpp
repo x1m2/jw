@@ -1,18 +1,18 @@
 #include "slam_manager/navigation_task.hpp"
 
+#include <tf2/utils.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
-#include <nlohmann/json.hpp>
-#include <tf2/utils.h>
 
 #include "slam_manager/pose_utils.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
@@ -22,6 +22,115 @@ namespace {
 
 bool finiteNonNegative(double value) {
   return std::isfinite(value) && value >= 0.0;
+}
+
+constexpr double kGeometryEpsilon = 1e-9;
+
+double cross2d(const std::array<double, 2> &first,
+               const std::array<double, 2> &second,
+               const std::array<double, 2> &third) {
+  return (second[0] - first[0]) * (third[1] - first[1]) -
+         (second[1] - first[1]) * (third[0] - first[0]);
+}
+
+bool pointOnSegment(const std::array<double, 2> &point,
+                    const std::array<double, 2> &first,
+                    const std::array<double, 2> &second) {
+  return std::abs(cross2d(first, second, point)) <= kGeometryEpsilon &&
+         point[0] >= std::min(first[0], second[0]) - kGeometryEpsilon &&
+         point[0] <= std::max(first[0], second[0]) + kGeometryEpsilon &&
+         point[1] >= std::min(first[1], second[1]) - kGeometryEpsilon &&
+         point[1] <= std::max(first[1], second[1]) + kGeometryEpsilon;
+}
+
+bool segmentsIntersect(const std::array<double, 2> &first_start,
+                       const std::array<double, 2> &first_end,
+                       const std::array<double, 2> &second_start,
+                       const std::array<double, 2> &second_end) {
+  const double first_cross_start =
+      cross2d(first_start, first_end, second_start);
+  const double first_cross_end = cross2d(first_start, first_end, second_end);
+  const double second_cross_start =
+      cross2d(second_start, second_end, first_start);
+  const double second_cross_end = cross2d(second_start, second_end, first_end);
+  if (((first_cross_start > kGeometryEpsilon &&
+        first_cross_end < -kGeometryEpsilon) ||
+       (first_cross_start < -kGeometryEpsilon &&
+        first_cross_end > kGeometryEpsilon)) &&
+      ((second_cross_start > kGeometryEpsilon &&
+        second_cross_end < -kGeometryEpsilon) ||
+       (second_cross_start < -kGeometryEpsilon &&
+        second_cross_end > kGeometryEpsilon))) {
+    return true;
+  }
+  return pointOnSegment(second_start, first_start, first_end) ||
+         pointOnSegment(second_end, first_start, first_end) ||
+         pointOnSegment(first_start, second_start, second_end) ||
+         pointOnSegment(first_end, second_start, second_end);
+}
+
+bool pointInPolygon(const std::array<double, 2> &point,
+                    const std::vector<std::array<double, 2>> &polygon) {
+  bool inside = false;
+  for (std::size_t index = 0, previous = polygon.size() - 1U;
+       index < polygon.size(); previous = index++) {
+    const auto &first = polygon[previous];
+    const auto &second = polygon[index];
+    if (pointOnSegment(point, first, second)) return true;
+    const bool crosses = (first[1] > point[1]) != (second[1] > point[1]);
+    if (crosses && point[0] < (second[0] - first[0]) * (point[1] - first[1]) /
+                                      (second[1] - first[1]) +
+                                  first[0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+bool polygonIsValid(const std::vector<std::array<double, 2>> &polygon) {
+  if (polygon.size() < 3U) return false;
+  double twice_area = 0.0;
+  for (std::size_t index = 0; index < polygon.size(); ++index) {
+    const auto &first = polygon[index];
+    const auto &second = polygon[(index + 1U) % polygon.size()];
+    if (!std::isfinite(first[0]) || !std::isfinite(first[1]) ||
+        (std::abs(first[0] - second[0]) <= kGeometryEpsilon &&
+         std::abs(first[1] - second[1]) <= kGeometryEpsilon)) {
+      return false;
+    }
+    twice_area += first[0] * second[1] - second[0] * first[1];
+  }
+  if (std::abs(twice_area) <= kGeometryEpsilon) return false;
+  for (std::size_t first = 0; first < polygon.size(); ++first) {
+    const std::size_t first_next = (first + 1U) % polygon.size();
+    for (std::size_t second = first + 1U; second < polygon.size(); ++second) {
+      const std::size_t second_next = (second + 1U) % polygon.size();
+      if (first == second || first_next == second || second_next == first)
+        continue;
+      if (segmentsIntersect(polygon[first], polygon[first_next],
+                            polygon[second], polygon[second_next])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool polygonsOverlap(const std::vector<std::array<double, 2>> &first,
+                     const std::vector<std::array<double, 2>> &second) {
+  for (std::size_t first_index = 0; first_index < first.size(); ++first_index) {
+    const auto first_next = (first_index + 1U) % first.size();
+    for (std::size_t second_index = 0; second_index < second.size();
+         ++second_index) {
+      const auto second_next = (second_index + 1U) % second.size();
+      if (segmentsIntersect(first[first_index], first[first_next],
+                            second[second_index], second[second_next])) {
+        return true;
+      }
+    }
+  }
+  return pointInPolygon(first.front(), second) ||
+         pointInPolygon(second.front(), first);
 }
 
 double distance3d(double first_x, double first_y, double first_z,
@@ -75,8 +184,7 @@ bool publishTemporaryFile(const std::filesystem::path &temporary_file,
                           std::string &message) {
   std::error_code filesystem_error;
   std::filesystem::rename(temporary_file, output_file, filesystem_error);
-  if (!filesystem_error)
-    return true;
+  if (!filesystem_error) return true;
   const std::string rename_error = filesystem_error.message();
   std::error_code cleanup_error;
   std::filesystem::remove(temporary_file, cleanup_error);
@@ -127,8 +235,7 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
       node.y = json_node.at("y").get<double>();
       node.z = json_node.at("z").get<double>();
       node.theta = json_node.at("theta").get<double>();
-      node.stop_duration_sec =
-          json_node.value("stop_duration_sec", 0.0);
+      node.stop_duration_sec = json_node.value("stop_duration_sec", 0.0);
       if (!node_ids.insert(node.node_id).second) {
         message = "duplicate JSON node id=" + std::to_string(raw_id);
         return false;
@@ -243,6 +350,122 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
       }
       graph.edges.push_back(edge);
     }
+
+    if (document.contains("regions")) {
+      if (!document["regions"].is_array()) {
+        message = "patrol JSON regions must be an array";
+        return false;
+      }
+      std::unordered_set<uint32_t> region_ids;
+      graph.regions.reserve(document["regions"].size());
+      for (const auto &json_region : document["regions"]) {
+        if (!json_region.is_object()) {
+          message = "patrol JSON regions must be objects";
+          return false;
+        }
+        const uint64_t raw_id = json_region.at("id").get<uint64_t>();
+        if (raw_id > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+          message = "region id is out of planner range";
+          return false;
+        }
+
+        TaskTopologyRegion region;
+        region.id = static_cast<uint32_t>(raw_id);
+        region.region_type = json_region.at("region_type").get<std::string>();
+        region.enabled = json_region.value("enabled", true);
+        if (!region_ids.insert(region.id).second) {
+          message = "duplicate region id=" + std::to_string(region.id);
+          return false;
+        }
+        if (region.region_type != "obstacle_avoidance" &&
+            region.region_type != "speed_limit" &&
+            region.region_type != "stop") {
+          message = "unsupported region_type for region id=" +
+                    std::to_string(region.id);
+          return false;
+        }
+
+        const auto &json_polygon = json_region.at("polygon");
+        if (!json_polygon.is_array()) {
+          message = "region polygon must be an array: region id=" +
+                    std::to_string(region.id);
+          return false;
+        }
+        region.polygon.reserve(json_polygon.size());
+        for (const auto &json_point : json_polygon) {
+          region.polygon.push_back({json_point.at("x").get<double>(),
+                                    json_point.at("y").get<double>()});
+        }
+        if (!polygonIsValid(region.polygon)) {
+          message =
+              "region polygon is invalid, degenerate, or self-crossing: "
+              "region id=" +
+              std::to_string(region.id);
+          return false;
+        }
+
+        const nlohmann::json empty_parameters = nlohmann::json::object();
+        const auto &parameters = json_region.contains("param")
+                                     ? json_region.at("param")
+                                     : empty_parameters;
+        if (!parameters.is_object()) {
+          message = "region param must be an object: region id=" +
+                    std::to_string(region.id);
+          return false;
+        }
+        const std::unordered_set<std::string> allowed_region_parameters{
+            "linear_velocity", "angular_velocity",
+            "obstacle_avoidance_distance_m"};
+        for (auto parameter = parameters.begin(); parameter != parameters.end();
+             ++parameter) {
+          if (allowed_region_parameters.find(parameter.key()) ==
+              allowed_region_parameters.end()) {
+            message = "unsupported region param '" + parameter.key() +
+                      "': region id=" + std::to_string(region.id);
+            return false;
+          }
+        }
+        auto read_optional_parameter =
+            [&parameters](const char *name) -> std::optional<double> {
+          if (!parameters.contains(name)) return std::nullopt;
+          return parameters.at(name).get<double>();
+        };
+        region.parameters.linear_velocity =
+            read_optional_parameter("linear_velocity");
+        region.parameters.angular_velocity =
+            read_optional_parameter("angular_velocity");
+        region.parameters.obstacle_avoidance_distance_m =
+            read_optional_parameter("obstacle_avoidance_distance_m");
+        if ((region.parameters.linear_velocity &&
+             !finiteNonNegative(*region.parameters.linear_velocity)) ||
+            (region.parameters.angular_velocity &&
+             !finiteNonNegative(*region.parameters.angular_velocity)) ||
+            (region.parameters.obstacle_avoidance_distance_m &&
+             !finiteNonNegative(
+                 *region.parameters.obstacle_avoidance_distance_m))) {
+          message =
+              "invalid region param: region id=" + std::to_string(region.id);
+          return false;
+        }
+
+        graph.regions.push_back(std::move(region));
+      }
+
+      for (std::size_t first = 0; first < graph.regions.size(); ++first) {
+        if (!graph.regions[first].enabled) continue;
+        for (std::size_t second = first + 1U; second < graph.regions.size();
+             ++second) {
+          if (!graph.regions[second].enabled) continue;
+          if (polygonsOverlap(graph.regions[first].polygon,
+                              graph.regions[second].polygon)) {
+            message = "enabled regions overlap or touch: region id=" +
+                      std::to_string(graph.regions[first].id) +
+                      " and id=" + std::to_string(graph.regions[second].id);
+            return false;
+          }
+        }
+      }
+    }
   } catch (const nlohmann::json::exception &error) {
     message = "invalid patrol JSON " + path.string() + ": " + error.what();
     return false;
@@ -329,8 +552,7 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
   nodes_by_id.reserve(graph.nodes.size());
   for (const auto &node : graph.nodes) {
     if (!nodes_by_id.emplace(node.node_id, &node).second) {
-      message = "duplicate runtime node id=" +
-                std::to_string(node.node_id);
+      message = "duplicate runtime node id=" + std::to_string(node.node_id);
       return false;
     }
   }
@@ -342,6 +564,7 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
   document["frame_id"] = "map";
   document["nodes"] = nlohmann::json::array();
   document["edges"] = nlohmann::json::array();
+  document["regions"] = nlohmann::json::array();
   for (const auto &navigation_node : graph.nodes) {
     document["nodes"].push_back(
         {{"id", navigation_node.node_id},
@@ -382,6 +605,29 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
     }
     document["edges"].push_back(std::move(json_edge));
   }
+  for (const auto &region : graph.regions) {
+    nlohmann::json json_region = {{"id", region.id},
+                                  {"region_type", region.region_type},
+                                  {"enabled", region.enabled},
+                                  {"polygon", nlohmann::json::array()},
+                                  {"param", nlohmann::json::object()}};
+    for (const auto &point : region.polygon) {
+      json_region["polygon"].push_back({{"x", point[0]}, {"y", point[1]}});
+    }
+    if (region.parameters.linear_velocity) {
+      json_region["param"]["linear_velocity"] =
+          *region.parameters.linear_velocity;
+    }
+    if (region.parameters.angular_velocity) {
+      json_region["param"]["angular_velocity"] =
+          *region.parameters.angular_velocity;
+    }
+    if (region.parameters.obstacle_avoidance_distance_m) {
+      json_region["param"]["obstacle_avoidance_distance_m"] =
+          *region.parameters.obstacle_avoidance_distance_m;
+    }
+    document["regions"].push_back(std::move(json_region));
+  }
 
   auto temporary_file = output_file_;
   temporary_file += ".tmp";
@@ -407,7 +653,8 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
     return false;
   message = "runtime topology JSON generated: " + output_file_.string() +
             ", nodes=" + std::to_string(graph.nodes.size()) +
-            ", edges=" + std::to_string(graph.edges.size());
+            ", edges=" + std::to_string(graph.edges.size()) +
+            ", regions=" + std::to_string(graph.regions.size());
   return true;
 }
 
@@ -827,9 +1074,9 @@ void NavigationTaskExecutor::executePatrolAction(
     geometry_msgs::msg::PoseStamped current_pose;
     if (callbacks_.get_current_pose(current_pose)) {
       const auto &first_node = patrol_nodes.front();
-      const double first_node_distance = std::hypot(
-          current_pose.pose.position.x - first_node.x,
-          current_pose.pose.position.y - first_node.y);
+      const double first_node_distance =
+          std::hypot(current_pose.pose.position.x - first_node.x,
+                     current_pose.pose.position.y - first_node.y);
       if (first_node_distance <= config_.skip_first_target_threshold) {
         first_patrol_index = 1U;
         RCLCPP_WARN(
@@ -872,8 +1119,7 @@ void NavigationTaskExecutor::executePatrolAction(
         first_patrol_round ? first_patrol_index : 0U;
     first_patrol_round = false;
     for (std::size_t patrol_index = round_start_index;
-         patrol_index < patrol_nodes.size();
-         ++patrol_index) {
+         patrol_index < patrol_nodes.size(); ++patrol_index) {
       const auto &node = patrol_nodes[patrol_index];
       {
         std::lock_guard<std::mutex> lock(result_mutex_);
@@ -1036,9 +1282,9 @@ void NavigationTaskExecutor::executePatrolAction(
         auto waiting_feedback = std::make_shared<StartNavigation::Feedback>();
         waiting_feedback->current_node_id = node.node_id;
         fillCurrentPoseFeedback(*waiting_feedback);
-        waiting_feedback->message =
-            "node reached; waiting " +
-            std::to_string(node.stop_duration_sec) + " seconds";
+        waiting_feedback->message = "node reached; waiting " +
+                                    std::to_string(node.stop_duration_sec) +
+                                    " seconds";
         goal_handle->publish_feedback(waiting_feedback);
         if (!waitForStopDuration(node.stop_duration_sec, [goal_handle]() {
               return goal_handle->is_canceling();
@@ -1316,12 +1562,12 @@ bool NavigationTaskExecutor::startWorkers(uint64_t session_id,
 
 bool NavigationTaskExecutor::stopWorkers(uint64_t session_id,
                                          std::string &message) {
-  const auto result = awaitWorkerCommand(
-      "navigation workers stop", config_.worker_timeout_sec,
-      std::make_shared<WorkerOperationToken>(),
-      [this, session_id](WorkerCompletion completion) {
-        controller_.stop(session_id, std::move(completion));
-      });
+  const auto result =
+      awaitWorkerCommand("navigation workers stop", config_.worker_timeout_sec,
+                         std::make_shared<WorkerOperationToken>(),
+                         [this, session_id](WorkerCompletion completion) {
+                           controller_.stop(session_id, std::move(completion));
+                         });
   message = result.message;
   return result.success();
 }

@@ -13,6 +13,34 @@
 #include <unordered_set>
 
 namespace global_path_planner {
+namespace {
+
+bool pointInPolygon(double x, double y,
+                    const std::vector<geometry_msgs::msg::Point> &polygon) {
+  bool inside = false;
+  for (std::size_t index = 0, previous = polygon.size() - 1U;
+       index < polygon.size(); previous = index++) {
+    const auto &first = polygon[previous];
+    const auto &second = polygon[index];
+    const double cross = (second.x - first.x) * (y - first.y) -
+                         (second.y - first.y) * (x - first.x);
+    if (std::abs(cross) <= 1e-9 && x >= std::min(first.x, second.x) - 1e-9 &&
+        x <= std::max(first.x, second.x) + 1e-9 &&
+        y >= std::min(first.y, second.y) - 1e-9 &&
+        y <= std::max(first.y, second.y) + 1e-9) {
+      return true;
+    }
+    const bool crosses = (first.y > y) != (second.y > y);
+    if (crosses &&
+        x < (second.x - first.x) * (y - first.y) / (second.y - first.y) +
+                first.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+}  // namespace
 
 GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
     : rclcpp::Node("global_path_planner_node", options),
@@ -157,6 +185,7 @@ bool GlobalPathPlanner::loadTopologyMap() {
 
   nodes_.clear();
   edges_.clear();
+  regions_.clear();
 
   try {
     const nlohmann::json document = nlohmann::json::parse(file);
@@ -233,10 +262,71 @@ bool GlobalPathPlanner::loadTopologyMap() {
       }
       edges_.push_back(std::move(edge));
     }
+
+    if (document.contains("regions")) {
+      if (!document["regions"].is_array()) {
+        throw std::runtime_error("regions must be an array");
+      }
+      std::unordered_set<int> region_ids;
+      regions_.reserve(document["regions"].size());
+      for (const auto &json_region : document["regions"]) {
+        TopologyRegion region;
+        region.id = json_region.at("id").get<int>();
+        region.region_type = json_region.at("region_type").get<std::string>();
+        region.enabled = json_region.value("enabled", true);
+        if (region.id < 0 || !region_ids.insert(region.id).second ||
+            (region.region_type != "obstacle_avoidance" &&
+             region.region_type != "speed_limit" &&
+             region.region_type != "stop")) {
+          throw std::runtime_error(
+              "region has an invalid/duplicate id or unsupported type");
+        }
+        const auto &polygon = json_region.at("polygon");
+        if (!polygon.is_array() || polygon.size() < 3U) {
+          throw std::runtime_error("region polygon requires at least 3 points");
+        }
+        for (const auto &json_point : polygon) {
+          geometry_msgs::msg::Point point;
+          point.x = json_point.at("x").get<double>();
+          point.y = json_point.at("y").get<double>();
+          if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+            throw std::runtime_error("region polygon contains invalid point");
+          }
+          region.polygon.push_back(point);
+        }
+        if (json_region.contains("param")) {
+          const auto &parameters = json_region.at("param");
+          if (!parameters.is_object()) {
+            throw std::runtime_error("region param must be an object");
+          }
+          if (parameters.contains("linear_velocity")) {
+            region.linear_velocity =
+                parameters.at("linear_velocity").get<double>();
+          }
+          if (parameters.contains("angular_velocity")) {
+            region.angular_velocity =
+                parameters.at("angular_velocity").get<double>();
+          }
+          if (parameters.contains("obstacle_avoidance_distance_m")) {
+            region.obstacle_avoidance_distance_m =
+                parameters.at("obstacle_avoidance_distance_m").get<double>();
+          }
+        }
+        const auto valid = [](const std::optional<double> &value) {
+          return !value || (std::isfinite(*value) && *value >= 0.0);
+        };
+        if (!valid(region.linear_velocity) || !valid(region.angular_velocity) ||
+            !valid(region.obstacle_avoidance_distance_m)) {
+          throw std::runtime_error("region contains an invalid param");
+        }
+        regions_.push_back(std::move(region));
+      }
+    }
   } catch (const std::exception &error) {
     RCLCPP_ERROR(this->get_logger(), "拓扑JSON解析失败: %s", error.what());
     nodes_.clear();
     edges_.clear();
+    regions_.clear();
     return false;
   }
 
@@ -244,8 +334,9 @@ bool GlobalPathPlanner::loadTopologyMap() {
     return false;
   }
 
-  RCLCPP_INFO(this->get_logger(), "拓扑JSON加载完成: %lu 个节点, %lu 条边",
-              nodes_.size(), edges_.size());
+  RCLCPP_INFO(this->get_logger(),
+              "拓扑JSON加载完成: %lu 个节点, %lu 条边, %lu 个区域",
+              nodes_.size(), edges_.size(), regions_.size());
   return true;
 }
 
@@ -906,6 +997,44 @@ void GlobalPathPlanner::inheritEdgePolicy(const TopologyEdge *source,
   destination.policy = source->policy;
 }
 
+const TopologyRegion *GlobalPathPlanner::findRegion(
+    const geometry_msgs::msg::Point &point) const {
+  for (const auto &region : regions_) {
+    if (region.enabled && pointInPolygon(point.x, point.y, region.polygon)) {
+      return &region;
+    }
+  }
+  return nullptr;
+}
+
+navigation_interfaces::msg::EdgePolicy GlobalPathPlanner::applyRegionPolicy(
+    const navigation_interfaces::msg::EdgePolicy &edge_policy,
+    const geometry_msgs::msg::Point &point) const {
+  auto policy = edge_policy;
+  const TopologyRegion *region = findRegion(point);
+  if (region == nullptr) return policy;
+
+  if (region->linear_velocity) {
+    policy.velocity_limit_enabled = true;
+    policy.linear_velocity = *region->linear_velocity;
+  }
+  if (region->angular_velocity) {
+    policy.velocity_limit_enabled = true;
+    policy.angular_velocity = *region->angular_velocity;
+  }
+  if (region->obstacle_avoidance_distance_m) {
+    policy.obstacle_avoidance_distance_m =
+        *region->obstacle_avoidance_distance_m;
+  }
+  if (region->region_type == "obstacle_avoidance") {
+    policy.obstacle_avoidance_enabled = true;
+  } else if (region->region_type == "stop") {
+    policy.obstacle_stop_enabled = true;
+    policy.obstacle_avoidance_enabled = false;
+  }
+  return policy;
+}
+
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
     const geometry_msgs::msg::Point &start,
     const geometry_msgs::msg::Point &end, int num_points) {
@@ -1153,7 +1282,8 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
             at_segment_end && next_motion_segment < segment_policies.size()
                 ? next_motion_segment
                 : i;
-        last_path_edge_policies_.push_back(segment_policies[policy_segment]);
+        last_path_edge_policies_.push_back(applyRegionPolicy(
+            segment_policies[policy_segment], pose.pose.position));
       }
     }
   }

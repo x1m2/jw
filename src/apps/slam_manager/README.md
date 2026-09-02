@@ -105,6 +105,46 @@ A -> B为map_connection时：
 - `obstacle_stop_enabled`：是否启用停障。
 - `obstacle_avoidance_enabled`：是否启用绕障。
 
+### 导航区域
+
+任务JSON可选包含`regions[]`。未提供时保持原导航行为；第一版不允许两个
+启用区域相交或接触。每个区域包含唯一`id`、`region_type`、至少三个
+`map`坐标系多边形点，以及可选`param`：
+
+```json
+{
+  "id": 0,
+  "region_type": "obstacle_avoidance",
+  "polygon": [
+    {"x": 1.0, "y": 1.0},
+    {"x": 3.0, "y": 1.0},
+    {"x": 3.0, "y": 3.0}
+  ],
+  "param": {
+    "linear_velocity": 0.2,
+    "angular_velocity": 0.3,
+    "obstacle_avoidance_distance_m": 1.0
+  }
+}
+```
+
+`region_type`支持`obstacle_avoidance`、`speed_limit`和`stop`。区域参数只
+覆盖已提供的字段，缺失字段继承当前边；离开区域后恢复边策略。
+
+每个区域可在任务目录下提供狗本体停障配置：
+
+```text
+task/region_obstacle_stop/<region_id>.yaml
+```
+
+文件只允许覆盖`hard_stop_distance`、`slowdown_distance`、
+`obstacle_ratio_threshold`、`linear_velocity_factor`和
+`angular_velocity_factor`。文件不存在时使用`obstacle_stop.yaml`默认值。
+`slam_manager`只校验区域ID、类型、几何和区域参数，不读取停障YAML；
+`obstacle_stop`启动时根据运行时拓扑中的区域ID直接读取并校验对应YAML，
+再根据机器人实时`map`位姿切换配置。已存在但内容非法的YAML会使停障Worker
+启动失败并中止本次导航。
+
 单点导航`/robot/navigate_to_pose`也会生成`topology_map.json`，然后使用相同
 的全局规划、平滑和控制流程。
 

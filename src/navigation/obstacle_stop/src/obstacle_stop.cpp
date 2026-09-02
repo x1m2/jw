@@ -3,16 +3,46 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <stdexcept>
 #include <utility>
+
+#include "obstacle_stop/region_profile_loader.hpp"
 
 namespace obstacle_stop {
 
 namespace {
 constexpr uint8_t kFree = 0U;
 constexpr uint8_t kOccupied = 1U;
+
+bool pointInPolygon(double x, double y,
+                    const std::vector<std::array<double, 2>> &polygon) {
+  bool inside = false;
+  for (std::size_t index = 0, previous = polygon.size() - 1U;
+       index < polygon.size(); previous = index++) {
+    const auto &first = polygon[previous];
+    const auto &second = polygon[index];
+    const double cross = (second[0] - first[0]) * (y - first[1]) -
+                         (second[1] - first[1]) * (x - first[0]);
+    if (std::abs(cross) <= 1e-9 && x >= std::min(first[0], second[0]) - 1e-9 &&
+        x <= std::max(first[0], second[0]) + 1e-9 &&
+        y >= std::min(first[1], second[1]) - 1e-9 &&
+        y <= std::max(first[1], second[1]) + 1e-9) {
+      return true;
+    }
+    const bool crosses = (first[1] > y) != (second[1] > y);
+    if (crosses &&
+        x < (second[0] - first[0]) * (y - first[1]) / (second[1] - first[1]) +
+                first[0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
 }  // namespace
 
 ObstacleStop::ObstacleStop(rclcpp::Node::SharedPtr node)
@@ -22,8 +52,10 @@ ObstacleStop::ObstacleStop(rclcpp::Node::SharedPtr node)
       hard_stop_clear_deadline_(0, 0, node_->get_clock()->get_clock_type()),
       slowdown_clear_deadline_(0, 0, node_->get_clock()->get_clock_type()) {}
 
-bool ObstacleStop::initialize() {
+bool ObstacleStop::initialize(std::string &message) {
   loadParameters();
+  default_config_ = config_;
+  if (!loadRegionProfiles(message)) return false;
   initializeGridLookup();
 
   // 默认保持MID360原始点云模式；UWB楼梯跟随使用已经在base_link下的
@@ -51,9 +83,16 @@ bool ObstacleStop::initialize() {
       "/obstacle_stop/enabled", rclcpp::QoS(1).transient_local(),
       std::bind(&ObstacleStop::obstacleStopEnabledCallback, this,
                 std::placeholders::_1));
+  if (!region_profiles_.empty()) {
+    localization_pose_sub_ =
+        node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            pose_topic_, 10,
+            std::bind(&ObstacleStop::localizationPoseCallback, this,
+                      std::placeholders::_1));
+  }
 
-  safe_cmd_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>(
-      safe_cmd_topic_, 10);
+  safe_cmd_pub_ =
+      node_->create_publisher<geometry_msgs::msg::Twist>(safe_cmd_topic_, 10);
   stop_active_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
       "/obstacle_stop/active", rclcpp::QoS(1).transient_local());
   if (config_.publish_visualization) {
@@ -66,14 +105,13 @@ bool ObstacleStop::initialize() {
           std::chrono::duration<double>(1.0 / config_.control_frequency)),
       std::bind(&ObstacleStop::controlCallback, this));
 
-  RCLCPP_INFO(
-      node_->get_logger(),
-      "Obstacle stop initialized: lidar_topic=%s, lidar_type=%d (%s), "
-      "planned_cmd=%s, safe_cmd=%s",
-      lidar_topic_.c_str(), lidar_type_,
-      lidar_type_ == 1 ? "Livox CustomMsg" : "PointCloud2",
-      planned_cmd_topic_.c_str(),
-      safe_cmd_topic_.c_str());
+  RCLCPP_INFO(node_->get_logger(),
+              "Obstacle stop initialized: lidar_topic=%s, lidar_type=%d (%s), "
+              "planned_cmd=%s, safe_cmd=%s",
+              lidar_topic_.c_str(), lidar_type_,
+              lidar_type_ == 1 ? "Livox CustomMsg" : "PointCloud2",
+              planned_cmd_topic_.c_str(), safe_cmd_topic_.c_str());
+  message = "obstacle stop initialized";
   return true;
 }
 
@@ -89,6 +127,11 @@ void ObstacleStop::loadParameters() {
       node_->declare_parameter<std::string>("safe_cmd_topic", "/cmd_vel");
   base_frame_ =
       node_->declare_parameter<std::string>("base_frame", "base_link");
+  global_frame_ = node_->declare_parameter<std::string>("global_frame", "map");
+  pose_topic_ = node_->declare_parameter<std::string>(
+      "pose_topic", "/pose_stamped_localization");
+  topology_map_file_ =
+      node_->declare_parameter<std::string>("topology_map_file", "");
 
   const auto translation = node_->declare_parameter<std::vector<double>>(
       "lidar_to_base_T", std::vector<double>());
@@ -144,25 +187,23 @@ void ObstacleStop::loadParameters() {
   config_.directional_release_enabled = node_->declare_parameter<bool>(
       "directional_release_enabled", config_.directional_release_enabled);
   config_.directional_center_half_width = std::clamp(
-      node_->declare_parameter<double>(
-          "directional_center_half_width",
-          config_.directional_center_half_width),
+      node_->declare_parameter<double>("directional_center_half_width",
+                                       config_.directional_center_half_width),
       0.0, config_.robot_width * 0.5 + config_.safety_margin);
-  config_.directional_escape_velocity_threshold = std::max(
-      0.0, node_->declare_parameter<double>(
-               "directional_escape_velocity_threshold",
-               config_.directional_escape_velocity_threshold));
+  config_.directional_escape_velocity_threshold =
+      std::max(0.0, node_->declare_parameter<double>(
+                        "directional_escape_velocity_threshold",
+                        config_.directional_escape_velocity_threshold));
   config_.center_lateral_escape_enabled = node_->declare_parameter<bool>(
-      "center_lateral_escape_enabled",
-      config_.center_lateral_escape_enabled);
-  config_.center_escape_max_forward_velocity = std::max(
-      0.0, node_->declare_parameter<double>(
-               "center_escape_max_forward_velocity",
-               config_.center_escape_max_forward_velocity));
-  config_.center_escape_max_angular_velocity = std::max(
-      0.0, node_->declare_parameter<double>(
-               "center_escape_max_angular_velocity",
-               config_.center_escape_max_angular_velocity));
+      "center_lateral_escape_enabled", config_.center_lateral_escape_enabled);
+  config_.center_escape_max_forward_velocity =
+      std::max(0.0, node_->declare_parameter<double>(
+                        "center_escape_max_forward_velocity",
+                        config_.center_escape_max_forward_velocity));
+  config_.center_escape_max_angular_velocity =
+      std::max(0.0, node_->declare_parameter<double>(
+                        "center_escape_max_angular_velocity",
+                        config_.center_escape_max_angular_velocity));
   config_.lidar_timeout_sec = node_->declare_parameter<double>(
       "lidar_timeout_sec", config_.lidar_timeout_sec);
   config_.command_timeout_sec = node_->declare_parameter<double>(
@@ -171,6 +212,127 @@ void ObstacleStop::loadParameters() {
       "control_frequency", config_.control_frequency);
   config_.publish_visualization = node_->declare_parameter<bool>(
       "publish_visualization", config_.publish_visualization);
+}
+
+bool ObstacleStop::loadRegionProfiles(std::string &message) {
+  region_profiles_.clear();
+  if (topology_map_file_.empty()) return true;
+  std::size_t custom_profile_count = 0U;
+
+  std::ifstream input(topology_map_file_);
+  if (!input.is_open()) {
+    message = "cannot open topology JSON: " + topology_map_file_;
+    RCLCPP_ERROR(node_->get_logger(), "%s", message.c_str());
+    return false;
+  }
+  try {
+    const nlohmann::json document = nlohmann::json::parse(input);
+    if (!document.contains("regions")) return true;
+    if (!document["regions"].is_array()) {
+      throw std::runtime_error("regions must be an array");
+    }
+    for (const auto &json_region : document["regions"]) {
+      RegionProfile region;
+      region.id = json_region.at("id").get<int>();
+      region.enabled = json_region.value("enabled", true);
+      if (!region.enabled) {
+        continue;
+      }
+      const auto &polygon = json_region.at("polygon");
+      if (region.id < 0 || !polygon.is_array() || polygon.size() < 3U) {
+        throw std::runtime_error("region has invalid id or polygon");
+      }
+      for (const auto &point : polygon) {
+        const double x = point.at("x").get<double>();
+        const double y = point.at("y").get<double>();
+        if (!std::isfinite(x) || !std::isfinite(y)) {
+          throw std::runtime_error("region polygon has invalid coordinate");
+        }
+        region.polygon.push_back({x, y});
+      }
+      region.config = default_config_;
+      const auto profile_file =
+          std::filesystem::path(topology_map_file_).parent_path() /
+          "region_obstacle_stop" / (std::to_string(region.id) + ".yaml");
+      RegionObstacleStopOverrides overrides;
+      if (!loadRegionObstacleStopOverrides(
+              profile_file, overrides, region.has_custom_config, message)) {
+        throw std::runtime_error("region id=" + std::to_string(region.id) +
+                                 ": " + message);
+      }
+      if (region.has_custom_config) ++custom_profile_count;
+      const auto apply = [](const std::optional<double> &source,
+                            double &target) {
+        if (source) target = *source;
+      };
+      apply(overrides.hard_stop_distance, region.config.hard_stop_distance);
+      apply(overrides.slowdown_distance, region.config.slowdown_distance);
+      apply(overrides.obstacle_ratio_threshold,
+            region.config.obstacle_ratio_threshold);
+      apply(overrides.linear_velocity_factor,
+            region.config.linear_velocity_factor);
+      apply(overrides.angular_velocity_factor,
+            region.config.angular_velocity_factor);
+      region_profiles_.push_back(std::move(region));
+    }
+  } catch (const std::exception &error) {
+    message = "failed to load topology regions: " + std::string(error.what());
+    RCLCPP_ERROR(node_->get_logger(), "%s", message.c_str());
+    region_profiles_.clear();
+    return false;
+  }
+  RCLCPP_INFO(node_->get_logger(),
+              "Loaded %zu obstacle-stop regions, custom YAML profiles=%zu; "
+              "missing ID YAML uses obstacle_stop.yaml defaults",
+              region_profiles_.size(), custom_profile_count);
+  message.clear();
+  return true;
+}
+
+const ObstacleStop::RegionProfile *ObstacleStop::findRegion(double x,
+                                                            double y) const {
+  for (const auto &region : region_profiles_) {
+    if (region.enabled && pointInPolygon(x, y, region.polygon)) return &region;
+  }
+  return nullptr;
+}
+
+void ObstacleStop::applyRegionProfile(const RegionProfile *region) {
+  const std::optional<int> next_id =
+      region == nullptr ? std::nullopt : std::optional<int>(region->id);
+  if (next_id == active_region_id_) return;
+
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
+  config_ = region == nullptr ? default_config_ : region->config;
+  initializeGridLookup();
+  active_region_id_ = next_id;
+  if (region == nullptr) {
+    RCLCPP_INFO(node_->get_logger(),
+                "Left navigation region; restored obstacle_stop.yaml defaults");
+  } else if (region->has_custom_config) {
+    RCLCPP_INFO(node_->get_logger(),
+                "Entered region id=%d; applied region obstacle_stop profile",
+                region->id);
+  } else {
+    RCLCPP_INFO(node_->get_logger(),
+                "Entered region id=%d; no ID YAML, using obstacle_stop.yaml "
+                "defaults",
+                region->id);
+  }
+}
+
+void ObstacleStop::localizationPoseCallback(
+    const geometry_msgs::msg::PoseStamped::ConstSharedPtr message) {
+  if (!message->header.frame_id.empty() &&
+      message->header.frame_id != global_frame_) {
+    RCLCPP_WARN_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 2000,
+        "Ignoring localization pose in frame '%s'; expected '%s'",
+        message->header.frame_id.c_str(), global_frame_.c_str());
+    return;
+  }
+  applyRegionProfile(
+      findRegion(message->pose.position.x, message->pose.position.y));
 }
 
 void ObstacleStop::initializeGridLookup() {
@@ -193,14 +355,14 @@ void ObstacleStop::initializeGridLookup() {
   // 两个检测矩形内的栅格索引固定，避免每帧遍历整张栅格并重复换算坐标。
   const double front_edge = config_.robot_length * 0.5;
   const double hard_stop_end = front_edge + config_.hard_stop_distance;
-  hard_stop_zone_cells_ =
-      buildDirectionalZoneCells(front_edge, hard_stop_end);
+  hard_stop_zone_cells_ = buildDirectionalZoneCells(front_edge, hard_stop_end);
   slowdown_zone_cells_ = buildDirectionalZoneCells(
       hard_stop_end, hard_stop_end + config_.slowdown_distance);
 }
 
 void ObstacleStop::lidarCallback(
     const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr message) {
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
   std::vector<uint8_t> grid;
   std::vector<GridCell> occupied_cells;
   const auto grid_cell_count =
@@ -213,6 +375,7 @@ void ObstacleStop::lidarCallback(
 
 void ObstacleStop::pointCloud2Callback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr message) {
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
   std::vector<uint8_t> grid;
   std::vector<GridCell> occupied_cells;
   const auto grid_cell_count =
@@ -237,9 +400,9 @@ void ObstacleStop::pointCloud2Callback(
   processObstacleGrid(grid, occupied_cells, input_valid);
 }
 
-void ObstacleStop::processObstacleGrid(
-    std::vector<uint8_t> &grid, std::vector<GridCell> &occupied_cells,
-    bool input_valid) {
+void ObstacleStop::processObstacleGrid(std::vector<uint8_t> &grid,
+                                       std::vector<GridCell> &occupied_cells,
+                                       bool input_valid) {
   if (grid.empty()) {
     grid.assign(
         static_cast<std::size_t>(config_.grid_width * config_.grid_height),
@@ -260,13 +423,11 @@ void ObstacleStop::processObstacleGrid(
   const auto slowdown_occupancy =
       measureDirectionalZone(grid, slowdown_zone_cells_);
   const double front_edge = config_.robot_length * 0.5;
-  const double hard_center_x =
-      front_edge + config_.hard_stop_distance * 0.5;
-  const double slowdown_center_x = front_edge + config_.hard_stop_distance +
-                                   config_.slowdown_distance * 0.5;
+  const double hard_center_x = front_edge + config_.hard_stop_distance * 0.5;
+  const double slowdown_center_x =
+      front_edge + config_.hard_stop_distance + config_.slowdown_distance * 0.5;
   const double hard_lateral_velocity =
-      planned_snapshot.linear.y +
-      planned_snapshot.angular.z * hard_center_x;
+      planned_snapshot.linear.y + planned_snapshot.angular.z * hard_center_x;
   const double slowdown_lateral_velocity =
       planned_snapshot.linear.y +
       planned_snapshot.angular.z * slowdown_center_x;
@@ -305,9 +466,9 @@ void ObstacleStop::processObstacleGrid(
     }
     hard_stop = hard_stop_active_;
     slowdown = slowdown_active_;
-    directional_escape_release_active_ =
-        hard_decision.released_left || hard_decision.released_center ||
-        hard_decision.released_right;
+    directional_escape_release_active_ = hard_decision.released_left ||
+                                         hard_decision.released_center ||
+                                         hard_decision.released_right;
     last_lidar_time_ = now;
   }
 
@@ -320,10 +481,9 @@ void ObstacleStop::processObstacleGrid(
         "hard_lateral=%.3f slow_lateral=%.3f, hard(L/C/R)=%d/%d/%d, "
         "slow(L/C/R)=%d/%d/%d",
         planned_snapshot.linear.y, planned_snapshot.angular.z,
-        hard_lateral_velocity, slowdown_lateral_velocity,
-        hard_occupancy.left, hard_occupancy.center, hard_occupancy.right,
-        slowdown_occupancy.left, slowdown_occupancy.center,
-        slowdown_occupancy.right);
+        hard_lateral_velocity, slowdown_lateral_velocity, hard_occupancy.left,
+        hard_occupancy.center, hard_occupancy.right, slowdown_occupancy.left,
+        slowdown_occupancy.center, slowdown_occupancy.right);
   }
 
   publishDetectionMarkers(hard_stop, slowdown);
@@ -398,9 +558,10 @@ bool ObstacleStop::buildObstacleGrid(
   return true;
 }
 
-void ObstacleStop::addBasePointToGrid(
-    double x, double y, double z, std::vector<uint8_t> &grid,
-    std::vector<GridCell> &occupied_cells, bool apply_height_filter) const {
+void ObstacleStop::addBasePointToGrid(double x, double y, double z,
+                                      std::vector<uint8_t> &grid,
+                                      std::vector<GridCell> &occupied_cells,
+                                      bool apply_height_filter) const {
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
     return;
   }
@@ -467,12 +628,12 @@ ObstacleStop::DirectionalZoneCells ObstacleStop::buildDirectionalZoneCells(
   const double center_half_width = std::min(
       half_width, std::max(0.0, config_.directional_center_half_width));
   DirectionalZoneCells zones;
-  zones.left = buildRectangleCellIndices(x_min, x_max, center_half_width,
-                                         half_width);
-  zones.center = buildRectangleCellIndices(
-      x_min, x_max, -center_half_width, center_half_width);
-  zones.right = buildRectangleCellIndices(x_min, x_max, -half_width,
-                                          -center_half_width);
+  zones.left =
+      buildRectangleCellIndices(x_min, x_max, center_half_width, half_width);
+  zones.center = buildRectangleCellIndices(x_min, x_max, -center_half_width,
+                                           center_half_width);
+  zones.right =
+      buildRectangleCellIndices(x_min, x_max, -half_width, -center_half_width);
   return zones;
 }
 
@@ -527,6 +688,7 @@ void ObstacleStop::updateObstacleState(bool raw_hard_stop, bool raw_slowdown,
 }
 
 void ObstacleStop::controlCallback() {
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
   geometry_msgs::msg::Twist planned;
   bool has_lidar = false;
   bool lidar_valid = false;
