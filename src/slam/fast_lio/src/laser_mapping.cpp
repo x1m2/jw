@@ -190,7 +190,7 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   if (p_pre->lidar_type == AVIA) {
     sub_pcl_livox_ =
         this->create_subscription<livox_ros_driver2::msg::CustomMsg>(
-            lid_topic, 20,
+            lid_topic, 10000,
             std::bind(&LaserMappingNode::livox_pcl_cbk, this,
                       std::placeholders::_1));
   } else {
@@ -200,7 +200,7 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
                   std::placeholders::_1));
   }
   sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-      imu_topic, 100,
+      imu_topic, 200000,
       std::bind(&LaserMappingNode::imu_cbk, this, std::placeholders::_1));
 
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
