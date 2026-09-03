@@ -1,0 +1,7 @@
+type: ros.ament_cmake
+  name: uwb_aoa_pkg
+  dependencies:
+    build: ament_cmake rclcpp rosidl_default_generators std_msgs std_srvs
+    run: rclcpp rosidl_default_runtime std_msgs std_srvs
+    test: ament_lint_auto ament_lint_common
+
