@@ -14,7 +14,7 @@
     loop:
       robust_kernel_scale: 1.0                    # Cauchy robust-kernel scale for loop factors
       history_keyframe_search_xy_radius: 5.0      # horizontal radius used to tolerate odometry drift
-      history_keyframe_search_z_tolerance: 2.0    # reject candidates on another floor
+      history_keyframe_search_z_tolerance: 2.5    # reject candidates on another floor
       history_keyframe_min_index_diff: 20         # exclude the latest 20 keyframes, same as ScanContext
 
     quatro_nano_gicp_voxel_resolution: 0.3        # voxel resolution to use Quatro and Nano-GICP matching
