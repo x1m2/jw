@@ -164,6 +164,12 @@ class GlobalPathPlanner : public rclcpp::Node {
   std::vector<geometry_msgs::msg::Point> interpolatePath(
       const geometry_msgs::msg::Point &start,
       const geometry_msgs::msg::Point &end, int num_points);
+  // 贝塞尔曲线插值方法
+  std::vector<geometry_msgs::msg::Point> interpolateBezierPath(
+      const geometry_msgs::msg::Point &start,
+      const geometry_msgs::msg::Point &control_point_1,
+      const geometry_msgs::msg::Point &control_point_2,
+      const geometry_msgs::msg::Point &end, int num_points);
   // 工具方法
   double calculateDistance(const geometry_msgs::msg::Point &p1,
                            const geometry_msgs::msg::Point &p2);

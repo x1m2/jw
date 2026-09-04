@@ -733,6 +733,31 @@ void GlobalPathPlanner::addTemporaryConnections(
           policy_edge = nearest_position_edge;
         }
         inheritEdgePolicy(policy_edge, edge);
+
+        // 正常巡检按相邻节点逐段下发目标。起点临时节点会连接最近节点的
+        // 下一层邻居，因此可能直接替代一条真实拓扑边。若被替代的是
+        // 贝塞尔边，需要同时继承它的几何，不能退化成临时直线。
+        if (candidate_id != nearest_legal_node_id && policy_edge != nullptr &&
+            policy_edge->edge_type == "bezier" &&
+            policy_edge->has_bezier_control_points) {
+          const bool follows_edge_forward =
+              policy_edge->from_id == nearest_legal_node_id &&
+              policy_edge->to_id == candidate_id;
+          const bool follows_edge_reverse =
+              policy_edge->bidirectional &&
+              policy_edge->to_id == nearest_legal_node_id &&
+              policy_edge->from_id == candidate_id;
+          if (follows_edge_forward || follows_edge_reverse) {
+            edge.edge_type = "bezier";
+            edge.has_bezier_control_points = true;
+            edge.bezier_control_points[0] =
+                follows_edge_forward ? policy_edge->bezier_control_points[0]
+                                     : policy_edge->bezier_control_points[1];
+            edge.bezier_control_points[1] =
+                follows_edge_forward ? policy_edge->bezier_control_points[1]
+                                     : policy_edge->bezier_control_points[0];
+          }
+        }
         temp_edges.push_back(edge);
 
         actual_connections++;
@@ -1058,6 +1083,45 @@ std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
   return points;
 }
 
+std::vector<geometry_msgs::msg::Point>
+GlobalPathPlanner::interpolateBezierPath(
+    const geometry_msgs::msg::Point &start,
+    const geometry_msgs::msg::Point &control_point_1,
+    const geometry_msgs::msg::Point &control_point_2,
+    const geometry_msgs::msg::Point &end, int num_points) {
+  std::vector<geometry_msgs::msg::Point> points;
+
+  if (num_points <= 0) {
+    return points;
+  }
+
+  points.reserve(static_cast<std::size_t>(num_points) + 1U);
+  for (int i = 0; i <= num_points; ++i) {
+    const double t = static_cast<double>(i) / num_points;
+    const double one_minus_t = 1.0 - t;
+    const double start_weight =
+        one_minus_t * one_minus_t * one_minus_t;
+    const double first_control_weight =
+        3.0 * one_minus_t * one_minus_t * t;
+    const double second_control_weight = 3.0 * one_minus_t * t * t;
+    const double end_weight = t * t * t;
+
+    geometry_msgs::msg::Point point;
+    point.x = start_weight * start.x +
+              first_control_weight * control_point_1.x +
+              second_control_weight * control_point_2.x + end_weight * end.x;
+    point.y = start_weight * start.y +
+              first_control_weight * control_point_1.y +
+              second_control_weight * control_point_2.y + end_weight * end.y;
+    point.z = start_weight * start.z +
+              first_control_weight * control_point_1.z +
+              second_control_weight * control_point_2.z + end_weight * end.z;
+    points.push_back(point);
+  }
+
+  return points;
+}
+
 double GlobalPathPlanner::calculateDistance(
     const geometry_msgs::msg::Point &p1, const geometry_msgs::msg::Point &p2) {
   double dx = p1.x - p2.x;
@@ -1248,9 +1312,44 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
                "map_connection") {
       ++next_motion_segment;
     }
-    // 除map_connection外的edge_type暂不参与路径几何，统一按直线插值。
-    std::vector<geometry_msgs::msg::Point> segment =
-        interpolatePath(waypoints[i], waypoints[i + 1U], interpolation_points_);
+    const TopologyEdge *selected_edge = topology_path.selected_edges[i];
+    std::vector<geometry_msgs::msg::Point> segment;
+    if (selected_edge->edge_type == "bezier" &&
+        selected_edge->has_bezier_control_points) {
+      const bool traversing_forward =
+          selected_edge->from_id == topology_path.node_ids[i] &&
+          selected_edge->to_id == topology_path.node_ids[i + 1U];
+      const bool traversing_reverse =
+          selected_edge->bidirectional &&
+          selected_edge->to_id == topology_path.node_ids[i] &&
+          selected_edge->from_id == topology_path.node_ids[i + 1U];
+      if (!traversing_forward && !traversing_reverse) {
+        RCLCPP_ERROR(this->get_logger(),
+                     "贝塞尔边%d与路径节点方向不匹配: %d -> %d",
+                     selected_edge->id, topology_path.node_ids[i],
+                     topology_path.node_ids[i + 1U]);
+        return nav_msgs::msg::Path();
+      }
+
+      // 反向遍历同一条三次贝塞尔边时必须交换两个控制点，才能保持
+      // 与正向完全相同的几何曲线。
+      const auto &first_control =
+          traversing_forward ? selected_edge->bezier_control_points[0]
+                             : selected_edge->bezier_control_points[1];
+      const auto &second_control =
+          traversing_forward ? selected_edge->bezier_control_points[1]
+                             : selected_edge->bezier_control_points[0];
+      segment = interpolateBezierPath(
+          waypoints[i], first_control, second_control, waypoints[i + 1U],
+          interpolation_points_);
+      RCLCPP_INFO(this->get_logger(),
+                  "生成贝塞尔路径段: edge=%d, direction=%s, points=%zu",
+                  selected_edge->id,
+                  traversing_forward ? "forward" : "reverse", segment.size());
+    } else {
+      segment = interpolatePath(waypoints[i], waypoints[i + 1U],
+                                interpolation_points_);
+    }
 
     for (size_t j = 0; j < segment.size(); ++j) {
       // 避免重复添加相同的点（除了第一个段）
