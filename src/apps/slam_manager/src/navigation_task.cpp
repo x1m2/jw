@@ -660,6 +660,20 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
 
 namespace {
 using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
+
+class ScopeExit {
+ public:
+  explicit ScopeExit(std::function<void()> callback)
+      : callback_(std::move(callback)) {}
+  ~ScopeExit() { callback_(); }
+
+  ScopeExit(const ScopeExit &) = delete;
+  ScopeExit &operator=(const ScopeExit &) = delete;
+
+ private:
+  std::function<void()> callback_;
+};
+
 bool validTaskId(const std::string &task_id, std::string &message) {
   constexpr std::size_t kMaximumIdLength = 64U;
   if (task_id.empty() || task_id.size() > kMaximumIdLength) {
@@ -698,7 +712,8 @@ NavigationTaskExecutor::NavigationTaskExecutor(
       !std::isfinite(config_.skip_first_target_threshold) ||
       config_.skip_first_target_threshold < 0.0 || !callbacks_.publish_mode ||
       !callbacks_.publish_runtime_state || !callbacks_.enter_error ||
-      !callbacks_.relocalization_succeeded || !callbacks_.get_current_pose ||
+      !callbacks_.relocalization_succeeded || !callbacks_.navigation_allowed ||
+      !callbacks_.set_robot_mode || !callbacks_.get_current_pose ||
       !callbacks_.relocalize) {
     throw std::invalid_argument("invalid navigation task executor config");
   }
@@ -891,6 +906,23 @@ void NavigationTaskExecutor::executePatrolAction(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<StartNavigation::Result>();
   uint32_t completed_count = 0U;
+  ScopeExit reset_robot_mode([this]() {
+    std::string reset_message;
+    callbacks_.set_robot_mode(0, reset_message);
+  });
+
+  std::string robot_state_message;
+  if (!callbacks_.navigation_allowed(robot_state_message)) {
+    result->success = false;
+    result->completed_count = 0U;
+    result->message = robot_state_message;
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
+  RCLCPP_INFO(node_->get_logger(),
+              "Navigation robot-state gate passed: %s",
+              robot_state_message.c_str());
 
   if (task_directory_.empty()) {
     result->success = false;
@@ -1044,6 +1076,16 @@ void NavigationTaskExecutor::executePatrolAction(
     return;
   }
   RCLCPP_INFO(node_->get_logger(), "%s", topology_message.c_str());
+
+  std::string mode_message;
+  if (!callbacks_.set_robot_mode(1, mode_message)) {
+    result->success = false;
+    result->completed_count = 0U;
+    result->message = "failed to enter navigation mode: " + mode_message;
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
 
   if (!beginNavigationIfLocalized()) {
     result->success = false;
@@ -1364,6 +1406,21 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<NavigateToPose::Result>();
   std::string message;
+  ScopeExit reset_robot_mode([this]() {
+    std::string reset_message;
+    callbacks_.set_robot_mode(0, reset_message);
+  });
+
+  if (!callbacks_.navigation_allowed(message)) {
+    result->success = false;
+    result->message = message;
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
+  RCLCPP_INFO(node_->get_logger(),
+              "Single-point navigation robot-state gate passed: %s",
+              message.c_str());
 
   if (task_directory_.empty()) {
     result->success = false;
@@ -1440,6 +1497,15 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
     } else {
       goal_handle->abort(result);
     }
+    releaseOperation();
+    return;
+  }
+
+  std::string mode_message;
+  if (!callbacks_.set_robot_mode(1, mode_message)) {
+    result->success = false;
+    result->message = "failed to enter navigation mode: " + mode_message;
+    goal_handle->abort(result);
     releaseOperation();
     return;
   }

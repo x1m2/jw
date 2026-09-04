@@ -46,6 +46,18 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 
 ## 巡检导航流程
 
+开始巡检或单点导航前，`slam_manager`会调用
+`/GetState`（`woodox_ros2_interface/srv/GetState`）。只有响应为
+`state: Locomotion`且`code: 0`时才启动导航Worker。服务不可用、响应超时或
+机器人处于其他状态时，Action将以`ABORTED`结束，`result.message`包含实际
+`state`和`code`，同时节点日志输出`[NAVIGATION_GATE]`状态记录。
+
+状态检查通过后，启动导航前调用一次`/SetMode`并发送`mode: 1`。导航正常结束、
+启动失败、运行失败或取消时调用一次`/SetMode`并发送`mode: 0`；不进行周期调用。
+服务响应通过`[NAVIGATION_MODE]`日志记录，设置`mode: 1`失败时不会启动导航Worker。
+暂停导航成功后同样发送一次`mode: 0`；继续导航时先发送一次`mode: 1`，成功后
+才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。
+
 ```text
 APP task/task.json -------------------┐
                                       ├-> slam_manager生成topology_map.json

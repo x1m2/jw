@@ -16,6 +16,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(woodox_ros2_interface REQUIRED)
 
 add_library(${PROJECT_NAME}_core STATIC
   src/localization.cpp
@@ -41,6 +42,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
   std_srvs
   tf2
   tf2_geometry_msgs
+  woodox_ros2_interface
 )
 target_link_libraries(${PROJECT_NAME}_core nlohmann_json::nlohmann_json)
 
@@ -72,6 +74,6 @@ ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_include_directories(include)
 ament_export_dependencies(
   geometry_msgs rclcpp rclcpp_action slam_manager_interfaces sensor_msgs std_msgs
-  std_srvs tf2 tf2_geometry_msgs nlohmann_json)
+  std_srvs tf2 tf2_geometry_msgs woodox_ros2_interface nlohmann_json)
 
 ament_package()

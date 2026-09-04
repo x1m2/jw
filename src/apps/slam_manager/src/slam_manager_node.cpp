@@ -18,6 +18,12 @@ namespace slam_manager {
 
 namespace {
 
+constexpr char kRobotStateServiceName[] = "/GetState";
+constexpr char kNavigationRequiredRobotState[] = "Locomotion";
+constexpr double kRobotStateTimeoutSec = 3.0;
+constexpr char kRobotModeServiceName[] = "/SetMode";
+constexpr double kRobotModeTimeoutSec = 3.0;
+
 bool finitePoseFields(double x, double y, double z, double theta) {
   return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
          std::isfinite(theta);
@@ -108,6 +114,15 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   navigation_result_callback_group_ =
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  // 导航执行线程会同步等待底盘服务；独立可重入组保证响应可由执行器处理。
+  robot_control_callback_group_ =
+      create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  get_robot_state_client_ = create_client<GetState>(
+      kRobotStateServiceName, rmw_qos_profile_services_default,
+      robot_control_callback_group_);
+  set_robot_mode_client_ = create_client<SetMode>(
+      kRobotModeServiceName, rmw_qos_profile_services_default,
+      robot_control_callback_group_);
   mapping_controller_ =
       std::make_unique<MappingController>(this, worker_callback_group_);
   localization_controller_ =
@@ -126,6 +141,12 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
             enterError(code, message);
           },
           [this]() { return relocalization_succeeded_.load(); },
+          [this](std::string &message) {
+            return robotStateAllowsNavigation(message);
+          },
+          [this](int32_t mode, std::string &message) {
+            return setRobotMode(mode, message);
+          },
           [this](geometry_msgs::msg::PoseStamped &pose) {
             std::lock_guard<std::mutex> lock(current_pose_mutex_);
             if (!has_current_pose_) {
@@ -1539,6 +1560,93 @@ void SlamManagerNode::handleNavigateToPoseAccepted(
       goal_handle, current_pose, session_id_);
 }
 
+bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
+  const auto timeout = std::chrono::duration<double>(kRobotStateTimeoutSec);
+  if (!get_robot_state_client_->wait_for_service(timeout)) {
+    message = std::string("robot state service '") + kRobotStateServiceName +
+              "' is unavailable";
+    RCLCPP_WARN(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
+    return false;
+  }
+
+  try {
+    auto request = std::make_shared<GetState::Request>();
+    auto future = get_robot_state_client_->async_send_request(request);
+    if (future.wait_for(timeout) != std::future_status::ready) {
+      get_robot_state_client_->remove_pending_request(future);
+      message = std::string("robot state service '") +
+                kRobotStateServiceName + "' timed out after " +
+                std::to_string(kRobotStateTimeoutSec) + " seconds";
+      RCLCPP_WARN(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
+      return false;
+    }
+
+    const auto response = future.get();
+    const bool allowed = response->code == 0 &&
+                         response->state == kNavigationRequiredRobotState;
+    RCLCPP_INFO(get_logger(),
+                "[NAVIGATION_GATE] GetState response: state='%s' code=%d "
+                "required_state='%s' allowed=%s",
+                response->state.c_str(), response->code,
+                kNavigationRequiredRobotState,
+                allowed ? "true" : "false");
+    if (!allowed) {
+      message = "navigation rejected: robot state='" + response->state +
+                "', code=" + std::to_string(response->code) +
+                "; required state='" + kNavigationRequiredRobotState +
+                "' with code=0";
+      RCLCPP_WARN(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
+      return false;
+    }
+
+    message = "robot state='" + response->state + "', code=0";
+    return true;
+  } catch (const std::exception &error) {
+    message = std::string("failed to query robot state from '") +
+              kRobotStateServiceName + "': " + error.what();
+    RCLCPP_ERROR(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
+    return false;
+  }
+}
+
+bool SlamManagerNode::setRobotMode(int32_t mode, std::string &message) {
+  const auto timeout = std::chrono::duration<double>(kRobotModeTimeoutSec);
+  if (!set_robot_mode_client_->wait_for_service(timeout)) {
+    message = std::string("robot mode service '") + kRobotModeServiceName +
+              "' is unavailable";
+    RCLCPP_WARN(get_logger(), "[NAVIGATION_MODE] %s", message.c_str());
+    return false;
+  }
+
+  try {
+    auto request = std::make_shared<SetMode::Request>();
+    request->mode = mode;
+    auto future = set_robot_mode_client_->async_send_request(request);
+    if (future.wait_for(timeout) != std::future_status::ready) {
+      set_robot_mode_client_->remove_pending_request(future);
+      message = std::string("robot mode service '") + kRobotModeServiceName +
+                "' timed out while setting mode=" + std::to_string(mode);
+      RCLCPP_WARN(get_logger(), "[NAVIGATION_MODE] %s", message.c_str());
+      return false;
+    }
+
+    const auto response = future.get();
+    const bool success = response->code == 0;
+    message = "SetMode mode=" + std::to_string(mode) +
+              ", code=" + std::to_string(response->code);
+    RCLCPP_INFO(get_logger(),
+                "[NAVIGATION_MODE] SetMode response: mode=%d code=%d "
+                "success=%s",
+                mode, response->code, success ? "true" : "false");
+    return success;
+  } catch (const std::exception &error) {
+    message = std::string("failed to set robot mode through '") +
+              kRobotModeServiceName + "': " + error.what();
+    RCLCPP_ERROR(get_logger(), "[NAVIGATION_MODE] %s", message.c_str());
+    return false;
+  }
+}
+
 void SlamManagerNode::navigationStateCallback(
     const std_msgs::msg::Bool::SharedPtr message) {
   // Pure Pursuit发布false表示开始跟踪，随后true表示当前目标到达。
@@ -1620,8 +1728,15 @@ void SlamManagerNode::pauseNavigationCallback(
   }
 
   publishMode();
+  std::string mode_message;
+  if (!setRobotMode(0, mode_message)) {
+    response->success = false;
+    response->message = "navigation paused, but failed to set robot mode=0: " +
+                        mode_message;
+    return;
+  }
   response->success = true;
-  response->message = message;
+  response->message = message + "; " + mode_message;
 }
 
 void SlamManagerNode::resumeNavigationCallback(
@@ -1641,21 +1756,38 @@ void SlamManagerNode::resumeNavigationCallback(
     return;
   }
 
+  std::string mode_message;
+  if (!setRobotMode(1, mode_message)) {
+    response->success = false;
+    response->message = "resume navigation failed to set robot mode=1: " +
+                        mode_message;
+    return;
+  }
+
   std::string message;
   if (!navigation_task_executor_->setPaused(false, message)) {
+    std::string reset_message;
+    setRobotMode(0, reset_message);
     response->success = false;
-    response->message = "resume navigation failed: " + message;
+    response->message = "resume navigation failed: " + message +
+                        "; robot mode reset: " + reset_message;
     return;
   }
   if (!state_machine_.resumeNavigation()) {
+    std::string pause_message;
+    navigation_task_executor_->setPaused(true, pause_message);
+    std::string reset_message;
+    setRobotMode(0, reset_message);
     response->success = false;
-    response->message = "resume navigation state transition failed";
+    response->message =
+        "resume navigation state transition failed; robot mode reset: " +
+        reset_message;
     return;
   }
 
   publishMode();
   response->success = true;
-  response->message = message;
+  response->message = message + "; " + mode_message;
 }
 
 void SlamManagerNode::publishMode() {

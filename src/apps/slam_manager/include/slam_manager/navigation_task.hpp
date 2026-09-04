@@ -115,6 +115,8 @@ class NavigationTaskExecutor {
     std::function<void(uint8_t)> publish_runtime_state;
     std::function<void(int32_t, const std::string &)> enter_error;
     std::function<bool()> relocalization_succeeded;
+    std::function<bool(std::string &)> navigation_allowed;
+    std::function<bool(int32_t, std::string &)> set_robot_mode;
     std::function<bool(geometry_msgs::msg::PoseStamped &)> get_current_pose;
     std::function<bool(const slam_manager_interfaces::msg::NavigationNode &,
                        const std::function<bool()> &, std::string &)>

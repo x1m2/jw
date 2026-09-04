@@ -35,6 +35,8 @@
 #include "slam_manager_interfaces/srv/delete_map.hpp"
 #include "slam_manager_interfaces/srv/load_map.hpp"
 #include "slam_manager_interfaces/srv/start_mapping.hpp"
+#include "woodox_ros2_interface/srv/get_state.hpp"
+#include "woodox_ros2_interface/srv/set_mode.hpp"
 
 namespace slam_manager {
 
@@ -57,6 +59,8 @@ class SlamManagerNode : public rclcpp::Node {
       slam_manager_interfaces::action::StartLocalization;
   using StartMapping = slam_manager_interfaces::srv::StartMapping;
   using StartNavigation = slam_manager_interfaces::action::StartNavigation;
+  using GetState = woodox_ros2_interface::srv::GetState;
+  using SetMode = woodox_ros2_interface::srv::SetMode;
   using StartNavigationGoalHandle =
       rclcpp_action::ServerGoalHandle<StartNavigation>;
   using StartLocalizationGoalHandle =
@@ -147,6 +151,8 @@ class SlamManagerNode : public rclcpp::Node {
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
   void handleNavigateToPoseAccepted(
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
+  bool robotStateAllowsNavigation(std::string &message);
+  bool setRobotMode(int32_t mode, std::string &message);
 
   // 算法内部结果及协议2.10～2.12数据Topic的转发回调。
   void relocalizationResultCallback(
@@ -224,6 +230,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::CallbackGroup::SharedPtr lifecycle_control_callback_group_;
   rclcpp::CallbackGroup::SharedPtr localization_result_callback_group_;
   rclcpp::CallbackGroup::SharedPtr navigation_result_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr robot_control_callback_group_;
   std::unique_ptr<MappingController> mapping_controller_;
   std::unique_ptr<LocalizationController> localization_controller_;
   std::unique_ptr<MapStorage> map_storage_;
@@ -238,6 +245,8 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Service<DeleteMap>::SharedPtr delete_map_service_;
   rclcpp::Service<Trigger>::SharedPtr pause_navigation_service_;
   rclcpp::Service<Trigger>::SharedPtr resume_navigation_service_;
+  rclcpp::Client<GetState>::SharedPtr get_robot_state_client_;
+  rclcpp::Client<SetMode>::SharedPtr set_robot_mode_client_;
   rclcpp_action::Server<StartNavigation>::SharedPtr start_navigation_action_;
   rclcpp_action::Server<NavigateToPose>::SharedPtr navigate_to_pose_action_;
   rclcpp_action::Server<StartLocalization>::SharedPtr
