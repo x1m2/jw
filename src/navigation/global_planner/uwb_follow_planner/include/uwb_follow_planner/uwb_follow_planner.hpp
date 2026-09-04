@@ -86,6 +86,7 @@ class UwbFollowPlanner : public rclcpp::Node {
   std::string odometry_topic_;
   std::string path_topic_;
   std::string global_frame_;
+  bool enable_follow_command_topic_;
 
   // UWB interpretation and sensor mounting.
   double range_scale_;

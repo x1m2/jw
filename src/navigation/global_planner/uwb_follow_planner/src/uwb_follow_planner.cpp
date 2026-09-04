@@ -23,6 +23,8 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       declare_parameter<std::string>("uwb_topic", "/libAoa_robot_publisher");
   follow_command_topic_ =
       declare_parameter<std::string>("follow_command_topic", "/ble_follow_cmd");
+  enable_follow_command_topic_ =
+      declare_parameter<bool>("enable_follow_command_topic", true);
   odometry_topic_ =
       declare_parameter<std::string>("odometry_topic", "/Odometry");
   path_topic_ =
@@ -115,10 +117,15 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   uwb_subscriber_ = create_subscription<uwb_aoa_pkg::msg::LibAoaRobotMsg>(
       uwb_topic_, rclcpp::QoS(20),
       std::bind(&UwbFollowPlanner::uwbCallback, this, std::placeholders::_1));
-  follow_command_subscriber_ = create_subscription<std_msgs::msg::Int8>(
-      follow_command_topic_, rclcpp::QoS(10).reliable(),
-      std::bind(&UwbFollowPlanner::followCommandCallback, this,
-                std::placeholders::_1));
+  if (enable_follow_command_topic_) {
+    follow_command_subscriber_ = create_subscription<std_msgs::msg::Int8>(
+        follow_command_topic_, rclcpp::QoS(10).reliable(),
+        std::bind(&UwbFollowPlanner::followCommandCallback, this,
+                  std::placeholders::_1));
+  } else {
+    // 禁用话题控制时不创建订阅，并让原有状态机直接按定位和UWB有效性运行。
+    follow_command_.store(static_cast<int8_t>(FollowCommand::kStart));
+  }
   avoidance_state_subscriber_ =
       create_subscription<navigation_interfaces::msg::AvoidanceState>(
           "/local_avoidance/state", rclcpp::QoS(1).reliable().transient_local(),
@@ -135,12 +142,21 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       std::bind(&UwbFollowPlanner::planningTimerCallback, this));
 
   setState(FollowState::kWaitingForPose);
-  RCLCPP_INFO(get_logger(),
-              "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
-              "output=%s, command=%s (0=start, 1=stop, 3=pause)",
-              uwb_topic_.c_str(), odometry_topic_.c_str(),
-              global_frame_.c_str(), path_topic_.c_str(),
-              follow_command_topic_.c_str());
+  if (enable_follow_command_topic_) {
+    RCLCPP_INFO(get_logger(),
+                "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
+                "output=%s, command=%s (0=start, 1=stop, 3=pause)",
+                uwb_topic_.c_str(), odometry_topic_.c_str(),
+                global_frame_.c_str(), path_topic_.c_str(),
+                follow_command_topic_.c_str());
+  } else {
+    RCLCPP_INFO(get_logger(),
+                "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
+                "output=%s, BLE command control disabled; following starts "
+                "automatically when pose and UWB are valid",
+                uwb_topic_.c_str(), odometry_topic_.c_str(),
+                global_frame_.c_str(), path_topic_.c_str());
+  }
 }
 
 void UwbFollowPlanner::followCommandCallback(

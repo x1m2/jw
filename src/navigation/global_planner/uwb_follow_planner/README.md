@@ -42,7 +42,9 @@ distance are configurable in `config/uwb_follow_planner.yaml`.
 is latched internally when the publisher is silent. The planner starts in the
 stopped state and requires `0` before following; `1` stops and clears the
 locked control target, while `3` pauses without clearing the target so a later
-`0` can resume it. Other command values are ignored.
+`0` can resume it. Other command values are ignored. Set
+`enable_follow_command_topic: false` to disable the subscription and start the
+follow state machine automatically as soon as odometry and UWB data are valid.
 
 ## Outputs
 
