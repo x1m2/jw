@@ -1178,50 +1178,11 @@ void NavigationTaskExecutor::executePatrolAction(
         auto feedback = std::make_shared<StartNavigation::Feedback>();
         feedback->current_node_id = node.node_id;
         fillCurrentPoseFeedback(*feedback);
-        feedback->message =
-            "map_connection: stopping navigation before "
-            "relocalizing at node " +
-            std::to_string(node.node_id);
-        goal_handle->publish_feedback(feedback);
-
-        if (!state_machine_->beginStopNavigation()) {
-          failed = true;
-          failure_message =
-              "cannot stop navigation for map_connection at node_id=" +
-              std::to_string(node.node_id);
-          break;
-        }
-        callbacks_.publish_mode();
-
-        std::string transition_message;
-        if (!stopWorkers(session_id, transition_message)) {
-          failed = true;
-          failure_message = "failed to stop navigation for map_connection: " +
-                            transition_message;
-          break;
-        }
-        if (!state_machine_->navigationStopped()) {
-          failed = true;
-          failure_message =
-              "navigation state transition failed before relocalization";
-          break;
-        }
-        callbacks_.publish_mode();
-
-        {
-          std::lock_guard<std::mutex> lock(result_mutex_);
-          cancelled = cancel_requested_ || shutting_down_ ||
-                      goal_handle->is_canceling();
-        }
-        if (cancelled) break;
-
-        feedback = std::make_shared<StartNavigation::Feedback>();
-        feedback->current_node_id = node.node_id;
-        fillCurrentPoseFeedback(*feedback);
-        feedback->message = "map_connection: relocalizing at node " +
+        feedback->message = "map_connection: relocalizing at virtual node " +
                             std::to_string(node.node_id);
         goal_handle->publish_feedback(feedback);
 
+        std::string transition_message;
         if (!callbacks_.relocalize(
                 node,
                 [this, goal_handle]() {
@@ -1252,28 +1213,10 @@ void NavigationTaskExecutor::executePatrolAction(
         }
         if (cancelled) break;
 
-        if (!beginNavigationIfLocalized()) {
-          failed = true;
-          failure_message =
-              "cannot restart navigation after map_connection at node_id=" +
-              std::to_string(node.node_id);
-          break;
-        }
-        callbacks_.publish_mode();
-        if (!startWorkers(session_id, transition_message)) {
-          failed = true;
-          failure_message =
-              "failed to restart navigation after map_connection: " +
-              transition_message;
-          break;
-        }
-        if (!state_machine_->navigationStarted()) {
-          failed = true;
-          failure_message =
-              "navigation state transition failed after relocalization";
-          break;
-        }
-        callbacks_.publish_mode();
+        RCLCPP_INFO(node_->get_logger(),
+                    "map_connection relocalization completed at node_id=%u; "
+                    "navigation workers remain running",
+                    node.node_id);
 
         if (node.stop_duration_sec > 0.0 &&
             !waitForStopDuration(node.stop_duration_sec, [goal_handle]() {
@@ -1304,6 +1247,10 @@ void NavigationTaskExecutor::executePatrolAction(
       }
 
       // 每次只下发一个目标；到达后反馈该APP node_id，再继续下一个节点。
+      RCLCPP_INFO(node_->get_logger(),
+                  "Publishing navigation target: node_id=%u "
+                  "pose=(%.6f, %.6f, %.6f, %.6f)",
+                  node.node_id, node.x, node.y, node.z, node.theta);
       target_pose_pub_->publish(
           pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta));
       if (!waitForGoal(config_.goal_timeout_sec, [goal_handle]() {

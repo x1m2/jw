@@ -86,6 +86,7 @@ class SlamManagerNode : public rclcpp::Node {
     uint64_t generation{0U};
     std::shared_ptr<WorkerOperationToken> operation_token;
     bool stop_existing_worker{false};
+    bool preserve_navigation_state{false};
     std::function<bool()> is_canceling;
     std::function<void(const std::string &)> publish_feedback;
   };
@@ -197,6 +198,7 @@ class SlamManagerNode : public rclcpp::Node {
   double finish_mapping_timeout_sec_{300.0};
   double relocalization_timeout_sec_{60.0};
   double localization_stop_timeout_sec_{10.0};
+  bool enable_set_mode_{true};
   double body_cloud_publish_hz_{5.0};
   double last_body_cloud_publish_time_{-1.0};
   std::string active_map_id_;
@@ -206,6 +208,7 @@ class SlamManagerNode : public rclcpp::Node {
 
   std::mutex localization_result_mutex_;
   std::condition_variable localization_result_cv_;
+  std::atomic<uint64_t> active_localization_session_id_{0U};
   uint64_t localization_attempt_session_id_{0U};
   bool localization_attempt_active_{false};
   bool localization_result_armed_{false};

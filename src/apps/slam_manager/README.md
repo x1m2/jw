@@ -56,7 +56,8 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 启动失败、运行失败或取消时调用一次`/SetMode`并发送`mode: 0`；不进行周期调用。
 服务响应通过`[NAVIGATION_MODE]`日志记录，设置`mode: 1`失败时不会启动导航Worker。
 暂停导航成功后同样发送一次`mode: 0`；继续导航时先发送一次`mode: 1`，成功后
-才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。
+才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。配置
+`navigation.enable_set_mode: false`可统一禁用上述`/SetMode`调用。
 
 ```text
 APP task/task.json -------------------┐
@@ -73,10 +74,10 @@ slam_manager逐个发布 /target_points
   -> 发布下一个节点
 
 A -> B为map_connection时：
-  -> 到达A后停止导航Workers，底盘归零
+  -> 到达A后保持导航Workers运行，不向B发布运动目标
   -> 以B节点x/y/z/theta重启当前地图的定位Worker
   -> 发布B位姿到/initialpose并等待/reloc_success=true
-  -> 重启导航Workers，逻辑完成B
+  -> 逻辑完成B
   -> 发布B之后的下一个普通节点
 ```
 

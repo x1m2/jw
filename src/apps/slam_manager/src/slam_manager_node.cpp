@@ -91,6 +91,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       declare_parameter<double>("navigation.worker_timeout_sec", 30.0);
   const auto navigation_goal_timeout_sec =
       declare_parameter<double>("navigation.goal_timeout_sec", 300.0);
+  enable_set_mode_ =
+      declare_parameter<bool>("navigation.enable_set_mode", true);
   const auto navigation_enable_skip_first_target =
       declare_parameter<bool>("navigation.enable_skip_first_target", true);
   const auto navigation_skip_first_target_threshold =
@@ -376,6 +378,9 @@ bool SlamManagerNode::stopAllAlgorithms(std::string &message) {
       [this](WorkerCompletion completion) {
         localization_controller_->stop(0U, std::move(completion));
       });
+  if (localization_stop.success()) {
+    active_localization_session_id_.store(0U);
+  }
   append_result("localization", localization_stop.success(),
                 localization_stop.message);
 
@@ -404,6 +409,7 @@ bool SlamManagerNode::clearRuntimeAfterTeardown(std::string &message) {
   active_map_path_.clear();
   active_map_directory_prepared_ = false;
   relocalization_succeeded_.store(false);
+  active_localization_session_id_.store(0U);
   {
     std::lock_guard<std::mutex> lock(localization_result_mutex_);
     localization_attempt_session_id_ = 0U;
@@ -1041,12 +1047,19 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   }
 
   if (options.stop_existing_worker) {
+    const uint64_t active_session_id =
+        active_localization_session_id_.load();
+    RCLCPP_INFO(get_logger(),
+                "Stopping localization before %s: active_session=%llu",
+                options.source.c_str(),
+                static_cast<unsigned long long>(active_session_id));
     const auto stop_result = awaitWorkerCommand(
         "localization stop", localization_stop_timeout_sec_,
         options.operation_token ? options.operation_token
                                 : std::make_shared<WorkerOperationToken>(),
-        [this](WorkerCompletion completion) {
-          localization_controller_->stop(session_id_, std::move(completion));
+        [this, active_session_id](WorkerCompletion completion) {
+          localization_controller_->stop(active_session_id,
+                                         std::move(completion));
         },
         [this, generation = options.generation,
          token = options.operation_token]() {
@@ -1063,6 +1076,7 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
       enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
       return result;
     }
+    active_localization_session_id_.store(0U);
   }
 
   if (cancelled()) {
@@ -1070,15 +1084,24 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     result.message = options.source + " relocalization cancelled";
     return result;
   }
-  if (!state_machine_.beginLocalization()) {
-    result.message = options.source +
-                     " relocalization rejected, current state=" +
-                     std::string(toString(state_machine_.mode()));
-    enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
-    return result;
+  if (options.preserve_navigation_state) {
+    if (state_machine_.mode() != SlamMode::kNavigating) {
+      result.message = options.source +
+                       " relocalization requires active navigation, current "
+                       "state=" + std::string(toString(state_machine_.mode()));
+      return result;
+    }
+  } else {
+    if (!state_machine_.beginLocalization()) {
+      result.message = options.source +
+                       " relocalization rejected, current state=" +
+                       std::string(toString(state_machine_.mode()));
+      enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
+      return result;
+    }
+    publishMode();
   }
   relocalization_succeeded_.store(false);
-  publishMode();
 
   ++session_id_;
   const uint64_t localization_session_id = session_id_;
@@ -1102,6 +1125,7 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
        operation_token = options.operation_token, localization_session_id,
        source = options.source, use_initial_pose = options.use_initial_pose,
        algorithm_profile = options.algorithm_profile,
+       preserve_navigation_state = options.preserve_navigation_state,
        initial_pose = options.initial_pose](bool success,
                                             const std::string &worker_message) {
         if (!isLatestCommand(generation) ||
@@ -1135,7 +1159,10 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
           return;
         }
 
-        if (!state_machine_.localizationStarted()) {
+        active_localization_session_id_.store(localization_session_id);
+
+        if (!preserve_navigation_state &&
+            !state_machine_.localizationStarted()) {
           {
             std::lock_guard<std::mutex> lock(localization_result_mutex_);
             if (localization_attempt_session_id_ == localization_session_id) {
@@ -1240,7 +1267,8 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   }
 
   if (result_received && result_success && !was_cancelled && !cancelled()) {
-    if (!state_machine_.localizationSucceeded()) {
+    if (!options.preserve_navigation_state &&
+        !state_machine_.localizationSucceeded()) {
       result.message = "failed to enter localization success state";
       enterError(RuntimeState::LOCALIZATION_ERROR, result.message);
       return result;
@@ -1285,8 +1313,13 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     return result;
   }
   if (cleanup_result.success()) {
-    state_machine_.localizationFailed();
-    publishMode();
+    uint64_t expected_session_id = localization_session_id;
+    active_localization_session_id_.compare_exchange_strong(
+        expected_session_id, 0U);
+    if (!options.preserve_navigation_state) {
+      state_machine_.localizationFailed();
+      publishMode();
+    }
   } else {
     enterError(RuntimeState::LOCALIZATION_ERROR, cleanup_result.message);
   }
@@ -1348,6 +1381,7 @@ bool SlamManagerNode::relocalizeForMapConnection(
       pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta);
   options.generation = generation;
   options.stop_existing_worker = true;
+  options.preserve_navigation_state = true;
   options.is_canceling = is_canceling;
 
   const auto result =
@@ -1610,6 +1644,13 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
 }
 
 bool SlamManagerNode::setRobotMode(int32_t mode, std::string &message) {
+  if (!enable_set_mode_) {
+    message = "SetMode disabled by navigation.enable_set_mode";
+    RCLCPP_INFO(get_logger(), "[NAVIGATION_MODE] skipped mode=%d: %s", mode,
+                message.c_str());
+    return true;
+  }
+
   const auto timeout = std::chrono::duration<double>(kRobotModeTimeoutSec);
   if (!set_robot_mode_client_->wait_for_service(timeout)) {
     message = std::string("robot mode service '") + kRobotModeServiceName +

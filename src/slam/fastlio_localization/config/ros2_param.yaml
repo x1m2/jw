@@ -124,9 +124,9 @@ fastlio_localization:
                 debug_mode: false
 
             map_connection:
-                linear_xy_window_size: 4.0   # meter
+                linear_xy_window_size: 2.5   # meter
                 linear_z_window_size: 0.5    # meter
-                angular_search_window: 100.0 # degree 0~180
+                angular_search_window: 30.0 # degree 0~180
                 pc_resolutions: [0.3, 0.5, 0.8]
                 depth: 3
                 min_score: 0.3
