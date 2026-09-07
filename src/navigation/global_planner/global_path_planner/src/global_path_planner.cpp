@@ -374,6 +374,10 @@ void GlobalPathPlanner::poseCallback(
                          pose_out.header.frame_id.c_str(), current_position_.x,
                          current_position_.y, current_position_.z,
                          yaw * 180.0 / M_PI);
+    if (planning_pending_) {
+      RCLCPP_INFO(this->get_logger(), "已收到有效定位，执行待处理的目标规划");
+      planAndPublish();
+    }
   } catch (tf2::TransformException &ex) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                          "实时位姿坐标变换失败: %s", ex.what());
@@ -425,10 +429,14 @@ void GlobalPathPlanner::targetPointsCallback(
 
 void GlobalPathPlanner::planAndPublish() {
   if (!has_current_pose_) {
-    RCLCPP_WARN(this->get_logger(), "尚未接收到当前位置信息");
+    planning_pending_ = true;
+    RCLCPP_WARN(this->get_logger(),
+                "尚未接收到当前位置信息，已保留目标，等待有效定位后规划");
     return;
   }
 
+  // 每个请求只补执行一次，规划失败也不随定位消息反复重试。
+  planning_pending_ = false;
   nav_msgs::msg::Path global_path = planGlobalPath();
   if (global_path.poses.empty()) {
     RCLCPP_WARN(this->get_logger(), "无法规划路径");

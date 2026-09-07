@@ -148,6 +148,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
   bool has_goal_;
+  bool planning_pending_{false};  // 目标先到时，等待有效定位后补规划一次。
   std::vector<navigation_interfaces::msg::EdgePolicy> last_path_edge_policies_;
 
   // 方法
