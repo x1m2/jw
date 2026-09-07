@@ -1,6 +1,7 @@
 #ifndef PURE_PURSUIT_LOCAL_PLANNER_HPP
 #define PURE_PURSUIT_LOCAL_PLANNER_HPP
 
+#include <slam_manager_interfaces/msg/task_target.hpp>
 #include <tf2/time.h>
 
 #include <algorithm>
@@ -131,6 +132,8 @@ public:
   bool getRobotPose(geometry_msgs::msg::PoseStamped &robot_pose);
 
 private:
+  rclcpp::Subscription<slam_manager_interfaces::msg::TaskTarget>::SharedPtr
+      task_target_sub_;
   // ROS相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -151,8 +154,6 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr
       smoothed_local_path_sub_; // 新增：平滑后局部路径订阅器
-  rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
-      target_points_sub_; // 新增：目标点订阅器
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
       obstacle_stop_active_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;

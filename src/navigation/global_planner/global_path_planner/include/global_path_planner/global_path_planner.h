@@ -22,6 +22,7 @@
 #include <navigation_interfaces/edge_policy_utils.hpp>
 #include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
+#include <slam_manager_interfaces/msg/task_target.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
@@ -106,8 +107,6 @@ class GlobalPathPlanner : public rclcpp::Node {
       global_path_with_policy_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr
-      target_points_sub_;  // 目标点订阅器
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
@@ -148,6 +147,9 @@ class GlobalPathPlanner : public rclcpp::Node {
   geometry_msgs::msg::Point goal_position_;
   bool has_current_pose_;
   bool has_goal_;
+  std::optional<slam_manager_interfaces::msg::TaskTarget> task_target_;
+  rclcpp::Subscription<slam_manager_interfaces::msg::TaskTarget>::SharedPtr
+      task_target_sub_;
   bool planning_pending_{false};  // 目标先到时，等待有效定位后补规划一次。
   std::vector<navigation_interfaces::msg::EdgePolicy> last_path_edge_policies_;
 
@@ -155,8 +157,6 @@ class GlobalPathPlanner : public rclcpp::Node {
   bool loadTopologyMap();
   void poseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
   void goalCallback(geometry_msgs::msg::PointStamped::ConstSharedPtr msg);
-  void targetPointsCallback(
-      geometry_msgs::msg::Pose::ConstSharedPtr msg);  // 新增：目标点回调函数
   void planAndPublish();
 
   // 路径规划核心方法

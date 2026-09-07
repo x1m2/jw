@@ -189,10 +189,16 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
         });
   }
 
-  target_points_sub_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-      "/target_points", rclcpp::QoS(10),
-      [this](geometry_msgs::msg::Pose::ConstSharedPtr msg) {
-        this->targetPointsCallback(msg);
+  task_target_sub_ = node_->create_subscription<slam_manager_interfaces::msg::TaskTarget>(
+      "/navigation/task_target", 10,
+      [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
+        auto pose = std::make_shared<geometry_msgs::msg::Pose>();
+        pose->position.x = msg->target.x;
+        pose->position.y = msg->target.y;
+        pose->position.z = msg->target.z;
+        pose->orientation.z = std::sin(msg->target.theta * 0.5);
+        pose->orientation.w = std::cos(msg->target.theta * 0.5);
+        targetPointsCallback(pose);
       });
   obstacle_stop_active_sub_ =
       node_->create_subscription<std_msgs::msg::Bool>(

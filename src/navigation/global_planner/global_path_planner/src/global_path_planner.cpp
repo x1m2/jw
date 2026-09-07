@@ -144,10 +144,31 @@ bool GlobalPathPlanner::initialize() {
         this->goalCallback(msg);
       });
 
-  target_points_sub_ = this->create_subscription<geometry_msgs::msg::Pose>(
-      "/target_points", rclcpp::QoS(10),
-      [this](geometry_msgs::msg::Pose::ConstSharedPtr msg) {
-        this->targetPointsCallback(msg);
+  task_target_sub_ = create_subscription<slam_manager_interfaces::msg::TaskTarget>(
+      "/navigation/task_target", 10,
+      [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
+        planning_pending_ = false;
+        has_goal_ = false;
+        task_target_.reset();
+        if (msg->use_topology) {
+          const auto *goal =
+              msg->target.node_id <= static_cast<uint32_t>(std::numeric_limits<int>::max())
+                  ? findNodeById(static_cast<int>(msg->target.node_id)) : nullptr;
+          if (!goal) {
+            RCLCPP_ERROR(get_logger(), "Unknown patrol target ID: %u", msg->target.node_id);
+            return;
+          }
+          task_target_ = *msg;
+          goal_position_.x = goal->x;
+          goal_position_.y = goal->y;
+          goal_position_.z = goal->z;
+        } else {
+          goal_position_.x = msg->target.x;
+          goal_position_.y = msg->target.y;
+          goal_position_.z = msg->target.z;
+        }
+        has_goal_ = true;
+        planAndPublish();
       });
 
   if (enable_temp_connection_feasibility_check_) {
@@ -386,6 +407,7 @@ void GlobalPathPlanner::poseCallback(
 
 void GlobalPathPlanner::goalCallback(
     geometry_msgs::msg::PointStamped::ConstSharedPtr msg) {
+  task_target_.reset();
   RCLCPP_INFO(this->get_logger(), "收到点击目标点");
 
   // 转换目标点到全局坐标系
@@ -405,26 +427,6 @@ void GlobalPathPlanner::goalCallback(
   } catch (tf2::TransformException &ex) {
     RCLCPP_ERROR(this->get_logger(), "目标点坐标变换失败: %s", ex.what());
   }
-}
-
-void GlobalPathPlanner::targetPointsCallback(
-    geometry_msgs::msg::Pose::ConstSharedPtr msg) {
-  RCLCPP_INFO(this->get_logger(), "收到目标点位姿");
-
-  // 直接使用位姿的位置信息
-  goal_position_.x = msg->position.x;
-  goal_position_.y = msg->position.y;
-  goal_position_.z = msg->position.z;
-  has_goal_ = true;
-
-  RCLCPP_INFO(this->get_logger(), "目标点位置: (%.2f, %.2f, %.2f)",
-              goal_position_.x, goal_position_.y, goal_position_.z);
-  RCLCPP_INFO(this->get_logger(),
-              "目标点朝向: (x=%.3f, y=%.3f, z=%.3f, w=%.3f)",
-              msg->orientation.x, msg->orientation.y, msg->orientation.z,
-              msg->orientation.w);
-
-  planAndPublish();
 }
 
 void GlobalPathPlanner::planAndPublish() {
@@ -467,6 +469,23 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
               "开始规划从 (%.2f, %.2f, %.2f) 到 (%.2f, %.2f, %.2f) 的路径",
               current_position_.x, current_position_.y, current_position_.z,
               goal_position_.x, goal_position_.y, goal_position_.z);
+
+  // 巡检段的起终点由 manager 指定，复用已有边插值，不重新选择附近节点。
+  if (task_target_ && task_target_->has_from_node) {
+    const auto from = task_target_->from_node_id;
+    const auto to = task_target_->target.node_id;
+    if (from > static_cast<uint32_t>(std::numeric_limits<int>::max()))
+      return path;
+    const auto *edge = findTopologyEdge(static_cast<int>(from), static_cast<int>(to));
+    if (!edge || edge->edge_type == "map_connection") {
+      RCLCPP_ERROR(get_logger(), "Missing drivable patrol edge: %u -> %u", from, to);
+      return path;
+    }
+    TopologySearchResult route;
+    route.node_ids = {static_cast<int>(from), static_cast<int>(to)};
+    route.selected_edges = {edge};
+    return buildCompletePathFromTempGraph({}, route);
+  }
 
   try {
     // 基础图已经建立索引；每次规划只创建起终点及其临时连接。
@@ -538,7 +557,7 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
         start_attached_edge != nullptr &&
         start_attached_edge == goal_attached_edge;
 
-    if (enable_direct_connection_ &&
+    if (!task_target_ && enable_direct_connection_ &&
         direct_distance <= direct_connection_threshold_ &&
         direct_connection_feasible && direct_policy_unambiguous) {
       // 创建起点到终点的直接连接
@@ -794,17 +813,22 @@ void GlobalPathPlanner::addGoalTemporaryConnection(
   int nearest_node_id = -1;
   double nearest_dist = std::numeric_limits<double>::max();
 
-  for (const auto &node : nodes_) {
-    geometry_msgs::msg::Point node_pos;
-    node_pos.x = node.x;
-    node_pos.y = node.y;
-    node_pos.z = node.z;
+  if (task_target_) {
+    nearest_node_id = static_cast<int>(task_target_->target.node_id);
+    nearest_dist = 0.0;
+  } else {
+    for (const auto &node : nodes_) {
+      geometry_msgs::msg::Point node_pos;
+      node_pos.x = node.x;
+      node_pos.y = node.y;
+      node_pos.z = node.z;
 
-    double dist = calculateDistance(goal_position, node_pos);
+      double dist = calculateDistance(goal_position, node_pos);
 
-    if (dist < nearest_dist) {
-      nearest_dist = dist;
-      nearest_node_id = node.id;
+      if (dist < nearest_dist) {
+        nearest_dist = dist;
+        nearest_node_id = node.id;
+      }
     }
   }
 

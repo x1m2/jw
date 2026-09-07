@@ -65,7 +65,7 @@ APP task/task.json -------------------┐
 StartNavigation.nodes[]巡检节点顺序 --┘
                                                 |
                                                 v
-slam_manager逐个发布 /target_points
+slam_manager逐个发布 /navigation/task_target
   -> global_path_planner规划
   -> path_smoother平滑
   -> Pure Pursuit执行
@@ -103,6 +103,12 @@ A -> B为map_connection时：
   继续导航，并为相邻节点生成默认双向直线边；该模式不加载自定义边和区域设置，
   边参数使用`TaskEdgePolicy`默认值。
 - 相邻的两个JSON节点必须存在唯一的直接有向边，不使用多边间接路径。
+- 单点导航和巡检统一通过`/navigation/task_target`发送`slam_manager_interfaces/TaskTarget`。
+  `use_topology=false`按坐标规划；`use_topology=true`按拓扑ID规划。巡检消息
+  携带上一已完成节点ID，并复用`NavigationNode`传递当前目标。
+  全局规划器复用指定边的直线/贝塞尔插值和边策略，不因其他节点更近而替换路段；
+  首次接入保留原有起点搜索，目标按ID匹配。跳过首点或完成跨地图重定位后，
+  使用对应节点作为下一段起点。局部规划器沿用原有目标朝向和Bool到达反馈。
 - 校验和合并完成后，原子写入`task/topology_map.json`。
 - `map_connection`表示物理位置相同、统一`map`坐标发生跳转的虚拟连接。
   后一个节点不作为运动目标，而是作为重定位初始位姿；只有重定位成功并重新

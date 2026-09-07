@@ -8,7 +8,7 @@
 ```text
 topology_map.json + globalmap.pcd
                + /pose_stamped_localization
-               + /target_points
+               + /navigation/task_target
                          |
                          v
               加载节点、边和可行域点云

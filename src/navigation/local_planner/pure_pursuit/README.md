@@ -8,14 +8,14 @@ ROS 2 Humble 局部跟踪/绕障控制节点。当前导航里它负责接收路
 /livox/lidar
   -> costmap_2d -> /costmap
 
-/pose_stamped_localization + /target_points
+/pose_stamped_localization + /navigation/task_target
   -> global_path_planner -> /global_path
   -> path_smoother       -> /smoothed_global_path
 
 pure_pursuit
   <- /smoothed_global_path_with_policy
   <- /costmap
-  <- /target_points
+  <- /navigation/task_target
   -> /cmd_vel_planned -> obstacle_stop -> /cmd_vel
   -> /nav_state
 ```
@@ -41,7 +41,7 @@ ros2 launch pure_pursuit pure_pursuit.launch.py
 ```text
 /smoothed_global_path_with_policy navigation_interfaces/msg/PathWithPolicy
 /costmap          nav_msgs/msg/OccupancyGrid
-/target_points    geometry_msgs/msg/Pose
+/navigation/task_target    slam_manager_interfaces/msg/TaskTarget
 ```
 
 发布：

@@ -717,8 +717,9 @@ NavigationTaskExecutor::NavigationTaskExecutor(
       !callbacks_.relocalize) {
     throw std::invalid_argument("invalid navigation task executor config");
   }
-  target_pose_pub_ =
-      node_->create_publisher<geometry_msgs::msg::Pose>("/target_points", 10);
+  task_target_pub_ =
+      node_->create_publisher<slam_manager_interfaces::msg::TaskTarget>(
+          "/navigation/task_target", 10);
 }
 
 NavigationTaskExecutor::~NavigationTaskExecutor() {
@@ -1156,6 +1157,9 @@ void NavigationTaskExecutor::executePatrolAction(
   int32_t failure_error_code = RuntimeState::NAVIGATION_ERROR;
   std::string failure_message;
   bool first_patrol_round = true;
+  std::optional<uint32_t> previous_node_id;
+  if (first_patrol_index > 0U)
+    previous_node_id = patrol_nodes.front().node_id;
   do {
     const std::size_t round_start_index =
         first_patrol_round ? first_patrol_index : 0U;
@@ -1240,6 +1244,7 @@ void NavigationTaskExecutor::executePatrolAction(
         feedback = std::make_shared<StartNavigation::Feedback>();
         feedback->current_node_id = node.node_id;
         fillCurrentPoseFeedback(*feedback);
+        previous_node_id = node.node_id;
         feedback->message = "map_connection relocalization completed at node " +
                             std::to_string(node.node_id);
         goal_handle->publish_feedback(feedback);
@@ -1251,8 +1256,13 @@ void NavigationTaskExecutor::executePatrolAction(
                   "Publishing navigation target: node_id=%u "
                   "pose=(%.6f, %.6f, %.6f, %.6f)",
                   node.node_id, node.x, node.y, node.z, node.theta);
-      target_pose_pub_->publish(
-          pose_utils::fromXyzTheta(node.x, node.y, node.z, node.theta));
+      slam_manager_interfaces::msg::TaskTarget target;
+      target.use_topology = true;
+      target.has_from_node =
+          previous_node_id.has_value() && *previous_node_id != node.node_id;
+      target.from_node_id = previous_node_id.value_or(0U);
+      target.target = node;
+      task_target_pub_->publish(target);
       if (!waitForGoal(config_.goal_timeout_sec, [goal_handle]() {
             return goal_handle->is_canceling();
           })) {
@@ -1267,6 +1277,7 @@ void NavigationTaskExecutor::executePatrolAction(
         break;
       }
 
+      previous_node_id = node.node_id;
       if (node.stop_duration_sec > 0.0) {
         auto waiting_feedback = std::make_shared<StartNavigation::Feedback>();
         waiting_feedback->current_node_id = node.node_id;
@@ -1398,9 +1409,6 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
     releaseOperation();
     return;
   }
-  const auto target_pose =
-      pose_utils::fromXyzTheta(goal->x, goal->y, goal->z, goal->theta);
-
   // 单点协议没有现成拓扑：用实时map位姿作为起点、APP目标作为终点。
   std::vector<slam_manager_interfaces::msg::NavigationNode> topology_nodes(2U);
   topology_nodes[0] = nodeFromPose(0U, current_pose.pose);
@@ -1482,7 +1490,10 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   feedback = std::make_shared<NavigateToPose::Feedback>();
   feedback->message = "navigating to target";
   goal_handle->publish_feedback(feedback);
-  target_pose_pub_->publish(target_pose);
+  slam_manager_interfaces::msg::TaskTarget target;
+  target.use_topology = false;
+  target.target = topology_nodes[1];
+  task_target_pub_->publish(target);
 
   const bool reached = waitForGoal(config_.goal_timeout_sec, [goal_handle]() {
     return goal_handle->is_canceling();

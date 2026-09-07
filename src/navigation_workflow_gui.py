@@ -24,7 +24,7 @@ import tkinter.font as tkfont
 from tkinter import messagebox, simpledialog, ttk
 
 import rclpy
-from geometry_msgs.msg import Pose
+from slam_manager_interfaces.msg import TaskTarget
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
@@ -744,7 +744,7 @@ class NavigationWorkflowGUI:
                 Bool, "/emergency_stop", 10
             )
             self.nav_control_node.create_subscription(
-                Pose, "/target_points", self.target_points_callback, 10
+                TaskTarget, "/navigation/task_target", self.target_points_callback, 10
             )
             self.nav_control_node.create_subscription(
                 Bool, "/nav_state", self.nav_state_callback, 10
@@ -769,9 +769,9 @@ class NavigationWorkflowGUI:
             self.add_log_from_thread(f"[WARN] 内嵌导航控制 ROS2 spin 退出: {e}")
 
     def target_points_callback(self, msg):
-        self.current_target["x"] = msg.position.x
-        self.current_target["y"] = msg.position.y
-        self.current_target["z"] = msg.position.z
+        self.current_target["x"] = msg.target.x
+        self.current_target["y"] = msg.target.y
+        self.current_target["z"] = msg.target.z
         self.last_target_update = datetime.datetime.now().strftime("%H:%M:%S")
 
     def nav_state_callback(self, msg):

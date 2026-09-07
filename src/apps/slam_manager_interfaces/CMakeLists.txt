@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MapKeyframe.msg"
   "msg/LocalizationPose.msg"
   "msg/NavigationNode.msg"
+  "msg/TaskTarget.msg"
   "msg/RobotPose.msg"
   "msg/RuntimeState.msg"
   "msg/WorkerStatus.msg"

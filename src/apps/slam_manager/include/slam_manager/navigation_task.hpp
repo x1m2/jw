@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <memory>
 #include <mutex>
+#include <slam_manager_interfaces/msg/task_target.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -181,7 +182,9 @@ class NavigationTaskExecutor {
   NavigationController controller_;
   Config config_;
   Callbacks callbacks_;
-  rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_pose_pub_;
+
+  rclcpp::Publisher<slam_manager_interfaces::msg::TaskTarget>::SharedPtr
+      task_target_pub_;
 
   std::mutex operation_mutex_;
   bool operation_active_{false};

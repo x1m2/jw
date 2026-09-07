@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(navigation_interfaces REQUIRED)
+find_package(slam_manager_interfaces REQUIRED)
 find_package(slam_manager REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -35,6 +36,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   geometry_msgs
   nav_msgs
   navigation_interfaces
+  slam_manager_interfaces
   std_msgs
   tf2
   tf2_ros
