@@ -500,7 +500,7 @@ const std::filesystem::path &TopologyFileWriter::outputFile() const {
 
 bool TopologyFileWriter::write(
     const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
-    std::string &message) const {
+    std::string &message, const TaskEdgePolicy &policy) const {
   if (nodes.empty()) {
     message = "cannot generate runtime topology from an empty node list";
     return false;
@@ -511,6 +511,7 @@ bool TopologyFileWriter::write(
   uint32_t edge_id = 0U;
   for (std::size_t index = 0; index + 1U < nodes.size(); ++index) {
     TaskTopologyEdge forward;
+    forward.policy = policy;
     forward.id = edge_id++;
     forward.from_id = nodes[index].node_id;
     forward.to_id = nodes[index + 1U].node_id;
@@ -1421,7 +1422,9 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   // 单点导航同样更新统一规划器输入，不覆盖APP的task.json。
   topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
-  if (!topology_writer_->write(topology_nodes, message)) {
+  TaskEdgePolicy policy;
+  policy.obstacle_avoidance_enabled = goal->enable_avoidance;
+  if (!topology_writer_->write(topology_nodes, message, policy)) {
     result->success = false;
     result->message = message;
     goal_handle->abort(result);

@@ -2,6 +2,8 @@ float64 x
 float64 y
 float64 z
 float64 theta
+# Enable local obstacle avoidance for this navigation; omitted defaults to false.
+bool enable_avoidance false
 ---
 bool success
 string message

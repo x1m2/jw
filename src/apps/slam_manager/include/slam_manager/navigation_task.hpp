@@ -86,7 +86,8 @@ class TopologyFileWriter {
   const std::filesystem::path &outputFile() const;
   bool write(
       const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
-      std::string &message) const;
+      std::string &message,
+      const TaskEdgePolicy &policy = TaskEdgePolicy{}) const;
   bool write(const TaskTopologyGraph &graph, std::string &message) const;
 
  private:

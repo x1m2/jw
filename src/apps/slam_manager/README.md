@@ -166,6 +166,14 @@ task/region_obstacle_stop/<region_id>.yaml
 
 单点导航`/robot/navigate_to_pose`也会生成`topology_map.json`，然后使用相同
 的全局规划、平滑和控制流程。
+Action Goal 中的 `enable_avoidance` 控制本次单点导航是否开启绕障，
+默认 `false`。该值写入生成拓扑的双向边策略，全局路径及平滑路径携带该策略，
+由局部规划器执行；不改变原有遇障停车设置。
+
+```bash
+ros2 action send_goal /robot/navigate_to_pose slam_manager_interfaces/action/NavigateToPose \
+  "{x: 1.0, y: 2.0, z: 0.0, theta: 0.0, enable_avoidance: true}"
+```
 
 ## 运行控制
 
