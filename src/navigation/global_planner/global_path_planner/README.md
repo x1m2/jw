@@ -38,7 +38,9 @@ topology_map.json + globalmap.pcd
 
 ## 边处理规则
 
-- 边是有向边；双向通行需要配置两条方向相反的边。
+- 每条边的方向语义由`topology_map.json`中的`bidirectional`决定：`true`表示
+  同一条edge可正反向通行，`false`表示只允许`from_id -> to_id`。旧JSON未包含
+  该字段时按`false`处理，以保持历史兼容。
 - APP导航协议使用相邻节点，因此一次正常导航只执行一条普通边。
 - `straight`边按直线生成路径。
 - `bezier`边使用起点、两个控制点和终点生成三次贝塞尔曲线；反向经过

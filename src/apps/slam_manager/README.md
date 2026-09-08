@@ -89,7 +89,11 @@ A -> B为map_connection时：
 
 处理规则：
 
-- `StartNavigation.nodes[]`决定节点执行顺序。
+- `StartNavigation.nodes[]`决定节点执行顺序；它是“执行序列”，允许同一个
+  `node_id`多次出现，例如`0,1,2,3,4,5,4,3`。任务JSON中的`nodes[]`仍是
+  拓扑定义，`node_id`必须唯一，不会因为重复巡检而复制节点。
+- Action结果中的`completed_count`按已完成的执行序列项计数，同一个`node_id`
+  第二次经过会再次计数，Feedback中的`current_node_id`也允许重复出现。
 - 首次执行任务时，若当前二维位置距离首节点不超过
   `navigation.skip_first_target_threshold`（默认`0.8 m`），且任务至少有
   两个节点，则跳过首节点并从第二个节点开始；循环任务的后续轮次仍从首节点
@@ -102,7 +106,13 @@ A -> B为map_connection时：
 - `<task_id>.json`不存在时，直接使用Action携带的`nodes[]`位姿和停留时间
   继续导航，并为相邻节点生成默认双向直线边；该模式不加载自定义边和区域设置，
   边参数使用`TaskEdgePolicy`默认值。
-- 相邻的两个JSON节点必须存在唯一的直接有向边，不使用多边间接路径。
+- 任务JSON中的edge支持`bidirectional`属性，未配置时slam_manager按当前业务约定
+  默认`true`。生成runtime `topology_map.json`时会明确写出该字段。相邻执行节点
+  优先使用与当前方向完全一致的edge；若只存在反方向定义，则仅当该edge的
+  `bidirectional=true`时复用同一条edge，不生成新的runtime反向edge，也不修改原始
+  任务JSON。例如JSON只有`4->5`且为双向时，Action可以直接执行`5->4`。实际遍历
+  方向由`TaskTarget.from_node_id -> target.node_id`确定；Bezier反向遍历时由全局规划器
+  反向使用曲线几何。显式配置`bidirectional=false`可保留单向边语义。
 - 单点导航和巡检统一通过`/navigation/task_target`发送`slam_manager_interfaces/TaskTarget`。
   `use_topology=false`按坐标规划；`use_topology=true`按拓扑ID规划。巡检消息
   携带上一已完成节点ID，并复用`NavigationNode`传递当前目标。

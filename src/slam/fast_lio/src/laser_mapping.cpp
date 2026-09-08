@@ -1265,7 +1265,7 @@ void LaserMappingNode::publish_frame_body(
   pubLaserCloudFull_body->publish(laserCloudmsg);
 
   // 每帧发布1m叶素降采样点云。
-  constexpr float voxel_leaf_size = 1.0F;
+  constexpr float voxel_leaf_size = 0.7F;
   pcl::VoxelGrid<PointType> voxel_filter;
   voxel_filter.setLeafSize(voxel_leaf_size, voxel_leaf_size, voxel_leaf_size);
   voxel_filter.setInputCloud(laserCloudIMUBody);

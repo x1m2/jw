@@ -277,6 +277,7 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
       edge.from_id = static_cast<uint32_t>(raw_from_id);
       edge.to_id = static_cast<uint32_t>(raw_to_id);
       edge.edge_type = json_edge.value("edge_type", "straight");
+      edge.bidirectional = json_edge.value("bidirectional", true);
       edge.policy.linear_velocity = json_edge.value("linear_velocity", 0.5);
       edge.policy.angular_velocity = json_edge.value("angular_velocity", 0.5);
       edge.policy.motion_direction = json_edge.value("motion_direction", 1);
@@ -486,6 +487,73 @@ const TaskTopologyEdge *findDirectEdge(
   return &graph.edges[edge->second];
 }
 
+namespace {
+
+const TaskTopologyEdge *findTraversalEdge(
+    const TaskTopologyGraph &graph,
+    const DirectedEdgeIndex &directed_edge_indexes, uint32_t from_id,
+    uint32_t to_id, bool &reverse_traversal) {
+  reverse_traversal = false;
+  if (const auto *direct =
+          findDirectEdge(graph, directed_edge_indexes, from_id, to_id)) {
+    return direct;
+  }
+
+  const auto *reverse =
+      findDirectEdge(graph, directed_edge_indexes, to_id, from_id);
+  if (reverse == nullptr || !reverse->bidirectional) return nullptr;
+  reverse_traversal = true;
+  return reverse;
+}
+
+// 仅用于 Action 携带了 JSON 中不存在节点的兼容路径。
+// 这不是“反向边补全”：edge 本身仍按双向连通语义使用，只创建一次。
+bool appendFallbackStraightEdge(TaskTopologyGraph &graph,
+                                DirectedEdgeIndex &directed_edge_indexes,
+                                uint32_t from_id, uint32_t to_id,
+                                uint64_t &next_edge_id, std::string &message) {
+  if (next_edge_id > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    message = "cannot allocate a fallback runtime edge id";
+    return false;
+  }
+
+  const uint64_t direct_key = makeDirectedEdgeKey(from_id, to_id);
+  if (directed_edge_indexes.find(direct_key) != directed_edge_indexes.end()) {
+    return true;
+  }
+
+  const auto *reverse_edge =
+      findDirectEdge(graph, directed_edge_indexes, to_id, from_id);
+  if (reverse_edge != nullptr && reverse_edge->bidirectional) {
+    return true;
+  }
+
+  TaskTopologyEdge edge;
+  edge.id = static_cast<uint32_t>(next_edge_id++);
+  edge.from_id = from_id;
+  edge.to_id = to_id;
+  edge.bidirectional = true;
+  const std::size_t edge_index = graph.edges.size();
+  graph.edges.push_back(std::move(edge));
+  directed_edge_indexes.emplace(direct_key, edge_index);
+  return true;
+}
+
+bool sameNavigationNodeDefinition(
+    const slam_manager_interfaces::msg::NavigationNode &first,
+    const slam_manager_interfaces::msg::NavigationNode &second) {
+  constexpr double kNodeEqualityEpsilon = 1e-9;
+  return first.node_id == second.node_id &&
+         std::abs(first.x - second.x) <= kNodeEqualityEpsilon &&
+         std::abs(first.y - second.y) <= kNodeEqualityEpsilon &&
+         std::abs(first.z - second.z) <= kNodeEqualityEpsilon &&
+         std::abs(first.theta - second.theta) <= kNodeEqualityEpsilon &&
+         std::abs(first.stop_duration_sec - second.stop_duration_sec) <=
+             kNodeEqualityEpsilon;
+}
+
+}  // namespace
+
 void TopologyFileWriter::setOutputFile(std::filesystem::path output_file) {
   if (output_file.empty() || !output_file.is_absolute()) {
     throw std::invalid_argument(
@@ -505,22 +573,52 @@ bool TopologyFileWriter::write(
     message = "cannot generate runtime topology from an empty node list";
     return false;
   }
+
+  // nodes 参数也可能来自 StartNavigation 的执行序列，因此允许同一个
+  // node_id 多次出现。runtime topology 本身仍保持 node_id 唯一，执行顺序
+  // 由 Action 序列维护，不通过复制拓扑节点表达。
   TaskTopologyGraph graph;
-  graph.nodes = nodes;
-  graph.edges.reserve(nodes.size() > 1U ? (nodes.size() - 1U) * 2U : 0U);
+  graph.nodes.reserve(nodes.size());
+  std::unordered_map<uint32_t, std::size_t> node_indexes;
+  node_indexes.reserve(nodes.size());
+  for (const auto &node : nodes) {
+    const auto [it, inserted] =
+        node_indexes.emplace(node.node_id, graph.nodes.size());
+    if (inserted) {
+      graph.nodes.push_back(node);
+      continue;
+    }
+
+    const auto &existing = graph.nodes[it->second];
+    if (!sameNavigationNodeDefinition(existing, node)) {
+      message = "repeated action node_id=" + std::to_string(node.node_id) +
+                " has inconsistent pose or stop duration";
+      return false;
+    }
+  }
+
+  graph.edges.reserve(nodes.size() > 1U ? nodes.size() - 1U : 0U);
+  std::unordered_set<uint64_t> undirected_edges;
+  undirected_edges.reserve(nodes.size() > 1U ? nodes.size() - 1U : 0U);
   uint32_t edge_id = 0U;
+  auto append_edge = [&](uint32_t from_id, uint32_t to_id) {
+    if (from_id == to_id) return;
+    const uint32_t low_id = std::min(from_id, to_id);
+    const uint32_t high_id = std::max(from_id, to_id);
+    const uint64_t key = makeDirectedEdgeKey(low_id, high_id);
+    if (!undirected_edges.insert(key).second) return;
+
+    TaskTopologyEdge edge;
+    edge.policy = policy;
+    edge.id = edge_id++;
+    edge.from_id = from_id;
+    edge.to_id = to_id;
+    edge.bidirectional = true;
+    graph.edges.push_back(std::move(edge));
+  };
+
   for (std::size_t index = 0; index + 1U < nodes.size(); ++index) {
-    TaskTopologyEdge forward;
-    forward.policy = policy;
-    forward.id = edge_id++;
-    forward.from_id = nodes[index].node_id;
-    forward.to_id = nodes[index + 1U].node_id;
-    graph.edges.push_back(forward);
-    TaskTopologyEdge reverse = forward;
-    reverse.id = edge_id++;
-    reverse.from_id = forward.to_id;
-    reverse.to_id = forward.from_id;
-    graph.edges.push_back(reverse);
+    append_edge(nodes[index].node_id, nodes[index + 1U].node_id);
   }
   return write(graph, message);
 }
@@ -589,6 +687,7 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
         {"to_id", edge.to_id},
         {"weight", edgeLength(edge, *from_it->second, *to_it->second)},
         {"edge_type", edge.edge_type},
+        {"bidirectional", edge.bidirectional},
         {"linear_velocity", edge.policy.linear_velocity},
         {"angular_velocity", edge.policy.angular_velocity},
         {"motion_direction", edge.policy.motion_direction},
@@ -796,7 +895,6 @@ NavigationTaskExecutor::nodeFromPose(uint32_t node_id,
 
 bool NavigationTaskExecutor::validateGoal(const StartNavigation::Goal &goal,
                                           std::string &message) const {
-  // APP节点ID用于反馈，必须唯一；四自由度位姿必须都是有限值。
   if (!validTaskId(goal.task_id, message)) {
     return false;
   }
@@ -810,16 +908,11 @@ bool NavigationTaskExecutor::validateGoal(const StartNavigation::Goal &goal,
     return false;
   }
 
-  std::unordered_set<uint32_t> node_ids;
   for (const auto &node : goal.nodes) {
     if (node.node_id >
         static_cast<uint32_t>(std::numeric_limits<int>::max() - 2)) {
       message =
           "node_id exceeds planner range: " + std::to_string(node.node_id);
-      return false;
-    }
-    if (!node_ids.insert(node.node_id).second) {
-      message = "duplicate node_id=" + std::to_string(node.node_id);
       return false;
     }
     if (!validatePoseFields(node.x, node.y, node.z, node.theta, message)) {
@@ -922,8 +1015,7 @@ void NavigationTaskExecutor::executePatrolAction(
     releaseOperation();
     return;
   }
-  RCLCPP_INFO(node_->get_logger(),
-              "Navigation robot-state gate passed: %s",
+  RCLCPP_INFO(node_->get_logger(), "Navigation robot-state gate passed: %s",
               robot_state_message.c_str());
 
   if (task_directory_.empty()) {
@@ -1003,13 +1095,35 @@ void NavigationTaskExecutor::executePatrolAction(
       next_edge_id =
           std::max(next_edge_id, static_cast<uint64_t>(edge.id) + 1U);
     }
+
     for (std::size_t index = 0; index + 1U < patrol_nodes.size(); ++index) {
       const uint32_t from_id = patrol_nodes[index].node_id;
       const uint32_t to_id = patrol_nodes[index + 1U].node_id;
-      const TaskTopologyEdge *direct_edge =
-          findDirectEdge(graph, directed_edge_indexes, from_id, to_id);
-      if (direct_edge != nullptr) {
-        if (direct_edge->edge_type == "map_connection") {
+
+      // Action 是执行序列，允许节点重复。相邻位置恰好是同一个 node_id
+      // 时不需要拓扑边；执行阶段仍会按两个 occurrence 分别统计反馈。
+      if (from_id == to_id) {
+        RCLCPP_WARN(node_->get_logger(),
+                    "Patrol sequence contains adjacent repeated node_id=%u; "
+                    "no topology edge is required",
+                    from_id);
+        continue;
+      }
+
+      bool reverse_traversal = false;
+      const TaskTopologyEdge *traversal_edge = findTraversalEdge(
+          graph, directed_edge_indexes, from_id, to_id, reverse_traversal);
+
+      if (traversal_edge != nullptr) {
+        if (reverse_traversal) {
+          RCLCPP_INFO(
+              node_->get_logger(),
+              "[BIDIRECTIONAL_PATROL_EDGE] transition %u -> %u reuses JSON "
+              "edge %u (%u -> %u)",
+              from_id, to_id, traversal_edge->id, traversal_edge->from_id,
+              traversal_edge->to_id);
+        }
+        if (traversal_edge->edge_type == "map_connection") {
           requires_relocalization[index + 1U] = true;
           RCLCPP_INFO(node_->get_logger(),
                       "Patrol transition %u -> %u is map_connection; node %u "
@@ -1026,31 +1140,26 @@ void NavigationTaskExecutor::executePatrolAction(
         result->success = false;
         result->completed_count = 0U;
         result->message =
-            "patrol consecutive nodes require a direct JSON edge: " +
+            "patrol consecutive nodes require a direct edge or a "
+            "bidirectional reverse edge: " +
             std::to_string(from_id) + " -> " + std::to_string(to_id);
         goal_handle->abort(result);
         releaseOperation();
         return;
       }
-      if (next_edge_id >
-          static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+
+      if (!appendFallbackStraightEdge(graph, directed_edge_indexes, from_id,
+                                      to_id, next_edge_id, topology_message)) {
         result->success = false;
         result->completed_count = 0U;
-        result->message = "cannot allocate a default edge id";
+        result->message = topology_message;
         goal_handle->abort(result);
         releaseOperation();
         return;
       }
-      TaskTopologyEdge default_edge;
-      default_edge.id = static_cast<uint32_t>(next_edge_id++);
-      default_edge.from_id = from_id;
-      default_edge.to_id = to_id;
-      graph.edges.push_back(default_edge);
-      directed_edge_indexes.emplace(makeDirectedEdgeKey(from_id, to_id),
-                                    graph.edges.size() - 1U);
       RCLCPP_WARN(node_->get_logger(),
                   "Patrol transition %u -> %u uses an Action fallback node; "
-                  "adding a default directed straight edge",
+                  "adding one default bidirectional straight edge",
                   from_id, to_id);
     }
     topology_written = topology_writer_->write(graph, topology_message);
@@ -1159,8 +1268,7 @@ void NavigationTaskExecutor::executePatrolAction(
   std::string failure_message;
   bool first_patrol_round = true;
   std::optional<uint32_t> previous_node_id;
-  if (first_patrol_index > 0U)
-    previous_node_id = patrol_nodes.front().node_id;
+  if (first_patrol_index > 0U) previous_node_id = patrol_nodes.front().node_id;
   do {
     const std::size_t round_start_index =
         first_patrol_round ? first_patrol_index : 0U;

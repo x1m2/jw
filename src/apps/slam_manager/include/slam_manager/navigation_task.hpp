@@ -10,10 +10,10 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <memory>
 #include <mutex>
-#include <slam_manager_interfaces/msg/task_target.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <slam_manager_interfaces/msg/task_target.hpp>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -41,6 +41,7 @@ struct TaskTopologyEdge {
   uint32_t from_id{0U};
   uint32_t to_id{0U};
   std::string edge_type{"straight"};
+  bool bidirectional{true};
   TaskEdgePolicy policy;
   bool has_bezier_control_points{false};
   std::array<std::array<double, 3>, 2> bezier_control_points{};

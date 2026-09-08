@@ -144,32 +144,36 @@ bool GlobalPathPlanner::initialize() {
         this->goalCallback(msg);
       });
 
-  task_target_sub_ = create_subscription<slam_manager_interfaces::msg::TaskTarget>(
-      "/navigation/task_target", 10,
-      [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
-        planning_pending_ = false;
-        has_goal_ = false;
-        task_target_.reset();
-        if (msg->use_topology) {
-          const auto *goal =
-              msg->target.node_id <= static_cast<uint32_t>(std::numeric_limits<int>::max())
-                  ? findNodeById(static_cast<int>(msg->target.node_id)) : nullptr;
-          if (!goal) {
-            RCLCPP_ERROR(get_logger(), "Unknown patrol target ID: %u", msg->target.node_id);
-            return;
-          }
-          task_target_ = *msg;
-          goal_position_.x = goal->x;
-          goal_position_.y = goal->y;
-          goal_position_.z = goal->z;
-        } else {
-          goal_position_.x = msg->target.x;
-          goal_position_.y = msg->target.y;
-          goal_position_.z = msg->target.z;
-        }
-        has_goal_ = true;
-        planAndPublish();
-      });
+  task_target_sub_ =
+      create_subscription<slam_manager_interfaces::msg::TaskTarget>(
+          "/navigation/task_target", 10,
+          [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
+            planning_pending_ = false;
+            has_goal_ = false;
+            task_target_.reset();
+            if (msg->use_topology) {
+              const auto *goal =
+                  msg->target.node_id <=
+                          static_cast<uint32_t>(std::numeric_limits<int>::max())
+                      ? findNodeById(static_cast<int>(msg->target.node_id))
+                      : nullptr;
+              if (!goal) {
+                RCLCPP_ERROR(get_logger(), "Unknown patrol target ID: %u",
+                             msg->target.node_id);
+                return;
+              }
+              task_target_ = *msg;
+              goal_position_.x = goal->x;
+              goal_position_.y = goal->y;
+              goal_position_.z = goal->z;
+            } else {
+              goal_position_.x = msg->target.x;
+              goal_position_.y = msg->target.y;
+              goal_position_.z = msg->target.z;
+            }
+            has_goal_ = true;
+            planAndPublish();
+          });
 
   if (enable_temp_connection_feasibility_check_) {
     if (!loadFreeSpaceCloudFromPcd()) {
@@ -252,7 +256,7 @@ bool GlobalPathPlanner::loadTopologyMap() {
       edge.weight = edge.edge_type == "map_connection"
                         ? 0.0
                         : json_edge.at("weight").get<double>();
-      edge.bidirectional = false;
+      edge.bidirectional = json_edge.value("bidirectional", false);
       edge.policy.velocity_limit_enabled = true;
       edge.policy.linear_velocity = json_edge.value("linear_velocity", 0.5);
       edge.policy.angular_velocity = json_edge.value("angular_velocity", 0.5);
@@ -476,9 +480,11 @@ nav_msgs::msg::Path GlobalPathPlanner::planGlobalPath() {
     const auto to = task_target_->target.node_id;
     if (from > static_cast<uint32_t>(std::numeric_limits<int>::max()))
       return path;
-    const auto *edge = findTopologyEdge(static_cast<int>(from), static_cast<int>(to));
+    const auto *edge =
+        findTopologyEdge(static_cast<int>(from), static_cast<int>(to));
     if (!edge || edge->edge_type == "map_connection") {
-      RCLCPP_ERROR(get_logger(), "Missing drivable patrol edge: %u -> %u", from, to);
+      RCLCPP_ERROR(get_logger(), "Missing drivable patrol edge: %u -> %u", from,
+                   to);
       return path;
     }
     TopologySearchResult route;
@@ -1115,8 +1121,7 @@ std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
   return points;
 }
 
-std::vector<geometry_msgs::msg::Point>
-GlobalPathPlanner::interpolateBezierPath(
+std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolateBezierPath(
     const geometry_msgs::msg::Point &start,
     const geometry_msgs::msg::Point &control_point_1,
     const geometry_msgs::msg::Point &control_point_2,
@@ -1131,10 +1136,8 @@ GlobalPathPlanner::interpolateBezierPath(
   for (int i = 0; i <= num_points; ++i) {
     const double t = static_cast<double>(i) / num_points;
     const double one_minus_t = 1.0 - t;
-    const double start_weight =
-        one_minus_t * one_minus_t * one_minus_t;
-    const double first_control_weight =
-        3.0 * one_minus_t * one_minus_t * t;
+    const double start_weight = one_minus_t * one_minus_t * one_minus_t;
+    const double first_control_weight = 3.0 * one_minus_t * one_minus_t * t;
     const double second_control_weight = 3.0 * one_minus_t * t * t;
     const double end_weight = t * t * t;
 
@@ -1365,19 +1368,19 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
 
       // 反向遍历同一条三次贝塞尔边时必须交换两个控制点，才能保持
       // 与正向完全相同的几何曲线。
-      const auto &first_control =
-          traversing_forward ? selected_edge->bezier_control_points[0]
-                             : selected_edge->bezier_control_points[1];
+      const auto &first_control = traversing_forward
+                                      ? selected_edge->bezier_control_points[0]
+                                      : selected_edge->bezier_control_points[1];
       const auto &second_control =
           traversing_forward ? selected_edge->bezier_control_points[1]
                              : selected_edge->bezier_control_points[0];
-      segment = interpolateBezierPath(
-          waypoints[i], first_control, second_control, waypoints[i + 1U],
-          interpolation_points_);
+      segment =
+          interpolateBezierPath(waypoints[i], first_control, second_control,
+                                waypoints[i + 1U], interpolation_points_);
       RCLCPP_INFO(this->get_logger(),
                   "生成贝塞尔路径段: edge=%d, direction=%s, points=%zu",
-                  selected_edge->id,
-                  traversing_forward ? "forward" : "reverse", segment.size());
+                  selected_edge->id, traversing_forward ? "forward" : "reverse",
+                  segment.size());
     } else {
       segment = interpolatePath(waypoints[i], waypoints[i + 1U],
                                 interpolation_points_);
