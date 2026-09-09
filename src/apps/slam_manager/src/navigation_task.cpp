@@ -1012,9 +1012,9 @@ void NavigationTaskExecutor::executePatrolAction(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<StartNavigation::Result>();
   uint32_t completed_count = 0U;
-  ScopeExit reset_robot_mode([this]() {
-    std::string reset_message;
-    callbacks_.set_robot_mode(0, reset_message);
+  ScopeExit keep_robot_mode([this]() {
+    std::string mode_message;
+    callbacks_.set_robot_mode(1, mode_message);
   });
 
   std::string robot_state_message;
@@ -1491,9 +1491,9 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   const auto goal = goal_handle->get_goal();
   auto result = std::make_shared<NavigateToPose::Result>();
   std::string message;
-  ScopeExit reset_robot_mode([this]() {
-    std::string reset_message;
-    callbacks_.set_robot_mode(0, reset_message);
+  ScopeExit keep_robot_mode([this]() {
+    std::string mode_message;
+    callbacks_.set_robot_mode(1, mode_message);
   });
 
   if (!callbacks_.navigation_allowed(message)) {

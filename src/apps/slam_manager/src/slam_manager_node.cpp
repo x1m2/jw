@@ -1444,12 +1444,14 @@ void SlamManagerNode::deleteMapCallback(
     return;
   }
 
-  // 非当前使用的地图可在任意运行状态下删除；当前定位加载的地图和
-  // 正在写入的建图目录必须保留，避免运行中的算法访问已删除文件。
-  if (map_id == selected_map_id_) {
+  // 非当前使用的地图可在任意运行状态下删除。当前选中的地图仅允许在
+  // 空闲状态删除，避免重定位或导航算法访问已删除文件。
+  const bool deleting_selected_map = map_id == selected_map_id_;
+  if (deleting_selected_map && state_machine_.mode() != SlamMode::kIdle) {
     response->success = false;
-    response->message =
-        "delete map rejected, map is currently loaded: " + map_id;
+    response->message = "delete map rejected, selected map is in use in " +
+                        std::string(toString(state_machine_.mode())) +
+                        " state: " + map_id;
     return;
   }
   if (!active_map_id_.empty() && map_id == active_map_id_) {
@@ -1461,6 +1463,14 @@ void SlamManagerNode::deleteMapCallback(
 
   response->success = map_storage_->deleteMap(map_id, response->message);
   if (response->success) {
+    if (deleting_selected_map) {
+      selected_map_id_.clear();
+      navigation_task_executor_->configureMap({}, {});
+      relocalization_succeeded_.store(false);
+      std::lock_guard<std::mutex> lock(current_pose_mutex_);
+      current_pose_ = geometry_msgs::msg::PoseStamped();
+      has_current_pose_ = false;
+    }
     RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
   } else {
     RCLCPP_WARN(get_logger(), "Delete map rejected: %s",
@@ -1776,10 +1786,10 @@ void SlamManagerNode::pauseNavigationCallback(
 
   publishMode();
   std::string mode_message;
-  if (!setRobotMode(0, mode_message)) {
+  if (!setRobotMode(1, mode_message)) {
     response->success = false;
     response->message =
-        "navigation paused, but failed to set robot mode=0: " + mode_message;
+        "navigation paused, but failed to set robot mode=1: " + mode_message;
     return;
   }
   response->success = true;
@@ -1813,22 +1823,22 @@ void SlamManagerNode::resumeNavigationCallback(
 
   std::string message;
   if (!navigation_task_executor_->setPaused(false, message)) {
-    std::string reset_message;
-    setRobotMode(0, reset_message);
+    std::string mode_message_after_failure;
+    setRobotMode(1, mode_message_after_failure);
     response->success = false;
     response->message = "resume navigation failed: " + message +
-                        "; robot mode reset: " + reset_message;
+                        "; robot mode kept at 1: " + mode_message_after_failure;
     return;
   }
   if (!state_machine_.resumeNavigation()) {
     std::string pause_message;
     navigation_task_executor_->setPaused(true, pause_message);
-    std::string reset_message;
-    setRobotMode(0, reset_message);
+    std::string mode_message_after_failure;
+    setRobotMode(1, mode_message_after_failure);
     response->success = false;
     response->message =
-        "resume navigation state transition failed; robot mode reset: " +
-        reset_message;
+        "resume navigation state transition failed; robot mode kept at 1: " +
+        mode_message_after_failure;
     return;
   }
 
