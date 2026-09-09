@@ -202,7 +202,8 @@ uint64_t makeDirectedEdgeKey(uint32_t from_id, uint32_t to_id) {
 
 bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
                    DirectedEdgeIndex &directed_edge_indexes,
-                   std::string &message) {
+                   std::string &message,
+                   const TaskEdgePolicy &default_edge_policy) {
   std::ifstream input(path);
   if (!input.is_open()) {
     message = "failed to open patrol JSON: " + path.string();
@@ -274,20 +275,27 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
       }
 
       TaskTopologyEdge edge;
+      edge.policy = default_edge_policy;
       edge.id = static_cast<uint32_t>(raw_id);
       edge.from_id = static_cast<uint32_t>(raw_from_id);
       edge.to_id = static_cast<uint32_t>(raw_to_id);
       edge.edge_type = json_edge.value("edge_type", "straight");
       edge.bidirectional = json_edge.value("bidirectional", true);
-      edge.policy.linear_velocity = json_edge.value("linear_velocity", 0.5);
-      edge.policy.angular_velocity = json_edge.value("angular_velocity", 0.5);
-      edge.policy.motion_direction = json_edge.value("motion_direction", 1);
+      edge.policy.linear_velocity = json_edge.value(
+          "linear_velocity", default_edge_policy.linear_velocity);
+      edge.policy.angular_velocity = json_edge.value(
+          "angular_velocity", default_edge_policy.angular_velocity);
+      edge.policy.motion_direction = json_edge.value(
+          "motion_direction", default_edge_policy.motion_direction);
       edge.policy.obstacle_stop_enabled =
-          json_edge.value("obstacle_stop_enabled", true);
+          json_edge.value("obstacle_stop_enabled",
+                          default_edge_policy.obstacle_stop_enabled);
       edge.policy.obstacle_avoidance_enabled =
-          json_edge.value("obstacle_avoidance_enabled", false);
+          json_edge.value("obstacle_avoidance_enabled",
+                          default_edge_policy.obstacle_avoidance_enabled);
       edge.policy.obstacle_avoidance_distance_m =
-          json_edge.value("obstacle_avoidance_distance_m", 0.5);
+          json_edge.value("obstacle_avoidance_distance_m",
+                          default_edge_policy.obstacle_avoidance_distance_m);
 
       if (!edge_ids.insert(edge.id).second) {
         message = "duplicate JSON edge id=" + std::to_string(edge.id);
@@ -512,7 +520,8 @@ const TaskTopologyEdge *findTraversalEdge(
 bool appendFallbackStraightEdge(TaskTopologyGraph &graph,
                                 DirectedEdgeIndex &directed_edge_indexes,
                                 uint32_t from_id, uint32_t to_id,
-                                uint64_t &next_edge_id, std::string &message) {
+                                uint64_t &next_edge_id, std::string &message,
+                                const TaskEdgePolicy &default_edge_policy) {
   if (next_edge_id > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
     message = "cannot allocate a fallback runtime edge id";
     return false;
@@ -530,6 +539,7 @@ bool appendFallbackStraightEdge(TaskTopologyGraph &graph,
   }
 
   TaskTopologyEdge edge;
+  edge.policy = default_edge_policy;
   edge.id = static_cast<uint32_t>(next_edge_id++);
   edge.from_id = from_id;
   edge.to_id = to_id;
@@ -1054,7 +1064,7 @@ void NavigationTaskExecutor::executePatrolAction(
     TaskTopologyGraph graph;
     DirectedEdgeIndex directed_edge_indexes;
     if (!parseTaskJson(task_json_file, graph, directed_edge_indexes,
-                       topology_message)) {
+                       topology_message, config_.default_edge_policy)) {
       result->success = false;
       result->completed_count = 0U;
       result->message = topology_message;
@@ -1155,7 +1165,8 @@ void NavigationTaskExecutor::executePatrolAction(
       }
 
       if (!appendFallbackStraightEdge(graph, directed_edge_indexes, from_id,
-                                      to_id, next_edge_id, topology_message)) {
+                                      to_id, next_edge_id, topology_message,
+                                      config_.default_edge_policy)) {
         result->success = false;
         result->completed_count = 0U;
         result->message = topology_message;
@@ -1173,7 +1184,8 @@ void NavigationTaskExecutor::executePatrolAction(
     // 没有任务JSON时保留基础巡检能力：直接使用Action数组，并为相邻节点
     // 生成默认双向直线边。此路径没有自定义边策略和区域配置。
     patrol_nodes.assign(goal->nodes.begin(), goal->nodes.end());
-    topology_written = topology_writer_->write(patrol_nodes, topology_message);
+    topology_written = topology_writer_->write(
+        patrol_nodes, topology_message, config_.default_edge_policy);
     if (topology_written) {
       RCLCPP_WARN(node_->get_logger(),
                   "[APP][NAVIGATION_FALLBACK] task JSON does not exist for "
@@ -1536,7 +1548,7 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   // 单点导航同样更新统一规划器输入，不覆盖APP的task.json。
   topology_file_ = task_directory_ / "topology_map.json";
   topology_writer_->setOutputFile(topology_file_);
-  TaskEdgePolicy policy;
+  TaskEdgePolicy policy = config_.default_edge_policy;
   policy.obstacle_avoidance_enabled = goal->enable_avoidance;
   if (!topology_writer_->write(topology_nodes, message, policy)) {
     result->success = false;

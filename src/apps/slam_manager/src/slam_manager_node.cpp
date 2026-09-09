@@ -97,6 +97,13 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       declare_parameter<bool>("navigation.enable_skip_first_target", true);
   const auto navigation_skip_first_target_threshold =
       declare_parameter<double>("navigation.skip_first_target_threshold", 0.8);
+  TaskEdgePolicy default_edge_policy;
+  default_edge_policy.obstacle_stop_enabled = declare_parameter<bool>(
+      "navigation.default_edge_policy.obstacle_stop_enabled", true);
+  default_edge_policy.obstacle_avoidance_enabled = declare_parameter<bool>(
+      "navigation.default_edge_policy.obstacle_avoidance_enabled", false);
+  default_edge_policy.obstacle_avoidance_distance_m = declare_parameter<double>(
+      "navigation.default_edge_policy.obstacle_avoidance_distance_m", 0.5);
   map_storage_ = std::make_unique<MapStorage>(
       map_root, static_cast<std::size_t>(configured_max_maps));
   bbs_voxel_generator_ = std::make_unique<BbsVoxelGenerator>(
@@ -135,7 +142,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       NavigationTaskExecutor::Config{
           navigation_control_timeout_sec, navigation_worker_timeout_sec,
           navigation_goal_timeout_sec, navigation_enable_skip_first_target,
-          navigation_skip_first_target_threshold},
+          navigation_skip_first_target_threshold, default_edge_policy},
       NavigationTaskExecutor::Callbacks{
           [this]() { publishMode(); },
           [this](uint8_t state) { publishRuntimeState(state); },
@@ -1047,8 +1054,7 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   }
 
   if (options.stop_existing_worker) {
-    const uint64_t active_session_id =
-        active_localization_session_id_.load();
+    const uint64_t active_session_id = active_localization_session_id_.load();
     RCLCPP_INFO(get_logger(),
                 "Stopping localization before %s: active_session=%llu",
                 options.source.c_str(),
@@ -1088,7 +1094,8 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     if (state_machine_.mode() != SlamMode::kNavigating) {
       result.message = options.source +
                        " relocalization requires active navigation, current "
-                       "state=" + std::string(toString(state_machine_.mode()));
+                       "state=" +
+                       std::string(toString(state_machine_.mode()));
       return result;
     }
   } else {
@@ -1314,8 +1321,8 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   }
   if (cleanup_result.success()) {
     uint64_t expected_session_id = localization_session_id;
-    active_localization_session_id_.compare_exchange_strong(
-        expected_session_id, 0U);
+    active_localization_session_id_.compare_exchange_strong(expected_session_id,
+                                                            0U);
     if (!options.preserve_navigation_state) {
       state_machine_.localizationFailed();
       publishMode();
@@ -1608,22 +1615,21 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
     auto future = get_robot_state_client_->async_send_request(request);
     if (future.wait_for(timeout) != std::future_status::ready) {
       get_robot_state_client_->remove_pending_request(future);
-      message = std::string("robot state service '") +
-                kRobotStateServiceName + "' timed out after " +
-                std::to_string(kRobotStateTimeoutSec) + " seconds";
+      message = std::string("robot state service '") + kRobotStateServiceName +
+                "' timed out after " + std::to_string(kRobotStateTimeoutSec) +
+                " seconds";
       RCLCPP_WARN(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
       return false;
     }
 
     const auto response = future.get();
-    const bool allowed = response->code == 0 &&
-                         response->state == kNavigationRequiredRobotState;
+    const bool allowed =
+        response->code == 0 && response->state == kNavigationRequiredRobotState;
     RCLCPP_INFO(get_logger(),
                 "[NAVIGATION_GATE] GetState response: state='%s' code=%d "
                 "required_state='%s' allowed=%s",
                 response->state.c_str(), response->code,
-                kNavigationRequiredRobotState,
-                allowed ? "true" : "false");
+                kNavigationRequiredRobotState, allowed ? "true" : "false");
     if (!allowed) {
       message = "navigation rejected: robot state='" + response->state +
                 "', code=" + std::to_string(response->code) +
@@ -1772,8 +1778,8 @@ void SlamManagerNode::pauseNavigationCallback(
   std::string mode_message;
   if (!setRobotMode(0, mode_message)) {
     response->success = false;
-    response->message = "navigation paused, but failed to set robot mode=0: " +
-                        mode_message;
+    response->message =
+        "navigation paused, but failed to set robot mode=0: " + mode_message;
     return;
   }
   response->success = true;
@@ -1800,8 +1806,8 @@ void SlamManagerNode::resumeNavigationCallback(
   std::string mode_message;
   if (!setRobotMode(1, mode_message)) {
     response->success = false;
-    response->message = "resume navigation failed to set robot mode=1: " +
-                        mode_message;
+    response->message =
+        "resume navigation failed to set robot mode=1: " + mode_message;
     return;
   }
 

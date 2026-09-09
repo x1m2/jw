@@ -59,6 +59,13 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。配置
 `navigation.enable_set_mode: false`可统一禁用上述`/SetMode`调用。
 
+`navigation.default_edge_policy`提供全局默认边策略：
+`obstacle_stop_enabled`、`obstacle_avoidance_enabled`和
+`obstacle_avoidance_distance_m`。任务JSON边中已提供的字段覆盖这些默认值，
+区域策略再覆盖当前边策略，因此优先级为“区域 > 边 > YAML”。其中
+`obstacle_avoidance_distance_m`当前仅完成读取和路径策略传递，尚未接入具体
+绕障算法。
+
 ```text
 APP task/task.json -------------------┐
                                       ├-> slam_manager生成topology_map.json

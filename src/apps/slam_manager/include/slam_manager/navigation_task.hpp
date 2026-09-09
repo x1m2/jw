@@ -72,7 +72,9 @@ using DirectedEdgeIndex = std::unordered_map<uint64_t, std::size_t>;
 uint64_t makeDirectedEdgeKey(uint32_t from_id, uint32_t to_id);
 bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
                    DirectedEdgeIndex &directed_edge_indexes,
-                   std::string &message);
+                   std::string &message,
+                   const TaskEdgePolicy &default_edge_policy =
+                       TaskEdgePolicy{});
 const TaskTopologyEdge *findDirectEdge(
     const TaskTopologyGraph &graph,
     const DirectedEdgeIndex &directed_edge_indexes, uint32_t from_id,
@@ -111,6 +113,7 @@ class NavigationTaskExecutor {
     double goal_timeout_sec{300.0};
     bool enable_skip_first_target{true};
     double skip_first_target_threshold{0.8};
+    TaskEdgePolicy default_edge_policy;
   };
 
   struct Callbacks {
