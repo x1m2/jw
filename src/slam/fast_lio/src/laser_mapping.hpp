@@ -56,6 +56,7 @@ class LaserMappingNode : public rclcpp::Node {
                          std_srvs::srv::Trigger::Response::SharedPtr res);
   template <typename T>
   void set_posestamp(T &out);
+  Eigen::Matrix4d get_imu_to_base_transform();
   Eigen::Matrix4d get_odom_to_base_transform();
   Eigen::Matrix4d get_output_base_transform();
   Eigen::Vector3d transform_odom_point_to_output(const Eigen::Vector3d &p_odom);
@@ -71,6 +72,10 @@ class LaserMappingNode : public rclcpp::Node {
   void RGBpointBodyToWorld(PointType const *const pi, PointType *const po);
 
   void RGBpointBodyLidarToIMU(PointType const *const pi, PointType *const po);
+
+  void RGBpointBodyIMUToBaseLink(
+      PointType const *const pi, PointType *const po,
+      const Eigen::Matrix4d &T_base_imu);
 
   void publish_frame_world(
       rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr

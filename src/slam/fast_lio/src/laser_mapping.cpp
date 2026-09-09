@@ -1025,12 +1025,7 @@ void LaserMappingNode::h_share_model(
   solve_time += omp_get_wtime() - solve_start_;
 }
 
-Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() {
-  // FAST-LIO state: odom -> imu_link
-  Eigen::Matrix4d T_odom_imu = Eigen::Matrix4d::Identity();
-  T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
-  T_odom_imu.block<3, 1>(0, 3) = state_point.pos;
-
+Eigen::Matrix4d LaserMappingNode::get_imu_to_base_transform() {
   if (!gravity_aligned_lidar_tilt_initialized_) {
     const char *tilt_source = "gravity_aligned";
     if (align_gravity) {
@@ -1069,7 +1064,17 @@ Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() {
   T_imu_lidar.block<3, 3>(0, 0) = state_point.offset_R_L_I.toRotationMatrix();
   T_imu_lidar.block<3, 1>(0, 3) = state_point.offset_T_L_I;
 
-  const Eigen::Matrix4d T_base_imu = T_base_lidar * T_imu_lidar.inverse();
+  // Convert points expressed in imu_link into base_link.
+  return T_base_lidar * T_imu_lidar.inverse();
+}
+
+Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() {
+  // FAST-LIO state: odom -> imu_link
+  Eigen::Matrix4d T_odom_imu = Eigen::Matrix4d::Identity();
+  T_odom_imu.block<3, 3>(0, 0) = state_point.rot.toRotationMatrix();
+  T_odom_imu.block<3, 1>(0, 3) = state_point.pos;
+
+  const Eigen::Matrix4d T_base_imu = get_imu_to_base_transform();
 
   // Output pose: odom -> base_link.
   return T_odom_imu * T_base_imu.inverse();
@@ -1189,6 +1194,18 @@ void LaserMappingNode::RGBpointBodyLidarToIMU(PointType const *const pi,
   po->intensity = pi->intensity;
 }
 
+void LaserMappingNode::RGBpointBodyIMUToBaseLink(
+    PointType const *const pi, PointType *const po,
+    const Eigen::Matrix4d &T_base_imu) {
+  const Eigen::Vector4d p_imu(pi->x, pi->y, pi->z, 1.0);
+  const Eigen::Vector4d p_base = T_base_imu * p_imu;
+
+  po->x = static_cast<float>(p_base.x());
+  po->y = static_cast<float>(p_base.y());
+  po->z = static_cast<float>(p_base.z());
+  po->intensity = pi->intensity;
+}
+
 //------------------------------public functions------------------------------
 void LaserMappingNode::publish_frame_world(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
@@ -1251,15 +1268,18 @@ void LaserMappingNode::publish_frame_body(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
         pubLaserCloudFull_body) {
   int size = feats_undistort->points.size();
-  PointCloudXYZI::Ptr laserCloudIMUBody(new PointCloudXYZI(size, 1));
+  PointCloudXYZI::Ptr laserCloudBase(new PointCloudXYZI(size, 1));
+  const Eigen::Matrix4d T_base_imu = get_imu_to_base_transform();
 
   for (int i = 0; i < size; i++) {
-    RGBpointBodyLidarToIMU(&feats_undistort->points[i],
-                           &laserCloudIMUBody->points[i]);
+    PointType point_imu;
+    RGBpointBodyLidarToIMU(&feats_undistort->points[i], &point_imu);
+    RGBpointBodyIMUToBaseLink(&point_imu, &laserCloudBase->points[i],
+                              T_base_imu);
   }
 
   sensor_msgs::msg::PointCloud2 laserCloudmsg;
-  pcl::toROSMsg(*laserCloudIMUBody, laserCloudmsg);
+  pcl::toROSMsg(*laserCloudBase, laserCloudmsg);
   laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
   laserCloudmsg.header.frame_id = "base_link";
   pubLaserCloudFull_body->publish(laserCloudmsg);
@@ -1268,7 +1288,7 @@ void LaserMappingNode::publish_frame_body(
   constexpr float voxel_leaf_size = 0.7F;
   pcl::VoxelGrid<PointType> voxel_filter;
   voxel_filter.setLeafSize(voxel_leaf_size, voxel_leaf_size, voxel_leaf_size);
-  voxel_filter.setInputCloud(laserCloudIMUBody);
+  voxel_filter.setInputCloud(laserCloudBase);
   PointCloudXYZI downsampled_cloud;
   voxel_filter.filter(downsampled_cloud);
 
