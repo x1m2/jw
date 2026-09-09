@@ -1,5 +1,6 @@
 #include "slam_manager/navigation_task.hpp"
 
+#include <tf2/LinearMath/Scalar.hpp>
 #include <tf2/utils.h>
 
 #include <algorithm>
@@ -1116,12 +1117,17 @@ void NavigationTaskExecutor::executePatrolAction(
 
       if (traversal_edge != nullptr) {
         if (reverse_traversal) {
+          const double json_theta = patrol_nodes[index + 1U].theta;
+          patrol_nodes[index + 1U].theta =
+              tf2NormalizeAngle(json_theta + TF2SIMD_PI);
           RCLCPP_INFO(
               node_->get_logger(),
               "[BIDIRECTIONAL_PATROL_EDGE] transition %u -> %u reuses JSON "
-              "edge %u (%u -> %u)",
+              "edge %u (%u -> %u); arrival theta adjusted from %.6f to "
+              "%.6f rad",
               from_id, to_id, traversal_edge->id, traversal_edge->from_id,
-              traversal_edge->to_id);
+              traversal_edge->to_id, json_theta,
+              patrol_nodes[index + 1U].theta);
         }
         if (traversal_edge->edge_type == "map_connection") {
           requires_relocalization[index + 1U] = true;

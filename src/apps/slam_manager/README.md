@@ -112,7 +112,11 @@ A -> B为map_connection时：
   `bidirectional=true`时复用同一条edge，不生成新的runtime反向edge，也不修改原始
   任务JSON。例如JSON只有`4->5`且为双向时，Action可以直接执行`5->4`。实际遍历
   方向由`TaskTarget.from_node_id -> target.node_id`确定；Bezier反向遍历时由全局规划器
-  反向使用曲线几何。显式配置`bidirectional=false`可保留单向边语义。
+  反向使用曲线几何。反向复用双向边时，该次到点朝向使用目标节点JSON中的
+  `theta + π`并归一化到`[-π, π]`；只调整本次Action中的节点实例，不修改JSON或
+  runtime拓扑节点。因此例如JSON路径为`0,1,2,3`，Action执行`0,1,2,3,2,1`时，
+  后两个目标节点`2,1`分别使用其JSON朝向加180度。显式配置`bidirectional=false`
+  可保留单向边语义。
 - 单点导航和巡检统一通过`/navigation/task_target`发送`slam_manager_interfaces/TaskTarget`。
   `use_topology=false`按坐标规划；`use_topology=true`按拓扑ID规划。巡检消息
   携带上一已完成节点ID，并复用`NavigationNode`传递当前目标。
