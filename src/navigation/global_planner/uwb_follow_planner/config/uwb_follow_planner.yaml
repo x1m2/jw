@@ -47,7 +47,7 @@ uwb_follow_planner_node:
     # 只对该时间范围内的短回环执行合并（秒）
     short_loop_max_age: 4.0
     # 输出路径相邻点的目标间距（米）
-    path_point_spacing: 0.2
+    path_point_spacing: 0.05
 
     # ==================== 跟随状态与距离滞回 ====================
     # 机器人期望保持在人员后方的跟随距离（米）
@@ -64,7 +64,7 @@ uwb_follow_planner_node:
     # 人员持续移动达到该时长后才确认移动状态（秒），用于抑制测量噪声
     movement_confirm_time: 0.6
     # 从机器人看，当前人员方向与已锁定目标方向的夹角超过该值时更新目标（度）
-    target_angle_update_threshold_degrees: 10.0
+    target_angle_update_threshold_degrees: 5.0
     # 即使方向不变，实时候选目标相对已锁定目标移动超过该距离也更新（米）
     target_position_update_threshold: 0.4
     # 超过该时间未收到有效 UWB 数据则认为目标丢失（秒）

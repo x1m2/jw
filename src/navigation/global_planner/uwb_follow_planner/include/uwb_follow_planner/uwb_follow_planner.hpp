@@ -160,6 +160,7 @@ class UwbFollowPlanner : public rclcpp::Node {
   bool movement_candidate_active_{false};
   std::atomic<uint8_t> avoidance_state_{
       navigation_interfaces::msg::AvoidanceState::IDLE};
+  std::atomic<bool> fresh_dynamic_path_requested_{false};
   // BLE仅在操作时发布一次，因此命令必须锁存；节点启动默认不允许跟随。
   std::atomic<int8_t> follow_command_{
       static_cast<int8_t>(FollowCommand::kStop)};
