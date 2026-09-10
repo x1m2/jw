@@ -22,7 +22,14 @@ AStarPlanner::AStarPlanner()
       footprint_half_length_(0.65),
       footprint_half_width_(0.50),
       start_obstacle_threshold_(80),
-      footprint_obstacle_threshold_(100) {}
+      footprint_obstacle_threshold_(100),
+      allow_initial_footprint_escape_(true),
+      initial_escape_max_distance_(0.8),
+      planning_timeout_sec_(0.30),
+      obstacle_proximity_distance_(1.20),
+      obstacle_proximity_weight_(2.0),
+      early_avoidance_distance_(0.60),
+      early_avoidance_weight_(2.0) {}
 
 bool AStarPlanner::initialize(rclcpp::Node::SharedPtr node) {
   node_ = node;
@@ -51,6 +58,25 @@ bool AStarPlanner::initialize(rclcpp::Node::SharedPtr node) {
       declareOrGetParameter(node_, "astar_start_obstacle_threshold", 80);
   footprint_obstacle_threshold_ =
       declareOrGetParameter(node_, "astar_footprint_obstacle_threshold", 100);
+  allow_initial_footprint_escape_ = declareOrGetParameter(
+      node_, "astar_allow_initial_footprint_escape", true);
+  initial_escape_max_distance_ = std::max(
+      0.0, declareOrGetParameter(
+               node_, "astar_initial_escape_max_distance", 0.8));
+  planning_timeout_sec_ = std::max(
+      0.01, declareOrGetParameter(node_, "astar_planning_timeout", 0.30));
+  obstacle_proximity_distance_ = std::max(
+      0.0, declareOrGetParameter(
+               node_, "astar_obstacle_proximity_distance", 1.20));
+  obstacle_proximity_weight_ = std::max(
+      0.0, declareOrGetParameter(
+               node_, "astar_obstacle_proximity_weight", 2.0));
+  early_avoidance_distance_ = std::max(
+      0.0, declareOrGetParameter(
+               node_, "astar_early_avoidance_distance", 0.60));
+  early_avoidance_weight_ = std::max(
+      0.0, declareOrGetParameter(
+               node_, "astar_early_avoidance_weight", 2.0));
   global_frame_ =
       declareOrGetParameter<std::string>(node_, "global_frame", "map");
 
@@ -72,9 +98,14 @@ bool AStarPlanner::initialize(rclcpp::Node::SharedPtr node) {
 
   RCLCPP_INFO(node_->get_logger(),
               "A* initialized: obstacle=%d, rectangular footprint=%.2fx%.2fm, "
-              "timeout=%.3fs, max_nodes=%zu",
+              "initial_escape=%d/%.2fm, timeout=%.3fs, early_avoid=%.2fm/%.2f, "
+              "obstacle_proximity=%.2fm/%.2f, max_nodes=%zu",
               obstacle_threshold_, 2.0 * footprint_half_length_,
-              2.0 * footprint_half_width_, kPlanningTimeoutSec,
+              2.0 * footprint_half_width_,
+              allow_initial_footprint_escape_ ? 1 : 0,
+              initial_escape_max_distance_, planning_timeout_sec_,
+              early_avoidance_distance_, early_avoidance_weight_,
+              obstacle_proximity_distance_, obstacle_proximity_weight_,
               kMaxSearchNodes);
   return true;
 }
@@ -158,6 +189,11 @@ CostmapConstPtr AStarPlanner::getPreparedCostmap() const {
   return prepared_costmap_.valid() ? prepared_costmap_.costmap : nullptr;
 }
 
+uint64_t AStarPlanner::getPreparedCostmapVersion() const {
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  return prepared_costmap_.valid() ? prepared_costmap_.version : 0U;
+}
+
 void AStarPlanner::setGlobalPath(const nav_msgs::msg::Path &global_path) {
   std::lock_guard<std::mutex> lock(data_mutex_);
   global_path_ = global_path;
@@ -166,7 +202,8 @@ void AStarPlanner::setGlobalPath(const nav_msgs::msg::Path &global_path) {
 
 bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
                             const geometry_msgs::msg::Point &goal,
-                            nav_msgs::msg::Path &path, double goal_yaw) {
+                            nav_msgs::msg::Path &path, double goal_yaw,
+                            const AStarAvoidanceHint &avoidance_hint) {
   CostmapConstPtr costmap_snapshot;
   nav_msgs::msg::Path global_path_snapshot;
   std::shared_ptr<const std::vector<uint8_t>> footprint_mask_snapshot;
@@ -291,18 +328,23 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
   bool goal_found = false;
   size_t searched_nodes = 0;
   bool search_limited = false;
+  size_t relaxed_escape_nodes = 0;
+  const double resolution = costmap.info.resolution;
+  const double initial_escape_cells =
+      initial_escape_max_distance_ / std::max(resolution, 1e-6);
   const auto search_start = std::chrono::steady_clock::now();
 
   while (!open_list.empty()) {
     const double elapsed = std::chrono::duration<double>(
                                std::chrono::steady_clock::now() - search_start)
                                .count();
-    if (searched_nodes >= kMaxSearchNodes || elapsed >= kPlanningTimeoutSec) {
+    if (searched_nodes >= kMaxSearchNodes ||
+        elapsed >= planning_timeout_sec_) {
       search_limited = true;
       RCLCPP_WARN_THROTTLE(
           node_->get_logger(), *node_->get_clock(), 1000,
           "A* search limited: nodes=%zu/%zu, elapsed=%.3f/%.3fs",
-          searched_nodes, kMaxSearchNodes, elapsed, kPlanningTimeoutSec);
+          searched_nodes, kMaxSearchNodes, elapsed, planning_timeout_sec_);
       break;
     }
     const AStarQueueEntry entry = open_list.top();
@@ -356,9 +398,45 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
       const double motion_yaw = std::atan2(
           static_cast<double>(neighbor_y - current_y),
           static_cast<double>(neighbor_x - current_x));
-      if (isRectangleFootprintBlocked(neighbor_x, neighbor_y, motion_yaw,
-                                      costmap, footprint_mask)) {
-        continue;
+      const bool current_footprint_blocked =
+          isRectangleFootprintBlocked(current_x, current_y, motion_yaw,
+                                      costmap, footprint_mask);
+      const bool neighbor_footprint_blocked =
+          isRectangleFootprintBlocked(neighbor_x, neighbor_y, motion_yaw,
+                                      costmap, footprint_mask);
+      bool relaxed_initial_escape = false;
+      if (neighbor_footprint_blocked) {
+        const double escape_dx = static_cast<double>(neighbor_x - start_x);
+        const double escape_dy = static_cast<double>(neighbor_y - start_y);
+        const bool inside_escape_radius =
+            std::hypot(escape_dx, escape_dy) <= initial_escape_cells + 1e-9;
+        // 只允许从仍处于footprint冲突的起点前缀继续向外移动。一旦进入
+        // 严格安全栅格，不能再次进入宽松区域。中心栅格仍必须满足起点
+        // 硬障碍阈值，因此该机制不会让机器人中心穿过墙体或未知区域。
+        relaxed_initial_escape =
+            allow_initial_footprint_escape_ && current_footprint_blocked &&
+            inside_escape_radius &&
+            isStartPositionValid(neighbor_x, neighbor_y, costmap,
+                                 footprint_mask);
+        // 宽松前缀禁用对角步，避免中心沿栅格角部穿过真实障碍。
+        if (!relaxed_initial_escape ||
+            (neighbor_x != current_x && neighbor_y != current_y)) {
+          continue;
+        }
+        // 进入宽松前缀后保持同一个平移方向，直到footprint完全离开障碍。
+        // 否则A*可能在尚无旋转空间的位置生成直角折点，后续运动校验仍会
+        // 正确拒绝它，造成反复规划同一条不可执行路径。
+        if (entry.cell_index != start_index) {
+          const int32_t parent_index =
+              search_parent_indices_[entry.cell_index];
+          if (parent_index < 0) continue;
+          const int parent_x = parent_index % width;
+          const int parent_y = parent_index / width;
+          if (current_x - parent_x != neighbor_x - current_x ||
+              current_y - parent_y != neighbor_y - current_y) {
+            continue;
+          }
+        }
       }
 
       const int step_x = neighbor_x - current_x;
@@ -384,9 +462,15 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
       double deviation_cost = calculatePathDeviationCost(
           neighbor_x, neighbor_y, costmap, global_path_snapshot);
 
+      // 8邻域本来就允许第一步选择forward-left/forward-right。侧绕提示将
+      // 已知障碍物的软距离和起点附近的侧向趋势加入g代价，使搜索无需先
+      // 沿原方向走到硬障碍边缘才开始偏转。
+      const double early_avoidance_cost = calculateEarlyAvoidanceCost(
+          neighbor_x, neighbor_y, costmap, start, avoidance_hint);
+
       const double tentative_g = search_g_costs_[entry.cell_index] + move_cost +
                                  obstacle_avoidance_weight_ * obstacle_cost +
-                                 deviation_cost;
+                                 deviation_cost + early_avoidance_cost;
 
       if (tentative_g < search_g_costs_[neighbor_index]) {
         search_g_costs_[neighbor_index] = tentative_g;
@@ -396,6 +480,9 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
             calculateHeuristic(neighbor_x, neighbor_y, goal_x, goal_y);
         open_list.push(
             {neighbor_index, tentative_g, tentative_g + h_cost});
+        if (relaxed_initial_escape) {
+          ++relaxed_escape_nodes;
+        }
       }
     }
   }
@@ -406,14 +493,16 @@ bool AStarPlanner::planPath(const geometry_msgs::msg::Point &start,
     success = true;
     RCLCPP_DEBUG(
         node_->get_logger(),
-        "A* path planning successful, path length: %zu, searched_nodes=%zu",
-        path.poses.size(), searched_nodes);
+        "A* path planning successful, path length: %zu, searched_nodes=%zu, "
+        "relaxed_escape_nodes=%zu",
+        path.poses.size(), searched_nodes, relaxed_escape_nodes);
   } else {
     RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 1000,
         "A* path planning failed: searched_nodes=%zu, visited_nodes=%zu, "
-        "limited=%s",
-        searched_nodes, searched_nodes, search_limited ? "true" : "false");
+        "limited=%s, relaxed_escape_nodes=%zu",
+        searched_nodes, searched_nodes, search_limited ? "true" : "false",
+        relaxed_escape_nodes);
   }
 
   return success;
@@ -477,6 +566,88 @@ bool AStarPlanner::isObstacleWithDiagnostics(
     }
   }
 
+  int collision_grid_x = -1;
+  int collision_grid_y = -1;
+  int collision_cost = -998;
+  geometry_msgs::msg::Point collision_world;
+  collision_world.x = std::numeric_limits<double>::quiet_NaN();
+  collision_world.y = std::numeric_limits<double>::quiet_NaN();
+  const char *collision_kind = "NONE";
+  if (!inside_map) {
+    collision_grid_x = grid_x;
+    collision_grid_y = grid_y;
+    gridToWorld(collision_grid_x, collision_grid_y, costmap, collision_world);
+    collision_kind = "CENTER_OUT_OF_MAP";
+  } else if (raw_cost < 0) {
+    collision_grid_x = grid_x;
+    collision_grid_y = grid_y;
+    collision_cost = raw_cost;
+    gridToWorld(collision_grid_x, collision_grid_y, costmap, collision_world);
+    collision_kind = "CENTER_UNKNOWN";
+  } else if (raw_cost >= obstacle_threshold_) {
+    collision_grid_x = grid_x;
+    collision_grid_y = grid_y;
+    collision_cost = raw_cost;
+    gridToWorld(collision_grid_x, collision_grid_y, costmap, collision_world);
+    collision_kind = "CENTER_COST";
+  } else if (footprint_blocked) {
+    // 与isRectangleFootprintBlocked()使用完全相同的几何范围，
+    // 记录第一个导致候选中心被拒绝的footprint栅格。
+    const double resolution = costmap.info.resolution;
+    const double cell_padding = resolution * std::sqrt(0.5);
+    const double half_length = footprint_half_length_ + cell_padding;
+    const double half_width = footprint_half_width_ + cell_padding;
+    const int radius_cells = static_cast<int>(std::ceil(
+        std::hypot(half_length, half_width) / resolution));
+    const double cos_yaw = std::cos(yaw);
+    const double sin_yaw = std::sin(yaw);
+    bool collision_found = false;
+    for (int dy = -radius_cells; dy <= radius_cells && !collision_found;
+         ++dy) {
+      for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
+        const double world_dx = static_cast<double>(dx) * resolution;
+        const double world_dy = static_cast<double>(dy) * resolution;
+        const double local_x = cos_yaw * world_dx + sin_yaw * world_dy;
+        const double local_y = -sin_yaw * world_dx + cos_yaw * world_dy;
+        if (std::abs(local_x) > half_length ||
+            std::abs(local_y) > half_width) {
+          continue;
+        }
+
+        const int check_x = grid_x + dx;
+        const int check_y = grid_y + dy;
+        collision_grid_x = check_x;
+        collision_grid_y = check_y;
+        gridToWorld(check_x, check_y, costmap, collision_world);
+        if (!isValidCell(check_x, check_y, costmap)) {
+          collision_kind = "FOOTPRINT_OUT_OF_MAP";
+          collision_found = true;
+          break;
+        }
+        const int check_index =
+            check_y * static_cast<int>(costmap.info.width) + check_x;
+        collision_cost = static_cast<int>(costmap.data[check_index]);
+        if (costmap.data[check_index] < 0) {
+          collision_kind = "FOOTPRINT_UNKNOWN";
+          collision_found = true;
+          break;
+        }
+        if (footprint_mask[check_index] != 0U) {
+          collision_kind = "FOOTPRINT_HARD_MASK";
+          collision_found = true;
+          break;
+        }
+      }
+    }
+    if (!collision_found) {
+      collision_grid_x = grid_x;
+      collision_grid_y = grid_y;
+      collision_cost = raw_cost;
+      gridToWorld(grid_x, grid_y, costmap, collision_world);
+      collision_kind = "FOOTPRINT_UNRESOLVED";
+    }
+  }
+
   const char *reason = "FREE";
   if (!inside_map) {
     reason = "OUT_OF_MAP";
@@ -494,11 +665,14 @@ bool AStarPlanner::isObstacleWithDiagnostics(
       node_->get_logger(),
       "[AVOID_POINT_CHECK] point=%s world=(%.3f, %.3f), grid=(%d, %d), "
       "yaw=%.1f deg blocked=%d reason=%s raw_cost=%d threshold=%d "
-      "footprint_blocked=%d, "
+      "footprint_blocked=%d collision_kind=%s collision_world=(%.3f, %.3f) "
+      "collision_grid=(%d, %d) collision_cost=%d, "
       "map_frame=%s map=%ux%u res=%.3f origin=(%.3f, %.3f) version=%lu",
       point_name, point.x, point.y, grid_x, grid_y, yaw * 180.0 / M_PI,
       blocked ? 1 : 0, reason,
       raw_cost, obstacle_threshold_, footprint_blocked ? 1 : 0,
+      collision_kind, collision_world.x, collision_world.y,
+      collision_grid_x, collision_grid_y, collision_cost,
       costmap.header.frame_id.c_str(), costmap.info.width, costmap.info.height,
       costmap.info.resolution, costmap.info.origin.position.x,
       costmap.info.origin.position.y,
@@ -799,6 +973,66 @@ double AStarPlanner::calculateObstacleCost(
   } else {
     return 0.0;  // 距离足够远，不增加额外代价
   }
+}
+
+double AStarPlanner::calculateEarlyAvoidanceCost(
+    int x, int y, const nav_msgs::msg::OccupancyGrid &costmap,
+    const geometry_msgs::msg::Point &start,
+    const AStarAvoidanceHint &avoidance_hint) const {
+  if (!avoidance_hint.enabled || !std::isfinite(avoidance_hint.start_yaw)) {
+    return 0.0;
+  }
+
+  geometry_msgs::msg::Point point;
+  gridToWorld(x, y, costmap, point);
+  const double dx = point.x - start.x;
+  const double dy = point.y - start.y;
+  const double cos_yaw = std::cos(avoidance_hint.start_yaw);
+  const double sin_yaw = std::sin(avoidance_hint.start_yaw);
+  const double forward = cos_yaw * dx + sin_yaw * dy;
+  const double lateral = -sin_yaw * dx + cos_yaw * dy;
+  const double signed_lateral =
+      static_cast<double>(avoidance_hint.side_sign) * lateral;
+  const double distance_from_start = std::hypot(dx, dy);
+
+  double cost = 0.0;
+  if (avoidance_hint.side_sign != 0 && early_avoidance_distance_ > 0.0 &&
+      distance_from_start <= early_avoidance_distance_ + 1e-9 &&
+      forward >= -costmap.info.resolution) {
+    // 目标侧的期望横移随前进距离逐渐增长。第一步对角扩展因此优于纯
+    // 前进，反向横移受到更强惩罚；它仍是软约束，狭窄环境可选择其他路。
+    const double progress = std::clamp(
+        distance_from_start / early_avoidance_distance_, 0.0, 1.0);
+    const double desired_lateral = 0.35 * early_avoidance_distance_ * progress;
+    const double lateral_shortfall =
+        std::max(0.0, desired_lateral - signed_lateral);
+    const double opposite_side = std::max(0.0, -signed_lateral);
+    cost += early_avoidance_weight_ *
+            (lateral_shortfall + 2.0 * opposite_side) /
+            std::max(early_avoidance_distance_, 1e-6);
+    if (forward > costmap.info.resolution * 0.25) {
+      // 对第一批扩展额外比较“前进量中有多少已经转向目标侧”。纯前进
+      // 会付出固定软代价，forward-side对角步则能立即满足比例要求。
+      const double side_fraction = signed_lateral /
+          std::max(std::abs(forward) + std::abs(lateral), 1e-6);
+      cost += early_avoidance_weight_ *
+              std::max(0.0, 0.35 - side_fraction);
+    }
+  }
+
+  if (obstacle_proximity_distance_ > 0.0) {
+    const double obstacle_distance = std::hypot(
+        point.x - avoidance_hint.obstacle_center.x,
+        point.y - avoidance_hint.obstacle_center.y);
+    if (obstacle_distance < obstacle_proximity_distance_) {
+      const double normalized =
+          (obstacle_proximity_distance_ - obstacle_distance) /
+          obstacle_proximity_distance_;
+      // 平方势场在外缘连续且较弱，接近障碍中心时迅速增大。
+      cost += obstacle_proximity_weight_ * normalized * normalized;
+    }
+  }
+  return cost;
 }
 
 double AStarPlanner::calculatePathDeviationCost(

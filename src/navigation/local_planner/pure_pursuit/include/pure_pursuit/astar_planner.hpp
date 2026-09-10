@@ -36,6 +36,16 @@ struct AStarQueueEntryCompare {
   }
 };
 
+// 局部绕障搜索提示。它只形成软代价，不改变A*可达性；未启用时保持
+// 通用点到点规划的原有行为。side_sign: +1左绕，-1右绕，0不指定。
+struct AStarAvoidanceHint {
+  AStarAvoidanceHint() : obstacle_center() {}
+  bool enabled{false};
+  geometry_msgs::msg::Point obstacle_center;
+  double start_yaw{0.0};
+  int side_sign{0};
+};
+
 class AStarPlanner {
  public:
   AStarPlanner();
@@ -53,6 +63,7 @@ class AStarPlanner {
   bool prepareLatestCostmap();
   bool hasPreparedCostmap() const;
   CostmapConstPtr getPreparedCostmap() const;
+  uint64_t getPreparedCostmapVersion() const;
 
   // 设置全局路径（用于计算路径偏离代价）
   void setGlobalPath(const nav_msgs::msg::Path &global_path);
@@ -61,7 +72,8 @@ class AStarPlanner {
   bool planPath(const geometry_msgs::msg::Point &start,
                 const geometry_msgs::msg::Point &goal,
                 nav_msgs::msg::Path &path,
-                double goal_yaw = std::numeric_limits<double>::quiet_NaN());
+                double goal_yaw = std::numeric_limits<double>::quiet_NaN(),
+                const AStarAvoidanceHint &avoidance_hint = {});
 
   // 检查点是否在障碍物中
   bool isObstacle(const geometry_msgs::msg::Point &point);
@@ -130,7 +142,13 @@ class AStarPlanner {
   double footprint_half_width_;       // 车体宽度一半加安全边距
   int start_obstacle_threshold_;      // 起点允许的最大Costmap代价值
   int footprint_obstacle_threshold_;  // footprint膨胀使用的硬障碍阈值
-  static constexpr double kPlanningTimeoutSec = 0.15;
+  bool allow_initial_footprint_escape_; // 起点footprint冲突时允许受限向外脱困
+  double initial_escape_max_distance_;  // 宽松起点区域的最大半径（m）
+  double planning_timeout_sec_;         // 单个候选点A*搜索时间上限（s）
+  double obstacle_proximity_distance_;  // 已知障碍物周围软代价作用距离（m）
+  double obstacle_proximity_weight_;    // 障碍物距离软代价权重
+  double early_avoidance_distance_;     // 起点附近提前形成侧向趋势的距离（m）
+  double early_avoidance_weight_;       // 起始侧绕趋势软代价权重
   static constexpr size_t kMaxSearchNodes = 50000;
 
   // 可视化参数
@@ -144,6 +162,10 @@ class AStarPlanner {
   double calculatePathDeviationCost(
       int x, int y, const nav_msgs::msg::OccupancyGrid &costmap,
       const nav_msgs::msg::Path &global_path) const;
+  double calculateEarlyAvoidanceCost(
+      int x, int y, const nav_msgs::msg::OccupancyGrid &costmap,
+      const geometry_msgs::msg::Point &start,
+      const AStarAvoidanceHint &avoidance_hint) const;
   bool isValidCell(int x, int y,
                    const nav_msgs::msg::OccupancyGrid &costmap) const;
   bool isObstacle(int grid_x, int grid_y,

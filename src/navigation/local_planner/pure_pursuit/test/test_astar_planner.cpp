@@ -50,6 +50,8 @@ PlannerContext makePlanner(const std::string &name) {
        rclcpp::Parameter("astar_footprint_padding", 0.1),
        rclcpp::Parameter("astar_start_obstacle_threshold", 80),
        rclcpp::Parameter("astar_footprint_obstacle_threshold", 100),
+       rclcpp::Parameter("astar_allow_initial_footprint_escape", true),
+       rclcpp::Parameter("astar_initial_escape_max_distance", 0.8),
        rclcpp::Parameter("astar_path_deviation_weight", 0.0)});
   PlannerContext context;
   context.node = std::make_shared<rclcpp::Node>(name, options);
@@ -192,6 +194,26 @@ TEST_F(AStarPlannerTest, InitialEscapeAllowsOnlyContinuousBlockedPrefix) {
   costmap.data[40 * costmap.info.width + 55] = 100;
   context.planner->setCostmap(costmap);
   EXPECT_FALSE(context.planner->isPathCollisionFree(escape_path, true));
+}
+
+TEST_F(AStarPlannerTest, PlansOutOfInitialFootprintOverlap) {
+  auto context = makePlanner("astar_plan_initial_escape_test");
+  auto costmap = makeCostmap();
+  costmap.data[40 * costmap.info.width + 40] = 100;
+  context.planner->setCostmap(costmap);
+
+  geometry_msgs::msg::Point start;
+  start.x = 4.65;
+  start.y = 4.05;
+  geometry_msgs::msg::Point goal;
+  goal.x = 6.0;
+  goal.y = 4.05;
+  context.planner->setGlobalPath(makeGlobalPath(start, goal));
+
+  nav_msgs::msg::Path result;
+  ASSERT_TRUE(context.planner->planPath(start, goal, result));
+  EXPECT_GE(result.poses.size(), 2U);
+  EXPECT_TRUE(context.planner->isPathCollisionFree(result, true));
 }
 
 TEST_F(AStarPlannerTest, RejectsCoordinateJustOutsideMap) {

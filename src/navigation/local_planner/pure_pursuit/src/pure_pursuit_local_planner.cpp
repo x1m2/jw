@@ -354,7 +354,8 @@ bool PurePursuitLocalPlanner::setGlobalPath(
   path_progress_index_ = 0;  // 新增：重置路径进度，防止回头
   smoothed_local_path_received_ = false;
   if (local_avoidance_manager_) {
-    local_avoidance_manager_->reset();
+    // setGlobalPath()自身负责原子取消旧绕障任务；这里不重复reset，避免
+    // generation无意义地递增两次以及重复发布清空可视化。
     local_avoidance_manager_->setDynamicPathMode(dynamic_path);
   }
   publishAvoidanceFailure(false);
@@ -371,6 +372,7 @@ bool PurePursuitLocalPlanner::setGlobalPath(
 
   if (front_obstacle_detector_) {
     front_obstacle_detector_->setGlobalPath(global_path_);
+    front_obstacle_detector_->setNarrowPassageReferencePath(global_path_);
   } else {
     RCLCPP_ERROR(node_->get_logger(),
                  "Front obstacle detector is not initialized");
@@ -411,8 +413,19 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     return false;
   }
 
-  // 执行避障决策前先更新当前拓扑段策略。
-  updatePathProgress(robot_pose);
+  bool local_tracking =
+      local_avoidance_manager_ && local_avoidance_manager_->isTrackingLocal();
+  const bool avoidance_in_progress =
+      local_tracking ||
+      avoidance_state_.load() !=
+          navigation_interfaces::msg::AvoidanceState::IDLE;
+
+  // 绕障期间冻结全局路径进度，避免机器人沿局部 A* 横移时，全局进度被
+  // 邻近或自交的后续路径段错误推进。到达绕障临时点后由 Manager 返回的
+  // resume_global_path_index 负责一次性、单调地完成进度衔接。
+  if (!avoidance_in_progress) {
+    updatePathProgress(robot_pose);
+  }
   const auto edge_policy = currentEdgePolicy();
   const double edge_linear_velocity = edge_policy.velocity_limit_enabled
                                           ? edge_policy.linear_velocity
@@ -422,14 +435,29 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
                                            : config_.max_angular_velocity;
   const int motion_direction = edge_policy.motion_direction;
   const bool avoidance_enabled = isObstacleAvoidanceEnabled();
-  bool local_tracking =
-      local_avoidance_manager_ && local_avoidance_manager_->isTrackingLocal();
   LocalAvoidanceOutput avoidance_output;
   bool avoidance_updated = false;
 
   auto apply_avoidance_transition = [this](const LocalAvoidanceOutput &output) {
     if (output.failure_changed) {
       publishAvoidanceFailure(output.failure_latched);
+    }
+    if (output.resume_global_path_index) {
+      const std::size_t resume_index = *output.resume_global_path_index;
+      if (resume_index >= global_path_.poses.size()) {
+        RCLCPP_WARN(node_->get_logger(),
+                    "[TEMP_GOAL_COMPLETE] ignore invalid resume index %zu "
+                    "(path size=%zu)",
+                    resume_index, global_path_.poses.size());
+      } else if (resume_index > path_progress_index_) {
+        const std::size_t previous_index = path_progress_index_;
+        path_progress_index_ = resume_index;
+        current_path_index_ = static_cast<int>(path_progress_index_);
+        publishCurrentObstacleStopPolicy();
+        RCLCPP_INFO(node_->get_logger(),
+                    "[TEMP_GOAL_COMPLETE] global progress advanced %zu -> %zu",
+                    previous_index, path_progress_index_);
+      }
     }
     if (output.exited_local_tracking) {
       smoothed_local_path_received_ = false;
@@ -460,7 +488,8 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   if (!avoidance_enabled && local_tracking) {
     const AvoidanceObservation clear_observation;
     avoidance_output = local_avoidance_manager_->update(
-        robot_pose, clear_observation, false, false, false);
+        robot_pose, clear_observation, false, false, false,
+        path_progress_index_);
     avoidance_updated = true;
     apply_avoidance_transition(avoidance_output);
     local_tracking = avoidance_output.tracking_local;
@@ -520,7 +549,8 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     avoidance_output = local_avoidance_manager_->update(
         robot_pose, observation, avoidance_enabled,
         controller_ && controller_->isAligning(),
-        obstacle_stop_active_.load() && planned_motion);
+        obstacle_stop_active_.load() && planned_motion,
+        path_progress_index_);
     apply_avoidance_transition(avoidance_output);
     local_tracking = avoidance_output.tracking_local;
   }
@@ -542,6 +572,7 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
 
   if (avoidance_output.mode == AvoidanceTrackingMode::FAILED ||
       avoidance_output.mode == AvoidanceTrackingMode::WAITING_COSTMAP ||
+      avoidance_output.mode == AvoidanceTrackingMode::WAITING_LOCAL_PATH ||
       avoidance_output.mode == AvoidanceTrackingMode::STOPPED_BLOCKED ||
       avoidance_output.mode == AvoidanceTrackingMode::WAITING_DYNAMIC_PATH) {
     cmd_vel = geometry_msgs::msg::Twist();

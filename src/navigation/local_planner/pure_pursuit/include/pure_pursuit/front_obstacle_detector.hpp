@@ -48,9 +48,22 @@ class FrontObstacleDetector {
   void setGlobalPath(const nav_msgs::msg::Path& global_path);
 
   /**
+   * @brief 更新窄通道检测使用的原始全局路径，不随局部A*路径切换。
+   */
+  void setNarrowPassageReferencePath(
+      const nav_msgs::msg::Path& global_path);
+
+  /**
    * @brief 绕障决策：检测障碍物中心及左右通道状态
    */
   AvoidanceInfo analyzeAvoidance(
+      const geometry_msgs::msg::PoseStamped& robot_pose);
+
+  /**
+   * @brief 以当前全局路径方向为局部纵轴检测连续中央通道。
+   * @note 第一阶段结果仅用于观测和测试，不改变 AvoidanceInfo 或控制路径。
+   */
+  NarrowPassageResult detectNarrowPassage(
       const geometry_msgs::msg::PoseStamped& robot_pose);
 
   /**
@@ -84,6 +97,11 @@ class FrontObstacleDetector {
   bool isPointInSectorLocal(double local_x, double local_y, double min_radius,
                             double max_radius, double angle_deg) const;
   const char* decisionToString(ObstacleDecision decision) const;
+  NarrowPassageResult detectNarrowPassageLocked(
+      const geometry_msgs::msg::PoseStamped& robot_pose);
+  void publishNarrowPassageVisualization(
+      const geometry_msgs::msg::PoseStamped& robot_pose,
+      const NarrowPassageResult& result);
 
   /**
    * @brief 生成扇形检测区域的边界点
@@ -98,6 +116,10 @@ class FrontObstacleDetector {
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
       detection_area_pub_;  // 检测区域可视化发布器
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr
+      narrow_passage_center_path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
+      narrow_passage_debug_marker_pub_;
 
   // 代价地图
   CostmapConstPtr costmap_;
@@ -105,6 +127,8 @@ class FrontObstacleDetector {
   mutable std::mutex costmap_mutex_;
   nav_msgs::msg::Path global_path_;
   bool has_global_path_;
+  nav_msgs::msg::Path narrow_passage_reference_path_;
+  bool has_narrow_passage_reference_path_;
   mutable std::mutex global_path_mutex_;
 
   // 参数
@@ -122,6 +146,21 @@ class FrontObstacleDetector {
   bool enable_path_corridor_filter_;  // 是否只处理全局路径走廊内的绕障障碍
   double path_obstacle_margin_;  // 路径走廊额外安全边距
   double path_check_distance_;  // 机器人前方参与绕障判断的路径长度
+
+  // 窄通道影子检测参数；只生成诊断结果，不进入控制链。
+  bool narrow_passage_enabled_;
+  double narrow_passage_margin_;
+  double narrow_passage_forward_range_;
+  double narrow_passage_lateral_range_;
+  double narrow_passage_bin_size_;
+  double narrow_passage_min_length_;
+  double narrow_passage_valid_bin_ratio_;
+  int narrow_passage_center_smoothing_window_;
+  double narrow_passage_min_confidence_;
+  double narrow_passage_boundary_continuity_tolerance_;
+  double narrow_passage_direction_tolerance_degrees_;
+  double narrow_passage_width_stddev_tolerance_;
+  double narrow_passage_center_obstacle_ratio_threshold_;
 
   // 调试和可视化
   bool debug_mode_;

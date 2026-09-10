@@ -66,7 +66,7 @@ struct DetectorContext {
 DetectorContext makeDetector(const std::string &name) {
   rclcpp::NodeOptions options;
   options.parameter_overrides(
-      {rclcpp::Parameter("robot_width", 0.8),
+      {rclcpp::Parameter("robot_width", 0.7),
        rclcpp::Parameter("robot_length", 1.1),
        rclcpp::Parameter("front_obstacle_detector.avoid_min_distance", 1.0),
        rclcpp::Parameter("front_obstacle_detector.avoid_max_distance", 2.0),
@@ -141,6 +141,91 @@ TEST_F(FrontObstacleDetectorTest, NearCenteredObstacleRemainsBlocked) {
   EXPECT_FALSE(result.left_clear);
   EXPECT_FALSE(result.right_clear);
   EXPECT_NEAR(result.obstacle_local_y, 0.0, 0.05);
+}
+
+void addStraightPassage(nav_msgs::msg::OccupancyGrid &costmap) {
+  addObstacleRectangle(costmap, 0.0, 2.20, 0.62, 0.72);
+  addObstacleRectangle(costmap, 0.0, 2.20, -0.72, -0.62);
+}
+
+TEST_F(FrontObstacleDetectorTest, DetectsContinuousCenterPassage) {
+  auto context = makeDetector("continuous_center_passage_test");
+  auto costmap = std::make_shared<nav_msgs::msg::OccupancyGrid>(makeCostmap());
+  addStraightPassage(*costmap);
+  context.detector->updateCostmap(costmap);
+
+  const auto result =
+      context.detector->detectNarrowPassage(makeRobotPose());
+  EXPECT_TRUE(result.detected);
+  EXPECT_TRUE(result.center_clear);
+  EXPECT_NEAR(result.estimated_width, 1.25, 0.08);
+  EXPECT_NEAR(result.center_offset, 0.0, 0.06);
+  EXPECT_GE(result.confidence, 0.70);
+  EXPECT_FALSE(result.center_path.poses.empty());
+}
+
+TEST_F(FrontObstacleDetectorTest, RecoversCenterWhenRobotIsOffset) {
+  auto context = makeDetector("offset_center_passage_test");
+  auto costmap = std::make_shared<nav_msgs::msg::OccupancyGrid>(makeCostmap());
+  addStraightPassage(*costmap);
+  context.detector->updateCostmap(costmap);
+  auto robot_pose = makeRobotPose();
+  robot_pose.pose.position.y = 0.15;
+
+  const auto result = context.detector->detectNarrowPassage(robot_pose);
+  ASSERT_TRUE(result.detected);
+  ASSERT_FALSE(result.center_path.poses.empty());
+  EXPECT_TRUE(result.center_clear);
+  EXPECT_NEAR(result.center_offset, -0.15, 0.06);
+  EXPECT_NEAR(result.center_path.poses.front().pose.position.y, 0.0, 0.06);
+
+  robot_pose.pose.position.y = -0.15;
+  const auto right_offset_result =
+      context.detector->detectNarrowPassage(robot_pose);
+  ASSERT_TRUE(right_offset_result.detected);
+  ASSERT_FALSE(right_offset_result.center_path.poses.empty());
+  EXPECT_TRUE(right_offset_result.center_clear);
+  EXPECT_NEAR(right_offset_result.center_offset, 0.15, 0.06);
+  EXPECT_NEAR(right_offset_result.center_path.poses.front().pose.position.y,
+              0.0, 0.06);
+}
+
+TEST_F(FrontObstacleDetectorTest, SingleBoxIsNotPassage) {
+  auto context = makeDetector("single_box_not_passage_test");
+  auto costmap = std::make_shared<nav_msgs::msg::OccupancyGrid>(makeCostmap());
+  addObstacleRectangle(*costmap, 0.55, 1.05, -0.30, 0.30);
+  context.detector->updateCostmap(costmap);
+
+  const auto result =
+      context.detector->detectNarrowPassage(makeRobotPose());
+  EXPECT_FALSE(result.detected);
+  EXPECT_FALSE(result.center_clear);
+  EXPECT_TRUE(result.center_path.poses.empty());
+}
+
+TEST_F(FrontObstacleDetectorTest, CenterBoxKeepsPassageButBlocksCenter) {
+  auto context = makeDetector("center_box_blocks_passage_test");
+  auto costmap = std::make_shared<nav_msgs::msg::OccupancyGrid>(makeCostmap());
+  addStraightPassage(*costmap);
+  addObstacleRectangle(*costmap, 0.80, 1.20, -0.22, 0.22);
+  context.detector->updateCostmap(costmap);
+
+  const auto result =
+      context.detector->detectNarrowPassage(makeRobotPose());
+  EXPECT_TRUE(result.detected);
+  EXPECT_FALSE(result.center_clear);
+  EXPECT_NEAR(result.estimated_width, 1.25, 0.08);
+}
+
+TEST_F(FrontObstacleDetectorTest, OpenAreaIsNotPassage) {
+  auto context = makeDetector("open_area_not_passage_test");
+  auto costmap = std::make_shared<nav_msgs::msg::OccupancyGrid>(makeCostmap());
+  context.detector->updateCostmap(costmap);
+
+  const auto result =
+      context.detector->detectNarrowPassage(makeRobotPose());
+  EXPECT_FALSE(result.detected);
+  EXPECT_FALSE(result.center_clear);
 }
 
 }  // namespace

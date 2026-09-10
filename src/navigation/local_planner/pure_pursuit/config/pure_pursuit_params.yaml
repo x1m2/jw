@@ -16,39 +16,80 @@
     yaw_tolerance: 0.26                   # 最终航向容差（rad），约 15°
     yaw_adjustment_gain: 0.9              # 最终原地调向比例增益
     final_yaw_min_angular_velocity: 0.35   # 最终调向最小角速度（rad/s）
-    local_avoidance_align_enter_angle: 30.0 # 局部跟踪误差超过此值重新原地对齐（deg）
-    local_avoidance_align_exit_angle: 6.0   # 新局部段开始/重新对齐的退出阈值（deg）
+    local_avoidance_align_enter_angle: 40.0 # 局部跟踪误差超过此值重新原地对齐（deg）
+    local_avoidance_align_exit_angle: 15.0   # 新局部段开始/重新对齐的退出阈值（deg）
     local_avoidance_min_align_angular_velocity: 0.35 # 避障原地对齐最小角速度，高于底盘死区（rad/s）
     local_avoidance_lookahead_distance: 0.25 # 局部A*固定短前瞻，减少折角切弯（m）
-    local_avoidance_min_linear_velocity: 0.4 # 行走阶段最低巡航速度；对准/停障除外（m/s）
-    local_avoidance_max_linear_velocity: 0.5 # 绕障行走阶段最大线速度（m/s）
+    local_avoidance_min_linear_velocity: 0.5 # 行走阶段最低巡航速度；对准/停障除外（m/s）
+    local_avoidance_max_linear_velocity: 0.6 # 绕障行走阶段最大线速度（m/s）
 
     # ==================== 速度与平滑限制 ====================
-    max_linear_velocity: 0.6      # X 方向最大线速度（m/s）
+    max_linear_velocity: 0.75      # X 方向最大线速度（m/s）
     max_linear_velocity_y: 0.0    # 非全向底盘：禁止Y方向横移（m/s）
     max_angular_velocity: 0.7     # 最大角速度（rad/s）
     acceleration_limit: 0.5       # 最大加速度（m/s²）
     deceleration_limit: 0.8       # 最大减速度（m/s²）
 
     # ==================== 局部绕障过程 ====================
-    local_planning_frequency: 10.0         # 局部 A* 重规划频率（Hz）
-    avoidance_lateral_clearance: 1.2       # 单个临时点与障碍物中心的侧向距离（m）
-    avoidance_max_entry_angle: 50.0        # 当前位置进入临时点的最大夹角（deg）
-    avoidance_max_return_angle: 60.0       # 临时点回归全局路径的最大夹角（deg）
+    local_planning_frequency: 1.0        # 局部 A* 重规划频率（Hz）
+    # lateral_clearance仅保留旧单侧点接口兼容；新侧方候选使用下方边界参数。
+    avoidance_lateral_clearance: 1.0
+    avoidance_max_entry_angle: 50.0
+    avoidance_max_return_angle: 60.0
     avoidance_near_stop_margin: 0.0       # 路径净空直接使用1.0m硬停距离，不额外扩充
     avoidance_path_clearance: 0.5        # A*路径中心到本次障碍中心的最小净空（m）
-    avoidance_goal_tolerance: 0.35         # 到达侧向点/回归点的距离阈值（m）
-    avoidance_return_goal_clearance: 0.80  # 回归点周围的安全检查半径（m）
-    avoidance_return_obstacle_clearance: 1.5 # 回归点与本次障碍物中心的最小距离（m）
+    avoidance_goal_tolerance: 0.35         # 到达障碍后绕障临时点的距离阈值（m）
+    # 以下2项仅保留旧回归点实现的参数兼容
+    avoidance_return_goal_clearance: 0.80
+    avoidance_return_obstacle_clearance: 1.5
     avoidance_reentry_cooldown: 2.0        # 绕障完成后的再次触发冷却时间（s）
-    avoidance_max_planning_failures: 5     # 连续失败后快速换侧，避免同一路径长时间空转
-    avoidance_failure_retry_cooldown: 0.5  # 本轮失败后刷新地图并自动换侧重试（s）
-    avoidance_stall_timeout: 1.5          # 安全停障持续拦截且不移动多久后换侧重规划（s）
+    avoidance_max_planning_failures: 5     # 同一临时点连续规划失败达到该次数后重新选点
+    avoidance_failure_retry_cooldown: 0.5  # 不可恢复输入失败后的再次触发冷却（s）
+    avoidance_stall_timeout: 1.5          # 安全停障持续拦截且不移动多久后重规划同一临时点（s）
     avoidance_stall_distance: 0.05        # 该距离内视为机器人未产生有效位移（m）
     avoidance_stall_yaw_degrees: 5.0      # 原地角度变化超过该值视为仍在有效运动（deg）
-    avoidance_path_blocked_confirmations: 3 # 连续3帧阻塞才删除已锁定路径，抑制点云闪烁
-    dynamic_goal_change_distance: 1.0      # 动态目标累计移动超过该距离时取消旧绕障（m）
-    dynamic_goal_change_angle_degrees: 25.0 # 动态目标方向变化超过该角度时取消旧绕障（deg）
+    avoidance_path_blocked_confirmations: 3 # 不同Costmap版本连续确认路径/临时点失效的次数
+    dynamic_goal_change_distance: 2.0      # 动态目标累计移动超过该距离时取消旧绕障（m）
+    dynamic_goal_change_angle_degrees: 90.0 # 动态目标方向变化超过该角度时取消旧绕障（deg）
+
+    # 单段局部 A* 目标；没有安全临时点或 A* 暂不可用时停车并周期重试。
+    avoidance_temporary_goal_search_distance: 6.0 # 从当前活动路径投影点向前搜索临时点候选的最大弧长（m）
+    avoidance_temporary_goal_clearance: 0.5       # 临时点及连续安全段的圆形净空半径（m）
+    avoidance_temporary_goal_safe_path_length: 0.2 # 临时点后必须连续安全的路径长度（m）
+    avoidance_min_temporary_goal_distance_from_obstacle: 0.35 # 离开最后不安全采样后的最小弧长（m）
+    avoidance_temporary_goal_sample_spacing: 0.05  # 配置上限；实际不大于半个Costmap栅格（m）
+    avoidance_temporary_goal_retry_period: 0.5 # 无安全临时点或 A* 暂时失败后的重试周期（s）
+    avoidance_dynamic_side_goal_fallback_enabled: true # UWB短路径末端无障碍后路径点时，按已确认空旷侧生成临时点
+    # 侧方候选基于障碍物边界生成，不再固定相对障碍中心偏移，也不对同一个
+    # 失败点连续重试。下面两个旧参数仅保留参数兼容。
+    avoidance_side_goal_retry_forward_step: 0.25
+    avoidance_side_goal_retry_max_forward_offset: 0.75
+    avoidance_side_goal_boundary_search_radius: 1.5 # 障碍物边界估计的局部搜索半径（m）
+    avoidance_side_goal_boundary_longitudinal_band: 0.5 # 估计左右边界时的纵向关联半宽（m）
+    avoidance_side_goal_boundary_lateral_band: 0.5 # 估计障碍后边界时的横向关联半宽（m）
+
+    avoidance_side_goal_min_boundary_clearance: 0.65 # 机器人中心到障碍物侧边界的最小距离（m）
+    avoidance_side_goal_lateral_sample_step: 0.25 # 相邻横向候选的净空增量（m）
+    avoidance_side_goal_lateral_sample_count: 3 # 每个纵向位置的横向候选数
+
+    avoidance_side_goal_min_forward_clearance: 0.60 # 临时点越过障碍物前向边界的最小距离（m）
+    avoidance_side_goal_forward_sample_step: 0.4 # 相邻纵向候选的距离增量（m）
+    avoidance_side_goal_forward_sample_count: 4 # 每侧纵向候选数
+
+    # 基础3x4候选全部被终点footprint拒绝时，逐轮向侧外和障碍后方扩展。
+    # 扩展仍必须通过终点footprint、完整A*、路径净空和旋转扫掠检查。
+    avoidance_side_goal_expansion_rounds: 3
+    avoidance_side_goal_expansion_lateral_step: 0.3 # 每轮额外远离障碍侧边界（m）
+    avoidance_side_goal_expansion_forward_step: 0.40 # 每轮额外越过障碍前向边界（m）
+    avoidance_side_score_path_length_weight: 1.0 # 路径长度评分权重
+    avoidance_side_score_heading_weight: 1.5 # 初始转向角评分权重
+    avoidance_side_score_turn_weight: 0.5 # 整条路径累计转角评分权重
+    avoidance_side_score_clearance_weight: 3.0 # 近障路径惩罚权重（与最小净空成反比）
+    avoidance_side_score_raw_path_penalty: 2.0 # 无法平滑、仅能采用原始A*时的惩罚
+    avoidance_side_score_switch_side_penalty: 0.5 # 偏离触发时首选绕行侧的惩罚
+    avoidance_side_astar_candidate_limit: 3 # 快速评分后最多进入完整A*和安全检查的侧方候选数（建议3~5）
+    avoidance_replan_max_initial_heading_error_degrees: 35.0 # 已有局部路径失效后，新侧方路径允许的最大初始航向误差
+    avoidance_replan_heading_score_multiplier: 3.0 # 路径失效重选时初始航向误差评分的额外倍率
 
     # ==================== 8 邻域 A* 局部规划 ====================
     # 检测器和A*共用：大于等于该代价值时判为障碍并禁止通行。
@@ -56,15 +97,24 @@
     astar_allow_diagonal: true           # 是否允许对角线移动
     astar_diagonal_cost: 1.414           # 对角移动代价，通常取 sqrt(2)
     astar_straight_cost: 1.0             # 水平/垂直移动代价
-    astar_safety_margin: 4               # 障碍物周围软安全范围（栅格数）
+    astar_safety_margin: 3               # 障碍物周围软安全范围（栅格数）
     astar_path_deviation_weight: 0.0     # 偏离全局路径权重；0 表示不约束
     astar_obstacle_avoidance_weight: 5.0 # 靠近障碍物的附加代价权重
-    astar_footprint_padding: 0.15        # 矩形车体四周的硬碰撞余量（m）
+    astar_obstacle_proximity_distance: 1.20 # 已知触发障碍中心周围的提前绕行软代价范围（m）
+    astar_obstacle_proximity_weight: 2.0 # 越接近触发障碍，软代价增长越快
+    astar_early_avoidance_distance: 0.60 # 起点后该距离内鼓励立即向选定侧偏转（m）
+    astar_early_avoidance_weight: 2.0 # 起始侧绕趋势权重；只是软约束，不改变可达性
+    astar_planning_timeout: 0.30         # 单个候选点A*搜索时间上限（s）；复杂环境可测试0.30~0.50
+    astar_footprint_padding: 0.1        # 矩形车体四周的硬碰撞余量（m）
     astar_start_obstacle_threshold: 80  # 起点宽松阈值，独立于普通可通行阈值
     astar_footprint_obstacle_threshold: 100 # 用于footprint硬碰撞的Costmap阈值
+    astar_allow_initial_footprint_escape: true # 起点被保守footprint覆盖时，允许连续向严格安全区脱离
+    astar_initial_escape_max_distance: 0.8 # 起点宽松脱离前缀的最大长度（m），脱离后恢复严格footprint检查
+    avoidance_initial_escape_max_heading_error_degrees: 10.0 # 脱困路径与当前朝向误差不超过该值时跳过危险的原地对准
 
     # 局部A*使用近似圆弧的三次贝塞尔；优先满足转弯半径，同时受路段
     # 长度、偏离量和footprint安全校验限制。安全校验失败仍回退原始A*。
+    local_astar_smoothing_method: "bspline" # bezier、bspline或none
     local_astar_bezier_enabled: true
     local_astar_bezier_corner_distance: 0.80 # 拐点前后可使用的最大切线长度（m）
     local_astar_bezier_sample_spacing: 0.05 # 曲线最大采样间隔（m）
@@ -74,19 +124,33 @@
     local_astar_bezier_max_deviation: 0.25 # 相对原始折线的最大偏移（m）
     local_astar_bezier_visualization: true # 发布raw/bezier调试路径
 
+    # B样条对整段A*控制折线做C2连续平滑；通过method切换后才进入控制。
+    # 无论选择哪种算法，偏差、最小曲率半径或footprint校验失败都会回退。
+    local_astar_bspline_enabled: true
+    local_astar_bspline_degree: 3
+    local_astar_bspline_sample_spacing: 0.05
+    local_astar_bspline_simplify_tolerance: 0.10
+    local_astar_bspline_control_point_spacing: 0.50 # 首次恢复间距；兼顾0.30m转弯半径和0.25m偏差
+    local_astar_bspline_min_control_point_spacing: 0.15 # 自适应收缩下限，使失败曲线逐步贴近A*走廊
+    local_astar_bspline_adaptive_attempts: 4 # 从强平滑到贴近原路径的有限次安全尝试
+    local_astar_bspline_max_deviation: 0.25
+    local_astar_bspline_min_turn_radius: 0.30
+    local_astar_smoothing_start_trend_distance: 0.30 # pruning必须保留的起始绕障趋势长度（m）
+    local_astar_bspline_start_control_blend: 0.20 # P1向P2轻移，起点不动但更早产生曲率（0~0.45）
+
     # ==================== 绕障触发与通道检测 ====================
     front_obstacle_detector:
       obstacle_ratio_threshold: 0.05  # 路径走廊内障碍栅格占比超过 5% 即提前触发
 
       # 机器人前方扇环用于触发绕障；车体前缘～1.0m 的单侧障碍优先
       # 向相反侧规划，正前方障碍或对侧通道不足时仍判为 BLOCKED。
-      avoid_min_distance: 0.9       # 绕障触发起始/近障碍阻塞分界（m）
-      avoid_max_distance: 2.0       # 绕障检测最远距离（m）
+      avoid_min_distance: 0.5       # 绕障触发起始/近障碍阻塞分界（m）
+      avoid_max_distance: 1.8       # 绕障检测最远距离（m）
       avoid_sector_angle: 90.0      # 绕障检测扇形总角度（deg）
 
       safety_margin: 0.10           # 车体轮廓外扩安全距离（m）
-      side_passage_width: 1.0       # 车体外侧必须连续空出的通道宽度（m）
-      side_passage_obstacle_ratio_threshold: 0.02 # 通道内少量障碍也判为不可走
+      side_passage_width: 0.3       # 车体外侧必须连续空出的通道宽度（m）
+      side_passage_obstacle_ratio_threshold: 0.05 # 通道内少量障碍也判为不可走
       near_side_obstacle_lateral_threshold: 0.20 # 近障碍横向超过该值时只向相反侧绕行（m）
 
       # 只让全局路径走廊内的障碍物触发绕障，避免路径外障碍误触发。
@@ -97,3 +161,19 @@
       # ==================== 调试 ====================
       debug_mode: false             # 需要排查障碍检测时再开启详细日志
       enable_visualization: true    # 发布真实绕障扇环到 RViz
+
+    # ==================== 窄通道检测（第一阶段） ====================
+    # 只检测左右连续边界、估计通道宽度并发布中心线；不改变PP跟踪路径和速度。
+    narrow_passage_enabled: true
+    narrow_passage_margin: 0.12     # 最小宽度=robot_width+2*margin，当前为0.94m
+    narrow_passage_forward_range: 2.0
+    narrow_passage_lateral_range: 1.2
+    narrow_passage_bin_size: 0.15
+    narrow_passage_min_length: 1.0
+    narrow_passage_valid_bin_ratio: 0.70
+    narrow_passage_center_smoothing_window: 3
+    narrow_passage_min_confidence: 0.70
+    narrow_passage_boundary_continuity_tolerance: 0.20
+    narrow_passage_direction_tolerance_degrees: 20.0
+    narrow_passage_width_stddev_tolerance: 0.15
+    narrow_passage_center_obstacle_ratio_threshold: 0.02

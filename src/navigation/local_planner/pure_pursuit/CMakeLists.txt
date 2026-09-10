@@ -98,6 +98,11 @@ if(BUILD_TESTING)
     test/test_avoidance_path_planner.cpp)
   target_link_libraries(test_avoidance_path_planner ${PROJECT_NAME})
   ament_target_dependencies(test_avoidance_path_planner ${dependencies})
+
+  ament_add_gtest(test_local_avoidance_manager
+    test/test_local_avoidance_manager.cpp)
+  target_link_libraries(test_local_avoidance_manager ${PROJECT_NAME})
+  ament_target_dependencies(test_local_avoidance_manager ${dependencies})
 endif()
 
 ament_package()
