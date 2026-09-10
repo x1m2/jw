@@ -258,6 +258,18 @@ void FrontObstacleDetector::setNarrowPassageReferencePath(
       narrow_passage_reference_path_.poses.size() >= 2U;
 }
 
+void FrontObstacleDetector::setAvoidMaxDistance(double distance_m) {
+  if (!std::isfinite(distance_m) || distance_m < 0.0) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Ignoring invalid edge obstacle avoidance distance: %.3f",
+                distance_m);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(costmap_mutex_);
+  avoid_max_distance_ = distance_m;
+}
+
 FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
     const geometry_msgs::msg::PoseStamped &robot_pose) {
   // 整次检测固定使用同一张只读Costmap；更新回调只替换shared_ptr。

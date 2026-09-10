@@ -434,6 +434,11 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
                                            ? edge_policy.angular_velocity
                                            : config_.max_angular_velocity;
   const int motion_direction = edge_policy.motion_direction;
+  if (front_obstacle_detector_) {
+    // 边策略优先于YAML的 front_obstacle_detector.avoid_max_distance。
+    front_obstacle_detector_->setAvoidMaxDistance(
+        edge_policy.obstacle_avoidance_distance_m);
+  }
   const bool avoidance_enabled = isObstacleAvoidanceEnabled();
   LocalAvoidanceOutput avoidance_output;
   bool avoidance_updated = false;

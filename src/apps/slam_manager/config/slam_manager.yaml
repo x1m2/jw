@@ -29,9 +29,7 @@ slam_manager:
       # 首次执行巡检时，若当前二维位置距离首点不超过该阈值，则从第二点开始。
       enable_skip_first_target: true
       skip_first_target_threshold: 0.8
-      # 任务JSON未提供对应边字段时使用；区域策略的优先级仍高于边策略。
-      # 停障固定启用，不再作为任务/YAML可配置项。
-      # obstacle_avoidance_distance_m当前只随路径策略传递，尚未接入绕障算法。
+      # 当前边会用该值覆盖局部规划器YAML中的avoid_max_distance。
       default_edge_policy:
         obstacle_avoidance_enabled: false
         obstacle_avoidance_distance_m: 0.5

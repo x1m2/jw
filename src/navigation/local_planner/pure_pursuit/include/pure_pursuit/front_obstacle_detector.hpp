@@ -54,6 +54,11 @@ class FrontObstacleDetector {
       const nav_msgs::msg::Path& global_path);
 
   /**
+   * @brief 使用当前边策略覆盖绕障检测的最远距离。
+   */
+  void setAvoidMaxDistance(double distance_m);
+
+  /**
    * @brief 绕障决策：检测障碍物中心及左右通道状态
    */
   AvoidanceInfo analyzeAvoidance(
