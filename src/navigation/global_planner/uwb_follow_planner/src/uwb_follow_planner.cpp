@@ -203,7 +203,15 @@ void UwbFollowPlanner::avoidanceStateCallback(
                 message->state);
     return;
   }
-  avoidance_state_.store(message->state);
+  const uint8_t previous = avoidance_state_.exchange(message->state);
+  if (message->state ==
+          navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH &&
+      previous != message->state) {
+    fresh_dynamic_path_requested_.store(true);
+  } else if (message->state !=
+             navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH) {
+    fresh_dynamic_path_requested_.store(false);
+  }
 }
 
 void UwbFollowPlanner::odometryCallback(
@@ -420,15 +428,49 @@ void UwbFollowPlanner::planningTimerCallback() {
       avoidance_state == navigation_interfaces::msg::AvoidanceState::BLOCKED ||
       avoidance_state == navigation_interfaces::msg::AvoidanceState::FAILED;
   if (local_avoidance_owns_motion) {
-    // 绕障期间继续更新人员位置和历史轨迹，但不再发布新的控制参考路径。
-    // Pure Pursuit控制循环必须保持运行，由局部规划器负责绕行或停车。
-    valid_message.data =
-        has_uwb_ && (current_time - last_uwb_time_).seconds() <= uwb_timeout_;
+    // 局部避障继续拥有速度控制权，但不能屏蔽人员目标变化。否则A*在
+    // 某个不可达临时点等待时，PP永远收不到新目标，也就无法取消旧任务。
+    // 这里仍沿用正常目标更新阈值，只在目标确实更新时发布参考路径；PP
+    // 会再用更大的dynamic_goal_change阈值决定是否中断当前绕障。
+    const bool pose_fresh =
+        has_pose_ &&
+        (current_time - last_pose_time_).seconds() <= pose_timeout_;
+    const bool uwb_fresh =
+        has_uwb_ &&
+        (current_time - last_uwb_time_).seconds() <= uwb_timeout_;
+    valid_message.data = pose_fresh && uwb_fresh;
     valid_publisher_->publish(valid_message);
-    // The person may move significantly while avoidance owns the controller.
-    // Discard the old target so the first post-avoidance path uses the latest
-    // person position instead of resuming toward a stale goal.
-    has_follow_goal_ = false;
+
+    if (pose_fresh && uwb_fresh) {
+      const double map_range =
+          distance2d(robot_pose_.pose.position, person_map_);
+      if (map_range <= stop_follow_distance_) {
+        // 人已经进入停止距离时，继续绕旧障碍没有意义。暂停PP会安全地
+        // 清除局部避障任务，后续人员再次离开时按正常状态机生成新路径。
+        has_follow_goal_ = false;
+        hold_center_ = person_map_;
+        has_hold_center_ = true;
+        movement_candidate_active_ = false;
+        setState(FollowState::kHold);
+        RCLCPP_INFO_THROTTLE(
+            get_logger(), *get_clock(), 1000,
+            "UWB target entered stop distance during avoidance; "
+            "canceling the stale local task");
+        requestPurePursuitPause(true);
+        return;
+      }
+
+      navigation_interfaces::msg::PathWithPolicy updated_path;
+      bool target_updated = false;
+      if (buildFollowPath(current_time, updated_path, target_updated) &&
+          target_updated) {
+        path_publisher_->publish(updated_path);
+        RCLCPP_INFO(
+            get_logger(),
+            "[UWB_AVOIDANCE_TARGET_UPDATE] published changed target for "
+            "local-avoidance cancellation check");
+      }
+    }
     requestPurePursuitPause(false);
     return;
   }
@@ -486,6 +528,11 @@ void UwbFollowPlanner::planningTimerCallback() {
       navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH;
   if (waiting_for_dynamic_path) {
     // 已经位于障碍后侧，不再等待人员移动确认，立即尝试生成最新参考路径。
+    // 强制用当前人员位置生成一条新时间戳路径，不能因为内部目标更新阈值
+    // 未触发而让PP永久停在WAITING_DYNAMIC_PATH。
+    if (fresh_dynamic_path_requested_.load()) {
+      has_follow_goal_ = false;
+    }
     movement_candidate_active_ = false;
     setState(FollowState::kFollowing);
   } else if (state_ != FollowState::kFollowing) {
@@ -540,6 +587,9 @@ void UwbFollowPlanner::planningTimerCallback() {
   // planning tick.
   if (target_updated) {
     path_publisher_->publish(path);
+    if (waiting_for_dynamic_path) {
+      fresh_dynamic_path_requested_.store(false);
+    }
   }
   requestPurePursuitPause(false);
 }
