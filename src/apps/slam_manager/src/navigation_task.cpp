@@ -1,6 +1,5 @@
 #include "slam_manager/navigation_task.hpp"
 
-#include <tf2/LinearMath/Scalar.hpp>
 #include <tf2/utils.h>
 
 #include <algorithm>
@@ -10,6 +9,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <tf2/LinearMath/Scalar.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -287,9 +287,7 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
           "angular_velocity", default_edge_policy.angular_velocity);
       edge.policy.motion_direction = json_edge.value(
           "motion_direction", default_edge_policy.motion_direction);
-      edge.policy.obstacle_stop_enabled =
-          json_edge.value("obstacle_stop_enabled",
-                          default_edge_policy.obstacle_stop_enabled);
+      edge.policy.obstacle_stop_enabled = true;
       edge.policy.obstacle_avoidance_enabled =
           json_edge.value("obstacle_avoidance_enabled",
                           default_edge_policy.obstacle_avoidance_enabled);
@@ -702,7 +700,6 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
         {"linear_velocity", edge.policy.linear_velocity},
         {"angular_velocity", edge.policy.angular_velocity},
         {"motion_direction", edge.policy.motion_direction},
-        {"obstacle_stop_enabled", edge.policy.obstacle_stop_enabled},
         {"obstacle_avoidance_enabled", edge.policy.obstacle_avoidance_enabled},
         {"obstacle_avoidance_distance_m",
          edge.policy.obstacle_avoidance_distance_m}};
@@ -1184,8 +1181,8 @@ void NavigationTaskExecutor::executePatrolAction(
     // 没有任务JSON时保留基础巡检能力：直接使用Action数组，并为相邻节点
     // 生成默认双向直线边。此路径没有自定义边策略和区域配置。
     patrol_nodes.assign(goal->nodes.begin(), goal->nodes.end());
-    topology_written = topology_writer_->write(
-        patrol_nodes, topology_message, config_.default_edge_policy);
+    topology_written = topology_writer_->write(patrol_nodes, topology_message,
+                                               config_.default_edge_policy);
     if (topology_written) {
       RCLCPP_WARN(node_->get_logger(),
                   "[APP][NAVIGATION_FALLBACK] task JSON does not exist for "

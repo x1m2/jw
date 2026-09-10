@@ -98,8 +98,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   const auto navigation_skip_first_target_threshold =
       declare_parameter<double>("navigation.skip_first_target_threshold", 0.8);
   TaskEdgePolicy default_edge_policy;
-  default_edge_policy.obstacle_stop_enabled = declare_parameter<bool>(
-      "navigation.default_edge_policy.obstacle_stop_enabled", true);
+  default_edge_policy.obstacle_stop_enabled = true;
   default_edge_policy.obstacle_avoidance_enabled = declare_parameter<bool>(
       "navigation.default_edge_policy.obstacle_avoidance_enabled", false);
   default_edge_policy.obstacle_avoidance_distance_m = declare_parameter<double>(

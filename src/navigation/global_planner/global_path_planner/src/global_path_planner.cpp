@@ -261,8 +261,7 @@ bool GlobalPathPlanner::loadTopologyMap() {
       edge.policy.linear_velocity = json_edge.value("linear_velocity", 0.5);
       edge.policy.angular_velocity = json_edge.value("angular_velocity", 0.5);
       edge.policy.motion_direction = json_edge.value("motion_direction", 1);
-      edge.policy.obstacle_stop_enabled =
-          json_edge.value("obstacle_stop_enabled", true);
+      edge.policy.obstacle_stop_enabled = true;
       edge.policy.obstacle_avoidance_enabled =
           json_edge.value("obstacle_avoidance_enabled", false);
       edge.policy.obstacle_avoidance_distance_m =

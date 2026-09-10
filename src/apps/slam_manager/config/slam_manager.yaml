@@ -30,9 +30,9 @@ slam_manager:
       enable_skip_first_target: true
       skip_first_target_threshold: 0.8
       # 任务JSON未提供对应边字段时使用；区域策略的优先级仍高于边策略。
+      # 停障固定启用，不再作为任务/YAML可配置项。
       # obstacle_avoidance_distance_m当前只随路径策略传递，尚未接入绕障算法。
       default_edge_policy:
-        obstacle_stop_enabled: true
         obstacle_avoidance_enabled: false
         obstacle_avoidance_distance_m: 0.5
 
