@@ -252,6 +252,8 @@ bool LocalAvoidanceManager::initialize(
                node_, "avoidance_temporary_goal_retry_period", 0.5));
   avoidance_dynamic_side_goal_fallback_enabled_ = declareOrGetParameter(
       node_, "avoidance_dynamic_side_goal_fallback_enabled", true);
+  avoidance_static_side_transition_enabled_ = declareOrGetParameter(
+      node_, "avoidance_static_side_transition_enabled", true);
   avoidance_side_score_path_length_weight_ = std::max(
       0.0, declareOrGetParameter(
                node_, "avoidance_side_score_path_length_weight", 1.0));
@@ -292,6 +294,10 @@ bool LocalAvoidanceManager::initialize(
   path_planner_config.temporary_goal_search_distance = std::max(
       0.1, declareOrGetParameter(
                node_, "avoidance_temporary_goal_search_distance", 6.0));
+  avoidance_static_return_extended_search_distance_ = std::max(
+      path_planner_config.temporary_goal_search_distance,
+      declareOrGetParameter(
+          node_, "avoidance_static_return_extended_search_distance", 10.0));
   path_planner_config.temporary_goal_clearance = std::max(
       0.0,
       declareOrGetParameter(node_, "avoidance_temporary_goal_clearance", 0.8));
@@ -473,21 +479,25 @@ bool LocalAvoidanceManager::initialize(
   RCLCPP_INFO(node_->get_logger(),
               "Post-obstacle temporary goal: search=%.2fm "
               "clearance=%.2fm safe_length=%.2fm min_after_obstacle=%.2fm "
-              "configured_max_spacing=%.3fm retry=%.2fs",
+              "configured_max_spacing=%.3fm retry=%.2fs "
+              "static_extended_search=%.2fm",
               path_planner_config.temporary_goal_search_distance,
               path_planner_config.temporary_goal_clearance,
               path_planner_config.temporary_goal_safe_path_length,
               path_planner_config.min_temporary_goal_distance_from_obstacle,
               path_planner_config.temporary_goal_sample_spacing,
-              avoidance_temporary_goal_retry_period_);
+              avoidance_temporary_goal_retry_period_,
+              avoidance_static_return_extended_search_distance_);
   RCLCPP_INFO(node_->get_logger(),
               "Side-goal prefilter: top %d candidates enter full A* "
               "validation; endpoint expansion=%d rounds lateral/forward="
-              "%.2f/%.2fm",
+              "%.2f/%.2fm dynamic_fallback=%d static_transition=%d",
               avoidance_side_astar_candidate_limit_,
               path_planner_config.side_goal_expansion_rounds,
               path_planner_config.side_goal_expansion_lateral_step,
-              path_planner_config.side_goal_expansion_forward_step);
+              path_planner_config.side_goal_expansion_forward_step,
+              avoidance_dynamic_side_goal_fallback_enabled_ ? 1 : 0,
+              avoidance_static_side_transition_enabled_ ? 1 : 0);
   return true;
 }
 
@@ -716,8 +726,8 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
   (void)global_controller_aligning;
 
   // obstacle_stop持续拦截且机器人没有有效移动时，当前局部路径不可执行。
-  // 阶段四不再左右换侧：保留锁定临时点，要求规划线程先复核目标，再对
-  // 同一目标重规划；只有目标安全窗口确认失效才重新搜索临时点。
+  // 若正在执行明确的侧绕路径，开放另一侧并优先重选；否则保留锁定临时
+  // 点并要求规划线程复核。所有新路径仍必须通过完整A*和footprint校验。
   if (!tracking_local_ || !safety_stop_blocking) {
     stall_monitoring_ = false;
   } else if (!stall_monitoring_) {
@@ -740,6 +750,9 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
     } else if ((node_->now() - stall_start_time_).seconds() >=
                avoidance_stall_timeout_) {
       bool replan_requested = false;
+      bool opposite_side_reselection = false;
+      AvoidanceSide old_side = AvoidanceSide::NONE;
+      AvoidanceSide next_side = AvoidanceSide::NONE;
       {
         std::lock_guard<std::mutex> lock(avoidance_mutex_);
         if (avoidance_active_ && avoidance_temporary_goal_locked_ &&
@@ -747,7 +760,39 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
           ++avoidance_task_generation_;
           avoidance_corridor_selected_ = false;
           avoidance_temporary_path_.poses.clear();
-          temporary_goal_revalidation_required_ = true;
+          old_side = avoidance_selected_side_;
+          const bool side_reselection_supported =
+              old_side != AvoidanceSide::NONE &&
+              ((dynamic_path_mode_.load() &&
+                avoidance_dynamic_side_goal_fallback_enabled_) ||
+               (!dynamic_path_mode_.load() &&
+                avoidance_static_side_transition_enabled_));
+          if (side_reselection_supported) {
+            avoidance_alternate_side_enabled_ = true;
+            next_side = old_side == AvoidanceSide::LEFT
+                            ? AvoidanceSide::RIGHT
+                            : AvoidanceSide::LEFT;
+            avoidance_preferred_side_ = next_side;
+            avoidance_heading_continuity_required_ = true;
+            if (avoidance_temporary_goal_on_global_path_) {
+              avoidance_retained_static_return_valid_ = true;
+              avoidance_retained_static_return_goal_ =
+                  avoidance_temporary_goal_;
+              avoidance_retained_static_return_index_ =
+                  avoidance_temporary_goal_index_;
+            }
+            avoidance_temporary_goal_locked_ = false;
+            avoidance_temporary_goal_ = geometry_msgs::msg::PoseStamped();
+            avoidance_temporary_goal_index_ =
+                std::numeric_limits<std::size_t>::max();
+            avoidance_temporary_goal_on_global_path_ = false;
+            avoidance_force_side_fallback_ = true;
+            avoidance_stage_ = AvoidanceStage::SEARCHING_TEMPORARY_GOAL;
+            temporary_goal_revalidation_required_ = false;
+            opposite_side_reselection = true;
+          } else {
+            temporary_goal_revalidation_required_ = true;
+          }
           consecutive_planning_failures_ = 0;
           next_temporary_goal_retry_time_ =
               std::chrono::steady_clock::now();
@@ -758,9 +803,12 @@ LocalAvoidanceOutput LocalAvoidanceManager::update(
           node_->get_logger(),
           "[TEMP_PATH_STALL_REPLAN] obstacle_stop blocked local motion for "
           "%.2fs (moved=%.3fm yaw_change=%.1fdeg); "
-          "replan_same_temporary_goal=%d",
+          "replan_same_temporary_goal=%d switch_side=%d old_side=%s "
+          "next_preferred=%s",
           avoidance_stall_timeout_, moved, yaw_change * 180.0 / M_PI,
-          replan_requested ? 1 : 0);
+          replan_requested && !opposite_side_reselection ? 1 : 0,
+          opposite_side_reselection ? 1 : 0,
+          avoidanceSideToString(old_side), avoidanceSideToString(next_side));
       stall_monitoring_ = false;
       if (replan_requested) {
         clearLocalPath();
@@ -969,7 +1017,14 @@ bool LocalAvoidanceManager::startAvoidance(
     avoidance_temporary_goal_locked_ = false;
     avoidance_temporary_goal_on_global_path_ = false;
     avoidance_force_side_fallback_ = false;
+    avoidance_retained_static_return_valid_ = false;
+    avoidance_retained_static_return_goal_ =
+        geometry_msgs::msg::PoseStamped();
+    avoidance_retained_static_return_index_ =
+        std::numeric_limits<std::size_t>::max();
     avoidance_heading_continuity_required_ = false;
+    avoidance_selected_side_ = AvoidanceSide::NONE;
+    avoidance_alternate_side_enabled_ = false;
     avoidance_left_clear_at_trigger_ = observation.left_clear;
     avoidance_right_clear_at_trigger_ = observation.right_clear;
     if (observation.left_clear && !observation.right_clear) {
@@ -1026,8 +1081,15 @@ void LocalAvoidanceManager::resetAvoidance() {
     avoidance_temporary_goal_locked_ = false;
     avoidance_temporary_goal_on_global_path_ = false;
     avoidance_force_side_fallback_ = false;
+    avoidance_retained_static_return_valid_ = false;
+    avoidance_retained_static_return_goal_ =
+        geometry_msgs::msg::PoseStamped();
+    avoidance_retained_static_return_index_ =
+        std::numeric_limits<std::size_t>::max();
     avoidance_heading_continuity_required_ = false;
     avoidance_preferred_side_ = AvoidanceSide::NONE;
+    avoidance_selected_side_ = AvoidanceSide::NONE;
+    avoidance_alternate_side_enabled_ = false;
     avoidance_left_clear_at_trigger_ = false;
     avoidance_right_clear_at_trigger_ = false;
     temporary_goal_revalidation_required_ = false;
@@ -1070,8 +1132,15 @@ void LocalAvoidanceManager::enterWaitingForDynamicPath() {
     avoidance_temporary_goal_locked_ = false;
     avoidance_temporary_goal_on_global_path_ = false;
     avoidance_force_side_fallback_ = false;
+    avoidance_retained_static_return_valid_ = false;
+    avoidance_retained_static_return_goal_ =
+        geometry_msgs::msg::PoseStamped();
+    avoidance_retained_static_return_index_ =
+        std::numeric_limits<std::size_t>::max();
     avoidance_heading_continuity_required_ = false;
     avoidance_preferred_side_ = AvoidanceSide::NONE;
+    avoidance_selected_side_ = AvoidanceSide::NONE;
+    avoidance_alternate_side_enabled_ = false;
     avoidance_left_clear_at_trigger_ = false;
     avoidance_right_clear_at_trigger_ = false;
     temporary_goal_revalidation_required_ = false;
@@ -1301,8 +1370,14 @@ bool LocalAvoidanceManager::computeLocalPath() {
   bool goal_locked = false;
   bool goal_on_global_path = false;
   bool force_side_fallback = false;
+  bool retained_static_return_valid = false;
+  geometry_msgs::msg::PoseStamped retained_static_return_goal;
+  std::size_t retained_static_return_index =
+      std::numeric_limits<std::size_t>::max();
   bool heading_continuity_required = false;
   AvoidanceSide preferred_side = AvoidanceSide::NONE;
+  AvoidanceSide selected_side = AvoidanceSide::NONE;
+  bool alternate_side_enabled = false;
   bool left_clear_at_trigger = false;
   bool right_clear_at_trigger = false;
   bool revalidation_required = false;
@@ -1328,9 +1403,17 @@ bool LocalAvoidanceManager::computeLocalPath() {
     goal_locked = avoidance_temporary_goal_locked_;
     goal_on_global_path = avoidance_temporary_goal_on_global_path_;
     force_side_fallback = avoidance_force_side_fallback_;
+    retained_static_return_valid =
+        avoidance_retained_static_return_valid_;
+    retained_static_return_goal =
+        avoidance_retained_static_return_goal_;
+    retained_static_return_index =
+        avoidance_retained_static_return_index_;
     heading_continuity_required =
         avoidance_heading_continuity_required_;
     preferred_side = avoidance_preferred_side_;
+    selected_side = avoidance_selected_side_;
+    alternate_side_enabled = avoidance_alternate_side_enabled_;
     left_clear_at_trigger = avoidance_left_clear_at_trigger_;
     right_clear_at_trigger = avoidance_right_clear_at_trigger_;
     revalidation_required = temporary_goal_revalidation_required_;
@@ -1390,6 +1473,15 @@ bool LocalAvoidanceManager::computeLocalPath() {
           }
           if (invalid_checks >= avoidance_path_blocked_confirmations_) {
             ++avoidance_task_generation_;
+            if (avoidance_selected_side_ != AvoidanceSide::NONE) {
+              avoidance_alternate_side_enabled_ = true;
+              avoidance_preferred_side_ =
+                  avoidance_selected_side_ == AvoidanceSide::LEFT
+                      ? AvoidanceSide::RIGHT
+                      : AvoidanceSide::LEFT;
+              avoidance_heading_continuity_required_ = true;
+              avoidance_force_side_fallback_ = true;
+            }
             avoidance_temporary_goal_locked_ = false;
             avoidance_temporary_goal_ = geometry_msgs::msg::PoseStamped();
             avoidance_temporary_goal_index_ =
@@ -1427,9 +1519,12 @@ bool LocalAvoidanceManager::computeLocalPath() {
         clearAvoidanceMarkers();
         RCLCPP_WARN(node_->get_logger(),
                     "[TEMP_GOAL_INVALIDATED] index=%zu invalid=%d/%d; "
-                    "searching a new post-obstacle goal",
+                    "searching a new post-obstacle goal old_side=%s "
+                    "alternate_side=%d",
                     temporary_goal_index, invalid_checks,
-                    avoidance_path_blocked_confirmations_);
+                    avoidance_path_blocked_confirmations_,
+                    avoidanceSideToString(selected_side),
+                    selected_side != AvoidanceSide::NONE ? 1 : 0);
         requestPlanningWakeup();
         return false;
       }
@@ -1498,6 +1593,7 @@ bool LocalAvoidanceManager::computeLocalPath() {
       int blocked_checks = 0;
       bool replan_same_goal = false;
       bool reselect_side_goal = false;
+      bool reselect_static_transition = false;
       {
         std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
         if (!generation_is_current_while_locked() ||
@@ -1513,6 +1609,15 @@ bool LocalAvoidanceManager::computeLocalPath() {
           avoidance_temporary_path_.poses.clear();
           temporary_goal_revalidation_required_ = false;
           avoidance_heading_continuity_required_ = true;
+          // 当前侧绕路径已被不同Costmap连续确认失效。下一轮不再被首次
+          // 触发时的单侧快照锁死：优先尝试实际执行侧的对侧，同时保留
+          // 两侧候选，最终仍由A*和完整footprint校验决定是否可行。
+          avoidance_alternate_side_enabled_ = true;
+          if (avoidance_selected_side_ == AvoidanceSide::LEFT) {
+            avoidance_preferred_side_ = AvoidanceSide::RIGHT;
+          } else if (avoidance_selected_side_ == AvoidanceSide::RIGHT) {
+            avoidance_preferred_side_ = AvoidanceSide::LEFT;
+          }
           consecutive_blocked_path_checks_ = 0;
           consecutive_planning_failures_ = 0;
           next_temporary_goal_retry_time_ = now;
@@ -1522,7 +1627,29 @@ bool LocalAvoidanceManager::computeLocalPath() {
               !avoidance_temporary_goal_on_global_path_ &&
               dynamic_path_mode_.load() &&
               avoidance_dynamic_side_goal_fallback_enabled_;
-          if (reselect_side_goal) {
+          reselect_static_transition =
+              avoidance_temporary_goal_on_global_path_ &&
+              !dynamic_path_mode_.load() &&
+              avoidance_static_side_transition_enabled_ &&
+              (avoidance_alternate_side_enabled_ ||
+               avoidance_left_clear_at_trigger_ ||
+               avoidance_right_clear_at_trigger_);
+          if (reselect_static_transition) {
+            // 已执行路径失效后，目标本身仍通过安全窗检查。保留它作为
+            // 回归目标，直接重选侧后方过渡路径，避免先运行一次必然会
+            // 被起始旋转扫掠拒绝的“机器人->原回归点”直达规划。
+            avoidance_retained_static_return_valid_ = true;
+            avoidance_retained_static_return_goal_ =
+                avoidance_temporary_goal_;
+            avoidance_retained_static_return_index_ =
+                avoidance_temporary_goal_index_;
+            avoidance_minimum_goal_index_ = std::max(
+                avoidance_minimum_goal_index_,
+                avoidance_temporary_goal_index_ < global_path_copy.poses.size()
+                    ? avoidance_temporary_goal_index_ + 1U
+                    : global_path_copy.poses.size());
+          }
+          if (reselect_side_goal || reselect_static_transition) {
             avoidance_temporary_goal_locked_ = false;
             avoidance_temporary_goal_ = geometry_msgs::msg::PoseStamped();
             avoidance_temporary_goal_index_ =
@@ -1542,13 +1669,22 @@ bool LocalAvoidanceManager::computeLocalPath() {
         }
       }
       if (!replan_same_goal) {
-        if (reselect_side_goal) {
+        if (reselect_side_goal || reselect_static_transition) {
           clearAvoidanceMarkers();
-          RCLCPP_WARN(node_->get_logger(),
-                      "[TEMP_PATH_RESELECT] side path blocked=%d/%d; "
-                      "searching heading-continuous side candidates",
-                      blocked_checks,
-                      avoidance_path_blocked_confirmations_);
+          RCLCPP_WARN(
+              node_->get_logger(),
+              "[TEMP_PATH_RESELECT] path blocked=%d/%d; searching "
+              "heading-continuous side candidates mode=%s old_side=%s "
+              "next_preferred=%s both_sides=1",
+              blocked_checks, avoidance_path_blocked_confirmations_,
+              reselect_static_transition ? "STATIC_RETURN" : "DYNAMIC",
+              avoidanceSideToString(selected_side),
+              avoidanceSideToString(
+                  selected_side == AvoidanceSide::LEFT
+                      ? AvoidanceSide::RIGHT
+                      : (selected_side == AvoidanceSide::RIGHT
+                             ? AvoidanceSide::LEFT
+                             : preferred_side)));
           requestPlanningWakeup();
           return false;
         }
@@ -1592,15 +1728,83 @@ bool LocalAvoidanceManager::computeLocalPath() {
         std::min(search_start_index, global_path_copy.poses.size() - 1U);
     obstacle_search_start_index = std::min(
         obstacle_search_start_index, global_path_copy.poses.size() - 1U);
-    TemporaryGoalSearchResult search_result =
-        avoidance_path_planner_->findTemporaryGoal(
-            global_path_copy, robot_pose.pose.position, search_start_index,
-            minimum_goal_index);
+    TemporaryGoalSearchResult search_result;
+    bool using_retained_static_return = false;
+    const bool retained_return_requested =
+        !dynamic_path_mode_.load() &&
+        avoidance_static_side_transition_enabled_ && force_side_fallback &&
+        retained_static_return_valid &&
+        retained_static_return_index < global_path_copy.poses.size();
+    if (retained_return_requested &&
+        avoidance_path_planner_->isTemporaryGoalValid(
+            global_path_copy, retained_static_return_goal,
+            retained_static_return_index)) {
+      search_result.status = TemporaryGoalSearchStatus::FOUND;
+      search_result.search_start_index = search_start_index;
+      search_result.temporary_goal_index = retained_static_return_index;
+      search_result.goal = retained_static_return_goal;
+      search_result.goal_yaw =
+          tf2::getYaw(retained_static_return_goal.pose.orientation);
+      using_retained_static_return = true;
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "[STATIC_RETURN_RETAINED] retry side transition to index=%zu "
+          "goal=(%.3f,%.3f); direct path will not be retried",
+          retained_static_return_index,
+          retained_static_return_goal.pose.position.x,
+          retained_static_return_goal.pose.position.y);
+    } else {
+      if (retained_return_requested) {
+        std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
+        if (!generation_is_current_while_locked()) {
+          return false;
+        }
+        avoidance_retained_static_return_valid_ = false;
+        avoidance_retained_static_return_goal_ =
+            geometry_msgs::msg::PoseStamped();
+        avoidance_retained_static_return_index_ =
+            std::numeric_limits<std::size_t>::max();
+        RCLCPP_WARN(node_->get_logger(),
+                    "[STATIC_RETURN_DROPPED] retained return index=%zu is "
+                    "no longer safe on the latest Costmap",
+                    retained_static_return_index);
+      }
+      search_result = avoidance_path_planner_->findTemporaryGoal(
+          global_path_copy, robot_pose.pose.position, search_start_index,
+          minimum_goal_index);
+    }
+
+    // 普通导航的基础搜索窗内没有安全回归点时，先沿剩余全局路径扩大
+    // 弧长搜索。它仍要求候选点、后续安全窗和完整footprint全部有效，
+    // 只是避免6m窗口把实际存在的障碍后回归位置裁掉后永久停车。
+    if (!using_retained_static_return &&
+        search_result.status ==
+            TemporaryGoalSearchStatus::NO_SAFE_TEMPORARY_GOAL &&
+        !dynamic_path_mode_.load() &&
+        avoidance_static_side_transition_enabled_) {
+      const auto extended_result =
+          avoidance_path_planner_->findTemporaryGoal(
+              global_path_copy, robot_pose.pose.position, search_start_index,
+              minimum_goal_index,
+              avoidance_static_return_extended_search_distance_);
+      if (extended_result.status == TemporaryGoalSearchStatus::FOUND) {
+        search_result = extended_result;
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "[STATIC_RETURN_SEARCH_EXTENDED] found index=%zu goal=(%.3f,%.3f) "
+            "within %.2fm",
+            search_result.temporary_goal_index,
+            search_result.goal.pose.position.x,
+            search_result.goal.pose.position.y,
+            avoidance_static_return_extended_search_distance_);
+      }
+    }
 
     // 兼容旧状态或其他重规划分支留下的前移搜索起点：已进入绕障后，
     // 从前移位置得到NO_BLOCKED_PATH不能作为等待依据，必须在同一周期
     // 回到原障碍区重新识别并选择其后的临时点。
-    if (search_result.status == TemporaryGoalSearchStatus::NO_BLOCKED_PATH &&
+    if (!using_retained_static_return &&
+        search_result.status == TemporaryGoalSearchStatus::NO_BLOCKED_PATH &&
         search_start_index != obstacle_search_start_index) {
       RCLCPP_WARN(node_->get_logger(),
                   "[TEMP_GOAL_SEARCH_REWIND] NO_BLOCKED_PATH at index=%zu; "
@@ -1619,8 +1823,8 @@ bool LocalAvoidanceManager::computeLocalPath() {
     }
 
     // UWB动态路径可能在障碍物附近结束，因而没有足够的“障碍后安全段”。
-    // 此时只采用触发时已经确认空旷的一侧生成临时点；静态导航仍严格
-    // 使用原路径上的障碍后临时点，左右均不空旷时也保持停车等待。
+    // 此时可采用侧方临时点。普通导航直达全局回归点失败后，也允许把
+    // 侧后方候选作为中间过渡点，但最终目标仍必须回到原全局路径。
     bool side_fallback_found = false;
     AvoidanceSide selected_fallback_side = AvoidanceSide::NONE;
     geometry_msgs::msg::PoseStamped side_fallback_goal;
@@ -1637,12 +1841,26 @@ bool LocalAvoidanceManager::computeLocalPath() {
     };
     std::vector<RankedSideCandidate> ranked_side_candidates;
     const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
+    const bool dynamic_side_fallback_requested =
+        dynamic_path_mode_.load() &&
+        avoidance_dynamic_side_goal_fallback_enabled_ &&
+        (force_side_fallback ||
+         search_result.status ==
+             TemporaryGoalSearchStatus::NO_SAFE_TEMPORARY_GOAL);
+    const bool static_side_transition_requested =
+        !dynamic_path_mode_.load() &&
+        avoidance_static_side_transition_enabled_ && force_side_fallback &&
+        search_result.status == TemporaryGoalSearchStatus::FOUND &&
+        search_result.temporary_goal_index < global_path_copy.poses.size();
     auto collect_side_candidates = [&](AvoidanceSide side) {
       if (side == AvoidanceSide::NONE) return;
       const bool side_was_clear =
           side == AvoidanceSide::LEFT ? left_clear_at_trigger
                                       : right_clear_at_trigger;
-      if (!side_was_clear) return;
+      // 首次规划仍只信任检测器确认过的空旷侧；已有侧绕路径被连续多张
+      // Costmap判定失效后开放另一侧，让候选终点、完整A*和footprint
+      // 校验重新判断，而不是永远受旧快照约束。
+      if (!side_was_clear && !alternate_side_enabled) return;
 
       const auto candidates =
           avoidance_path_planner_->buildSideGoalCandidates(
@@ -1683,17 +1901,20 @@ bool LocalAvoidanceManager::computeLocalPath() {
                                 estimated_endpoint_clearance});
       }
     };
-    if ((force_side_fallback ||
-         search_result.status ==
-             TemporaryGoalSearchStatus::NO_SAFE_TEMPORARY_GOAL) &&
-        dynamic_path_mode_.load() &&
-        avoidance_dynamic_side_goal_fallback_enabled_) {
+    if (dynamic_side_fallback_requested ||
+        static_side_transition_requested) {
       collect_side_candidates(preferred_side);
-      if (left_clear_at_trigger && right_clear_at_trigger) {
+      if (alternate_side_enabled ||
+          (left_clear_at_trigger && right_clear_at_trigger)) {
         const AvoidanceSide alternate =
             preferred_side == AvoidanceSide::LEFT ? AvoidanceSide::RIGHT
                                                   : AvoidanceSide::LEFT;
-        collect_side_candidates(alternate);
+        if (preferred_side == AvoidanceSide::NONE) {
+          collect_side_candidates(AvoidanceSide::LEFT);
+          collect_side_candidates(AvoidanceSide::RIGHT);
+        } else {
+          collect_side_candidates(alternate);
+        }
       }
     }
 
@@ -1793,6 +2014,100 @@ bool LocalAvoidanceManager::computeLocalPath() {
           continue;
         }
 
+        // 普通导航的侧方点只是中间航路点，不能像UWB短路径兜底那样在
+        // 此处结束任务。继续规划到已经通过安全窗检查的全局回归点，
+        // 并对两段拼接后的转向扫掠再做一次完整footprint校验。
+        if (static_side_transition_requested) {
+          AStarAvoidanceHint return_hint = avoidance_hint;
+          return_hint.start_yaw = candidate.yaw;
+          nav_msgs::msg::Path return_raw_path;
+          if (!avoidance_path_planner_->planPath(
+                  candidate.point, search_result.goal.pose.position,
+                  return_raw_path, search_result.goal_yaw, return_hint) ||
+              return_raw_path.poses.size() < 2U) {
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "[SIDE_CANDIDATE_REJECT] side=%s "
+                "reason=RETURN_ASTAR transition=(%.3f,%.3f) "
+                "return=(%.3f,%.3f)",
+                avoidanceSideToString(side), candidate.point.x,
+                candidate.point.y, search_result.goal.pose.position.x,
+                search_result.goal.pose.position.y);
+            continue;
+          }
+
+          double return_raw_clearance = 0.0;
+          if (!avoidance_path_planner_->isPathOutsideObstacleRadius(
+                  return_raw_path, obstacle_center,
+                  avoidance_path_clearance_, &return_raw_clearance, true)) {
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "[SIDE_CANDIDATE_REJECT] side=%s "
+                "reason=RETURN_CLEARANCE transition=(%.3f,%.3f) "
+                "return=(%.3f,%.3f) minimum=%.3f",
+                avoidanceSideToString(side), candidate.point.x,
+                candidate.point.y, search_result.goal.pose.position.x,
+                search_result.goal.pose.position.y, return_raw_clearance);
+            continue;
+          }
+
+          const bool return_raw_motion_safe =
+              avoidance_path_planner_->isPathMotionCollisionFree(
+                  return_raw_path, true);
+          nav_msgs::msg::Path return_path = return_raw_path;
+          double return_clearance = return_raw_clearance;
+          bool return_smoothed_selected = false;
+          nav_msgs::msg::Path return_smoothed_path;
+          if (avoidance_path_planner_->smoothPath(return_raw_path,
+                                                  return_smoothed_path)) {
+            double return_smoothed_clearance = 0.0;
+            if (avoidance_path_planner_->isPathOutsideObstacleRadius(
+                    return_smoothed_path, obstacle_center,
+                    avoidance_path_clearance_, &return_smoothed_clearance,
+                    true) &&
+                avoidance_path_planner_->isPathMotionCollisionFree(
+                    return_smoothed_path, true)) {
+              return_path = std::move(return_smoothed_path);
+              return_clearance = return_smoothed_clearance;
+              return_smoothed_selected = true;
+            }
+          }
+          if (!return_smoothed_selected && !return_raw_motion_safe) {
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "[SIDE_CANDIDATE_REJECT] side=%s "
+                "reason=RETURN_PATH_MOTION_COLLISION "
+                "transition=(%.3f,%.3f) return=(%.3f,%.3f)",
+                avoidanceSideToString(side), candidate.point.x,
+                candidate.point.y, search_result.goal.pose.position.x,
+                search_result.goal.pose.position.y);
+            continue;
+          }
+
+          nav_msgs::msg::Path combined_path = candidate_path;
+          for (std::size_t pose_index = 1U;
+               pose_index < return_path.poses.size(); ++pose_index) {
+            combined_path.poses.push_back(return_path.poses[pose_index]);
+          }
+          if (!avoidance_path_planner_->isPathMotionCollisionFree(
+                  combined_path, true)) {
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "[SIDE_CANDIDATE_REJECT] side=%s "
+                "reason=TRANSITION_JOIN_MOTION_COLLISION "
+                "transition=(%.3f,%.3f) return=(%.3f,%.3f)",
+                avoidanceSideToString(side), candidate.point.x,
+                candidate.point.y, search_result.goal.pose.position.x,
+                search_result.goal.pose.position.y);
+            continue;
+          }
+          candidate_path = std::move(combined_path);
+          candidate_clearance =
+              std::min(candidate_clearance, return_clearance);
+          smoothed_path_selected =
+              smoothed_path_selected && return_smoothed_selected;
+        }
+
         geometry_msgs::msg::Point initial_target =
             candidate_path.poses.back().pose.position;
         for (const auto &pose : candidate_path.poses) {
@@ -1889,6 +2204,10 @@ bool LocalAvoidanceManager::computeLocalPath() {
     }
 
     bool search_committed = false;
+    bool preplanned_side_path_selected = false;
+    const bool static_side_transition_exhausted =
+        static_side_transition_requested && !side_fallback_found;
+    bool continue_after_exhausted_static_return = false;
     {
       std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
       if (!generation_is_current_while_locked() ||
@@ -1898,12 +2217,25 @@ bool LocalAvoidanceManager::computeLocalPath() {
       const bool prefer_side_candidate =
           force_side_fallback && side_fallback_found;
       if (prefer_side_candidate) {
-        avoidance_temporary_goal_ = side_fallback_goal;
-        avoidance_temporary_goal_index_ =
-            std::numeric_limits<std::size_t>::max();
+        if (static_side_transition_requested) {
+          avoidance_temporary_goal_ = search_result.goal;
+          avoidance_temporary_goal_index_ =
+              search_result.temporary_goal_index;
+          avoidance_temporary_goal_on_global_path_ = true;
+        } else {
+          avoidance_temporary_goal_ = side_fallback_goal;
+          avoidance_temporary_goal_index_ =
+              std::numeric_limits<std::size_t>::max();
+          avoidance_temporary_goal_on_global_path_ = false;
+        }
         avoidance_temporary_goal_locked_ = true;
-        avoidance_temporary_goal_on_global_path_ = false;
+        avoidance_selected_side_ = selected_fallback_side;
         avoidance_force_side_fallback_ = false;
+        avoidance_retained_static_return_valid_ = false;
+        avoidance_retained_static_return_goal_ =
+            geometry_msgs::msg::PoseStamped();
+        avoidance_retained_static_return_index_ =
+            std::numeric_limits<std::size_t>::max();
         temporary_goal_revalidation_required_ = false;
         temporary_goal_last_validation_valid_ = true;
         last_validated_costmap_version_ = costmap_version;
@@ -1911,16 +2243,24 @@ bool LocalAvoidanceManager::computeLocalPath() {
         avoidance_stage_ = AvoidanceStage::SEARCHING_TEMPORARY_GOAL;
         temporary_goal = avoidance_temporary_goal_;
         temporary_goal_index = avoidance_temporary_goal_index_;
-        goal_on_global_path = false;
+        goal_on_global_path = avoidance_temporary_goal_on_global_path_;
         goal_locked = true;
         search_committed = true;
-      } else if (search_result.status == TemporaryGoalSearchStatus::FOUND &&
+        preplanned_side_path_selected = true;
+      } else if (!static_side_transition_requested &&
+          search_result.status == TemporaryGoalSearchStatus::FOUND &&
           search_result.temporary_goal_index < global_path_copy.poses.size()) {
         avoidance_temporary_goal_ = search_result.goal;
         avoidance_temporary_goal_index_ = search_result.temporary_goal_index;
         avoidance_temporary_goal_locked_ = true;
         avoidance_temporary_goal_on_global_path_ = true;
+        avoidance_selected_side_ = AvoidanceSide::NONE;
         avoidance_force_side_fallback_ = false;
+        avoidance_retained_static_return_valid_ = false;
+        avoidance_retained_static_return_goal_ =
+            geometry_msgs::msg::PoseStamped();
+        avoidance_retained_static_return_index_ =
+            std::numeric_limits<std::size_t>::max();
         avoidance_heading_continuity_required_ = false;
         temporary_goal_revalidation_required_ = false;
         temporary_goal_last_validation_valid_ = true;
@@ -1938,7 +2278,13 @@ bool LocalAvoidanceManager::computeLocalPath() {
             std::numeric_limits<std::size_t>::max();
         avoidance_temporary_goal_locked_ = true;
         avoidance_temporary_goal_on_global_path_ = false;
+        avoidance_selected_side_ = selected_fallback_side;
         avoidance_force_side_fallback_ = false;
+        avoidance_retained_static_return_valid_ = false;
+        avoidance_retained_static_return_goal_ =
+            geometry_msgs::msg::PoseStamped();
+        avoidance_retained_static_return_index_ =
+            std::numeric_limits<std::size_t>::max();
         temporary_goal_revalidation_required_ = false;
         temporary_goal_last_validation_valid_ = true;
         last_validated_costmap_version_ = costmap_version;
@@ -1949,15 +2295,38 @@ bool LocalAvoidanceManager::computeLocalPath() {
         goal_on_global_path = false;
         goal_locked = true;
         search_committed = true;
+        preplanned_side_path_selected = true;
       } else if (search_result.status == TemporaryGoalSearchStatus::INVALID_INPUT) {
         avoidance_active_ = false;
         avoidance_completed_ = false;
         avoidance_stage_ = AvoidanceStage::FAILED;
         ++avoidance_task_generation_;
       } else {
-        avoidance_stage_ = AvoidanceStage::WAITING_TEMPORARY_GOAL;
-        last_retry_costmap_version_ = costmap_version;
-        next_temporary_goal_retry_time_ = now + retry_delay;
+        if (static_side_transition_exhausted) {
+          // 直达失败后，本周期已尝试把侧方候选连接到该回归点。全部
+          // 失败时才正式淘汰这个回归点并继续向后搜索，不能退回同一
+          // 目标的直达A*，也不能永久重复相同的一批侧方候选。
+          avoidance_retained_static_return_valid_ = false;
+          avoidance_retained_static_return_goal_ =
+              geometry_msgs::msg::PoseStamped();
+          avoidance_retained_static_return_index_ =
+              std::numeric_limits<std::size_t>::max();
+          avoidance_minimum_goal_index_ = std::max(
+              avoidance_minimum_goal_index_,
+              search_result.temporary_goal_index < global_path_copy.poses.size()
+                  ? search_result.temporary_goal_index + 1U
+                  : global_path_copy.poses.size());
+          avoidance_force_side_fallback_ = true;
+          avoidance_stage_ = AvoidanceStage::SEARCHING_TEMPORARY_GOAL;
+          last_retry_costmap_version_ = costmap_version;
+          next_temporary_goal_retry_time_ = now;
+          ++avoidance_task_generation_;
+          continue_after_exhausted_static_return = true;
+        } else {
+          avoidance_stage_ = AvoidanceStage::WAITING_TEMPORARY_GOAL;
+          last_retry_costmap_version_ = costmap_version;
+          next_temporary_goal_retry_time_ = now + retry_delay;
+        }
         avoidance_corridor_selected_ = false;
         avoidance_temporary_path_.poses.clear();
         std::lock_guard<std::mutex> path_lock(path_mutex_);
@@ -1987,6 +2356,16 @@ bool LocalAvoidanceManager::computeLocalPath() {
       }
     }
     if (!search_committed) {
+      if (continue_after_exhausted_static_return) {
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "[STATIC_SIDE_RETURN_EXHAUSTED] return_index=%zu; all selected "
+            "side candidates failed, continue searching after index=%zu",
+            search_result.temporary_goal_index,
+            search_result.temporary_goal_index);
+        requestPlanningWakeup();
+        return false;
+      }
       RCLCPP_WARN_THROTTLE(
           node_->get_logger(), *node_->get_clock(), 500,
           "[TEMP_GOAL_WAIT] search=%s progress=%zu blocked_start=%zu "
@@ -1996,38 +2375,42 @@ bool LocalAvoidanceManager::computeLocalPath() {
           search_result.blocked_end_index);
       return false;
     }
-    if (goal_on_global_path) {
-      RCLCPP_INFO(
-          node_->get_logger(),
-          "[TEMP_GOAL_LOCKED] source=GLOBAL_PATH index=%zu "
-          "goal=(%.3f,%.3f) blocked=[%zu,%zu] "
-          "temporary_goal_distance=%.3f safe_length=%.3f",
-          temporary_goal_index, temporary_goal.pose.position.x,
-          temporary_goal.pose.position.y, search_result.blocked_start_index,
-          search_result.blocked_end_index,
-          search_result.temporary_goal_path_distance,
-          search_result.verified_safe_length);
-    } else {
-      RCLCPP_INFO(node_->get_logger(),
-                  "[TEMP_GOAL_LOCKED] source=SIDE_FALLBACK side=%s "
-                  "goal=(%.3f,%.3f) original_search=%s blocked=[%zu,%zu] "
-                  "score=%.3f smooth=%d",
-                  avoidanceSideToString(selected_fallback_side),
-                  temporary_goal.pose.position.x,
-                  temporary_goal.pose.position.y,
-                  temporaryGoalSearchStatusToString(search_result.status),
-                  search_result.blocked_start_index,
-                  search_result.blocked_end_index, side_fallback_score,
-                  side_fallback_used_smoothed_path ? 1 : 0);
+    if (preplanned_side_path_selected) {
+      if (goal_on_global_path) {
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "[STATIC_SIDE_RETURN_SELECTED] side=%s transition=(%.3f,%.3f) "
+            "return_index=%zu return=(%.3f,%.3f) poses=%zu "
+            "clearance=%.3f score=%.3f smooth=%d",
+            avoidanceSideToString(selected_fallback_side),
+            side_fallback_goal.pose.position.x,
+            side_fallback_goal.pose.position.y, temporary_goal_index,
+            temporary_goal.pose.position.x, temporary_goal.pose.position.y,
+            side_fallback_path.poses.size(),
+            side_fallback_minimum_clearance, side_fallback_score,
+            side_fallback_used_smoothed_path ? 1 : 0);
+      } else {
+        RCLCPP_INFO(node_->get_logger(),
+                    "[TEMP_GOAL_LOCKED] source=SIDE_FALLBACK side=%s "
+                    "goal=(%.3f,%.3f) original_search=%s blocked=[%zu,%zu] "
+                    "score=%.3f smooth=%d",
+                    avoidanceSideToString(selected_fallback_side),
+                    temporary_goal.pose.position.x,
+                    temporary_goal.pose.position.y,
+                    temporaryGoalSearchStatusToString(search_result.status),
+                    search_result.blocked_start_index,
+                    search_result.blocked_end_index, side_fallback_score,
+                    side_fallback_used_smoothed_path ? 1 : 0);
+      }
 
-      // 侧方候选在锁定前已经完成全部路径筛选和评分，直接原子提交最佳
-      // 目标及其路径。不能丢弃评选结果后再对同一个点重复运行A*。
+      // 候选评选阶段已经完成两段A*、平滑、净空和拼接转向检查，直接
+      // 原子提交完整路径，不能再丢掉过渡点后重新直达回归目标。
       side_fallback_path.header.stamp = node_->now();
       {
         std::lock_guard<std::mutex> avoidance_lock(avoidance_mutex_);
         if (!generation_is_current_while_locked() ||
             !avoidance_temporary_goal_locked_ ||
-            avoidance_temporary_goal_on_global_path_) {
+            avoidance_temporary_goal_index_ != temporary_goal_index) {
           return false;
         }
         avoidance_temporary_path_ = side_fallback_path;
@@ -2058,14 +2441,27 @@ bool LocalAvoidanceManager::computeLocalPath() {
             side_fallback_path);
       }
       RCLCPP_INFO(node_->get_logger(),
-                  "[SIDE_PATH_SELECTED] side=%s goal=(%.3f,%.3f) "
+                  "[SIDE_PATH_SELECTED] mode=%s side=%s goal=(%.3f,%.3f) "
                   "poses=%zu clearance=%.3f score=%.3f",
+                  goal_on_global_path ? "STATIC_RETURN" : "DYNAMIC_FALLBACK",
                   avoidanceSideToString(selected_fallback_side),
                   temporary_goal.pose.position.x,
                   temporary_goal.pose.position.y,
                   side_fallback_path.poses.size(),
                   side_fallback_minimum_clearance, side_fallback_score);
       return true;
+    }
+    if (goal_on_global_path) {
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "[TEMP_GOAL_LOCKED] source=GLOBAL_PATH index=%zu "
+          "goal=(%.3f,%.3f) blocked=[%zu,%zu] "
+          "temporary_goal_distance=%.3f safe_length=%.3f",
+          temporary_goal_index, temporary_goal.pose.position.x,
+          temporary_goal.pose.position.y, search_result.blocked_start_index,
+          search_result.blocked_end_index,
+          search_result.temporary_goal_path_distance,
+          search_result.verified_safe_length);
     }
   }
 
@@ -2192,13 +2588,17 @@ bool LocalAvoidanceManager::computeLocalPath() {
   if (!usable_path) {
     int failure_count = 0;
     const bool side_fallback_available =
-        goal_on_global_path && dynamic_path_mode_.load() &&
-        avoidance_dynamic_side_goal_fallback_enabled_ &&
-        (left_clear_at_trigger || right_clear_at_trigger);
+        goal_on_global_path &&
+        (alternate_side_enabled || left_clear_at_trigger ||
+         right_clear_at_trigger) &&
+        ((dynamic_path_mode_.load() &&
+          avoidance_dynamic_side_goal_fallback_enabled_) ||
+         (!dynamic_path_mode_.load() &&
+          avoidance_static_side_transition_enabled_));
     // 全局路径候选已经在当前Costmap上完成终点和后续安全窗验证；若到
     // 该点的完整A*或运动安全校验失败，继续用同一输入重试不会产生新
-    // 结果。一次失败后立即丢弃并向后搜索；动态跟随存在明确空旷侧时，
-    // 下一轮优先进入侧方候选评估，避免同一点重复规划5次。
+    // 结果。一次失败后立即丢弃并向后搜索；存在明确空旷侧时，动态跟随
+    // 可选择侧方临时点，普通导航则生成“侧后方过渡点->全局回归点”。
     constexpr int failure_limit = 1;
     int reselection_count = 0;
     bool reselect_goal = false;
@@ -2220,8 +2620,26 @@ bool LocalAvoidanceManager::computeLocalPath() {
         if (avoidance_temporary_goal_on_global_path_ &&
             avoidance_temporary_goal_index_ !=
                 std::numeric_limits<std::size_t>::max()) {
+          const bool retain_for_static_side_transition =
+              !dynamic_path_mode_.load() &&
+              avoidance_static_side_transition_enabled_ &&
+              side_fallback_available;
+          if (retain_for_static_side_transition) {
+            avoidance_retained_static_return_valid_ = true;
+            avoidance_retained_static_return_goal_ =
+                avoidance_temporary_goal_;
+            avoidance_retained_static_return_index_ =
+                avoidance_temporary_goal_index_;
+          } else {
+            avoidance_retained_static_return_valid_ = false;
+            avoidance_retained_static_return_goal_ =
+                geometry_msgs::msg::PoseStamped();
+            avoidance_retained_static_return_index_ =
+                std::numeric_limits<std::size_t>::max();
+          }
           // A*失败只淘汰这个候选，不允许把障碍扫描起点推进到候选后方；
-          // 否则下一轮会跳过已经确认的障碍并误报NO_BLOCKED_PATH。
+          // 否则下一轮会跳过已经确认的障碍并误报NO_BLOCKED_PATH。普通
+          // 导航仍保留目标几何位置，先尝试经侧后方过渡到达该点。
           avoidance_search_start_index_ = std::min(
               avoidance_obstacle_search_start_index_,
               global_path_copy.poses.size() - 1U);
@@ -2233,8 +2651,9 @@ bool LocalAvoidanceManager::computeLocalPath() {
           if (side_fallback_available) {
             avoidance_force_side_fallback_ = true;
           }
-        } else if (avoidance_left_clear_at_trigger_ &&
-                   avoidance_right_clear_at_trigger_) {
+        } else if (avoidance_alternate_side_enabled_ ||
+                   (avoidance_left_clear_at_trigger_ &&
+                    avoidance_right_clear_at_trigger_)) {
           avoidance_preferred_side_ =
               avoidance_preferred_side_ == AvoidanceSide::LEFT
                   ? AvoidanceSide::RIGHT

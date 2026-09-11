@@ -514,21 +514,28 @@ std::uint64_t AvoidancePathPlanner::preparedCostmapVersion() const {
 TemporaryGoalSearchResult AvoidancePathPlanner::findTemporaryGoal(
     const nav_msgs::msg::Path &global_path,
     const geometry_msgs::msg::Point &robot_position,
-    std::size_t start_index, std::size_t minimum_goal_index) {
+    std::size_t start_index, std::size_t minimum_goal_index,
+    double search_distance_override) {
   TemporaryGoalSearchResult result;
   result.search_start_index = start_index;
+  const double search_distance =
+      std::isfinite(search_distance_override) &&
+              search_distance_override > 0.0
+          ? std::max(config_.temporary_goal_search_distance,
+                     search_distance_override)
+          : config_.temporary_goal_search_distance;
 
   if (global_path.poses.size() < 2 ||
       start_index >= global_path.poses.size() ||
       !std::isfinite(robot_position.x) ||
       !std::isfinite(robot_position.y) ||
       !std::isfinite(robot_position.z) ||
-      !std::isfinite(config_.temporary_goal_search_distance) ||
+      !std::isfinite(search_distance) ||
       !std::isfinite(config_.temporary_goal_clearance) ||
       !std::isfinite(config_.temporary_goal_safe_path_length) ||
       !std::isfinite(config_.min_temporary_goal_distance_from_obstacle) ||
       !std::isfinite(config_.temporary_goal_sample_spacing) ||
-      config_.temporary_goal_search_distance <= 0.0 ||
+      search_distance <= 0.0 ||
       config_.temporary_goal_safe_path_length <= 0.0 ||
       config_.temporary_goal_sample_spacing <= 0.0 ||
       config_.temporary_goal_clearance < 0.0 ||
@@ -575,7 +582,7 @@ TemporaryGoalSearchResult AvoidancePathPlanner::findTemporaryGoal(
       0.001, std::min(config_.temporary_goal_sample_spacing,
                       costmap->info.resolution * 0.5));
   const double validation_scan_distance =
-      config_.temporary_goal_search_distance +
+      search_distance +
       config_.temporary_goal_safe_path_length;
   constexpr std::size_t kMaximumTemporaryGoalSamples = 20000U;
   const double requested_sample_count =
@@ -716,7 +723,7 @@ TemporaryGoalSearchResult AvoidancePathPlanner::findTemporaryGoal(
   std::size_t first_blocked_sample = samples.size();
   for (std::size_t index = 0; index < samples.size(); ++index) {
     if (samples[index].arc_length >
-        config_.temporary_goal_search_distance + 1e-9) {
+        search_distance + 1e-9) {
       break;
     }
     // “路径被阻断”与后续临时点搜索使用同一套临时点安全语义。
@@ -742,7 +749,7 @@ TemporaryGoalSearchResult AvoidancePathPlanner::findTemporaryGoal(
   for (std::size_t index = first_blocked_sample; index < samples.size();
        ++index) {
     if (samples[index].arc_length >
-        config_.temporary_goal_search_distance + 1e-9) {
+        search_distance + 1e-9) {
       break;
     }
     if (temporary_goal_safe[index] == 0U) {

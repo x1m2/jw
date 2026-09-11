@@ -173,10 +173,22 @@ private:
   // 全局路径临时点不可达后，下一轮必须先评估侧方候选，不能继续在
   // 后续全局路径点上消耗多次A*重试。
   bool avoidance_force_side_fallback_{false};
+  // 普通导航直达安全回归点失败时，保留该点给下一轮侧后方过渡规划。
+  // “机器人->回归点”不可达不代表“侧方点->回归点”不可达，不能在
+  // 侧向方案评估前就把该回归点永久跳过。
+  bool avoidance_retained_static_return_valid_{false};
+  geometry_msgs::msg::PoseStamped avoidance_retained_static_return_goal_;
+  std::size_t avoidance_retained_static_return_index_{
+      std::numeric_limits<std::size_t>::max()};
   // 已执行的局部路径失效后，只接受初始航向与当前机器人朝向连续的
   // 侧方路径，并允许这类小角度路径直接进入跟踪而不再次原地对准。
   bool avoidance_heading_continuity_required_{false};
   AvoidanceSide avoidance_preferred_side_{AvoidanceSide::NONE};
+  // preferred_side是下一轮搜索的排序偏好，selected_side记录当前实际执行
+  // 的侧绕方向。当前侧路径连续失效后，用selected_side可靠地切换偏好；
+  // 不能再永久受首次触发时的单侧快照限制。
+  AvoidanceSide avoidance_selected_side_{AvoidanceSide::NONE};
+  bool avoidance_alternate_side_enabled_{false};
   bool avoidance_left_clear_at_trigger_{false};
   bool avoidance_right_clear_at_trigger_{false};
   bool temporary_goal_revalidation_required_{false};
@@ -203,6 +215,8 @@ private:
   double avoidance_return_obstacle_clearance_;
   double avoidance_obstacle_threshold_;
   bool avoidance_dynamic_side_goal_fallback_enabled_{true};
+  bool avoidance_static_side_transition_enabled_{true};
+  double avoidance_static_return_extended_search_distance_{10.0};
 
   // 规划线程主循环和单周期状态推进。
   void planningLoop();

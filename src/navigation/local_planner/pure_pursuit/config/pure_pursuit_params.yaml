@@ -55,11 +55,13 @@
     # 单段局部 A* 目标；没有安全临时点或 A* 暂不可用时停车并周期重试。
     avoidance_temporary_goal_search_distance: 6.0 # 从当前活动路径投影点向前搜索临时点候选的最大弧长（m）
     avoidance_temporary_goal_clearance: 0.5       # 临时点及连续安全段的圆形净空半径（m）
-    avoidance_temporary_goal_safe_path_length: 0.2 # 临时点后必须连续安全的路径长度（m）
-    avoidance_min_temporary_goal_distance_from_obstacle: 0.35 # 离开最后不安全采样后的最小弧长（m）
+    avoidance_temporary_goal_safe_path_length: 0.6 # 临时点后必须连续安全的路径长度（m）
+    avoidance_min_temporary_goal_distance_from_obstacle: 0.7 # 离开最后不安全采样后的最小弧长（m）
     avoidance_temporary_goal_sample_spacing: 0.05  # 配置上限；实际不大于半个Costmap栅格（m）
     avoidance_temporary_goal_retry_period: 0.5 # 无安全临时点或 A* 暂时失败后的重试周期（s）
     avoidance_dynamic_side_goal_fallback_enabled: true # UWB短路径末端无障碍后路径点时，按已确认空旷侧生成临时点
+    avoidance_static_side_transition_enabled: true # 普通导航直达回归点失败后，允许经障碍侧后方过渡点再接回全局路径
+    avoidance_static_return_extended_search_distance: 10.0 # 普通导航无安全回归点时，沿剩余全局路径扩展搜索的最大弧长（m）
     # 侧方候选基于障碍物边界生成，不再固定相对障碍中心偏移，也不对同一个
     # 失败点连续重试。下面两个旧参数仅保留参数兼容。
     avoidance_side_goal_retry_forward_step: 0.25
@@ -68,13 +70,13 @@
     avoidance_side_goal_boundary_longitudinal_band: 0.5 # 估计左右边界时的纵向关联半宽（m）
     avoidance_side_goal_boundary_lateral_band: 0.5 # 估计障碍后边界时的横向关联半宽（m）
 
-    avoidance_side_goal_min_boundary_clearance: 0.65 # 机器人中心到障碍物侧边界的最小距离（m）
+    avoidance_side_goal_min_boundary_clearance: 0.5 # 机器人中心到障碍物侧边界的最小距离（m）
     avoidance_side_goal_lateral_sample_step: 0.25 # 相邻横向候选的净空增量（m）
     avoidance_side_goal_lateral_sample_count: 3 # 每个纵向位置的横向候选数
 
-    avoidance_side_goal_min_forward_clearance: 0.60 # 临时点越过障碍物前向边界的最小距离（m）
-    avoidance_side_goal_forward_sample_step: 0.4 # 相邻纵向候选的距离增量（m）
-    avoidance_side_goal_forward_sample_count: 4 # 每侧纵向候选数
+    avoidance_side_goal_min_forward_clearance: 0.10 # 临时点越过障碍物前向边界的最小距离（m）
+    avoidance_side_goal_forward_sample_step: 0.2 # 相邻纵向候选的距离增量（m）
+    avoidance_side_goal_forward_sample_count: 3 # 每侧纵向候选数
 
     # 基础3x4候选全部被终点footprint拒绝时，逐轮向侧外和障碍后方扩展。
     # 扩展仍必须通过终点footprint、完整A*、路径净空和旋转扫掠检查。
@@ -88,7 +90,7 @@
     avoidance_side_score_raw_path_penalty: 2.0 # 无法平滑、仅能采用原始A*时的惩罚
     avoidance_side_score_switch_side_penalty: 0.5 # 偏离触发时首选绕行侧的惩罚
     avoidance_side_astar_candidate_limit: 3 # 快速评分后最多进入完整A*和安全检查的侧方候选数（建议3~5）
-    avoidance_replan_max_initial_heading_error_degrees: 35.0 # 已有局部路径失效后，新侧方路径允许的最大初始航向误差
+    avoidance_replan_max_initial_heading_error_degrees: 45.0 # 已有局部路径失效后，新侧方路径允许的最大初始航向误差
     avoidance_replan_heading_score_multiplier: 3.0 # 路径失效重选时初始航向误差评分的额外倍率
 
     # ==================== 8 邻域 A* 局部规划 ====================

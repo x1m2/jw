@@ -96,7 +96,8 @@ public:
   TemporaryGoalSearchResult findTemporaryGoal(const nav_msgs::msg::Path &global_path,
                                       const geometry_msgs::msg::Point &robot_position,
                                       std::size_t start_index,
-                                      std::size_t minimum_goal_index = 0U);
+                                      std::size_t minimum_goal_index = 0U,
+                                      double search_distance_override = -1.0);
   // 只验证已锁定的障碍后绕障临时点及其后续安全窗口，不重新选点。
   // following_path_index是插值目标之后的首个原始路径点。
   bool isTemporaryGoalValid(
