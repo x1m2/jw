@@ -62,6 +62,7 @@ struct TaskTopologyRegion {
 };
 
 struct TaskTopologyGraph {
+  std::string task_id;
   std::vector<slam_manager_interfaces::msg::NavigationNode> nodes;
   std::vector<TaskTopologyEdge> edges;
   std::vector<TaskTopologyRegion> regions;

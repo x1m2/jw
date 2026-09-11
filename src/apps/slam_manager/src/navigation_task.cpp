@@ -670,6 +670,7 @@ bool TopologyFileWriter::write(const TaskTopologyGraph &graph,
   document["format"] = "navigation_topology";
   document["source"] = "slam_manager_runtime";
   document["frame_id"] = "map";
+  if (!graph.task_id.empty()) document["task_id"] = graph.task_id;
   document["nodes"] = nlohmann::json::array();
   document["edges"] = nlohmann::json::array();
   document["regions"] = nlohmann::json::array();
@@ -1083,6 +1084,8 @@ void NavigationTaskExecutor::executePatrolAction(
       releaseOperation();
       return;
     }
+    // obstacle_stop使用运行时拓扑中的task_id定位该任务专属的区域YAML。
+    graph.task_id = goal->task_id;
 
     std::unordered_map<uint32_t, std::size_t> graph_node_indexes;
     std::unordered_set<uint32_t> fallback_node_ids;

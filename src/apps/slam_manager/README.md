@@ -175,7 +175,7 @@ A -> B为map_connection时：
 每个区域可在任务目录下提供狗本体停障配置：
 
 ```text
-task/region_obstacle_stop/<region_id>.yaml
+task/region_obstacle_stop/<task_id>/<region_id>.yaml
 ```
 
 文件只允许覆盖`hard_stop_distance`、`slowdown_distance`、
