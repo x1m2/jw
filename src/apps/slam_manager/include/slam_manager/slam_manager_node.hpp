@@ -186,6 +186,10 @@ class SlamManagerNode : public rclcpp::Node {
       uint64_t generation,
       const std::shared_ptr<WorkerOperationToken> &token,
       std::string &message);
+  std::string recoverLocalizationActionException(const std::string &message);
+  void abortLocalizationActionAfterException(
+      const std::shared_ptr<StartLocalizationGoalHandle> &goal_handle,
+      const std::string &message) noexcept;
 
   SlamStateMachine state_machine_;
   uint64_t session_id_{0U};

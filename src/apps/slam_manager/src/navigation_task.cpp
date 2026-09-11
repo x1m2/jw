@@ -970,20 +970,34 @@ void NavigationTaskExecutor::configureMap(
 void NavigationTaskExecutor::startPatrolAction(
     const std::shared_ptr<StartNavigationGoalHandle> &goal_handle,
     uint64_t session_id) {
-  std::lock_guard<std::mutex> execution_lock(execution_mutex_);
-  if (execution_thread_.joinable()) execution_thread_.join();
-  execution_thread_ = std::thread(&NavigationTaskExecutor::executePatrolAction,
-                                  this, goal_handle, session_id);
+  startActionThread(
+      session_id, "patrol navigation",
+      [this, goal_handle, session_id]() {
+        executePatrolAction(goal_handle, session_id);
+      },
+      [goal_handle](const std::string &message) {
+        auto result = std::make_shared<StartNavigation::Result>();
+        result->success = false;
+        result->completed_count = 0U;
+        result->message = message;
+        if (goal_handle->is_active()) goal_handle->abort(result);
+      });
 }
 
 void NavigationTaskExecutor::startNavigateToPoseAction(
     const std::shared_ptr<NavigateToPoseGoalHandle> &goal_handle,
     const geometry_msgs::msg::PoseStamped &current_pose, uint64_t session_id) {
-  std::lock_guard<std::mutex> execution_lock(execution_mutex_);
-  if (execution_thread_.joinable()) execution_thread_.join();
-  execution_thread_ =
-      std::thread(&NavigationTaskExecutor::executeNavigateToPoseAction, this,
-                  goal_handle, current_pose, session_id);
+  startActionThread(
+      session_id, "single-point navigation",
+      [this, goal_handle, current_pose, session_id]() {
+        executeNavigateToPoseAction(goal_handle, current_pose, session_id);
+      },
+      [goal_handle](const std::string &message) {
+        auto result = std::make_shared<NavigateToPose::Result>();
+        result->success = false;
+        result->message = message;
+        if (goal_handle->is_active()) goal_handle->abort(result);
+      });
 }
 
 void NavigationTaskExecutor::cancel() {
@@ -1229,7 +1243,14 @@ void NavigationTaskExecutor::executePatrolAction(
     result->success = false;
     result->completed_count = 0U;
     result->message = worker_message;
-    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, worker_message);
+    std::string cleanup_message;
+    if (stopWorkers(session_id, cleanup_message)) {
+      state_machine_->resetToIdleAfterTeardown();
+      callbacks_.publish_mode();
+    } else {
+      result->message += "; " + cleanup_message;
+      callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    }
     goal_handle->abort(result);
     releaseOperation();
     return;
@@ -1470,7 +1491,11 @@ void NavigationTaskExecutor::executePatrolAction(
   } else if (failed) {
     result->success = false;
     result->message = failure_message;
-    callbacks_.enter_error(failure_error_code, failure_message);
+    if (stopped) {
+      callbacks_.publish_mode();
+    } else {
+      callbacks_.enter_error(failure_error_code, failure_message);
+    }
     goal_handle->abort(result);
   } else {
     result->success = true;
@@ -1604,9 +1629,16 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   callbacks_.publish_mode();
 
   if (!startWorkers(session_id, message)) {
-    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, message);
     result->success = false;
     result->message = message;
+    std::string cleanup_message;
+    if (stopWorkers(session_id, cleanup_message)) {
+      state_machine_->resetToIdleAfterTeardown();
+      callbacks_.publish_mode();
+    } else {
+      result->message += "; " + cleanup_message;
+      callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    }
     goal_handle->abort(result);
     releaseOperation();
     return;
@@ -1658,7 +1690,11 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
     result->success = false;
     result->message = !reached ? "navigation timed out"
                                : "navigation completed but " + stop_message;
-    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    if (stopped) {
+      callbacks_.publish_mode();
+    } else {
+      callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR, result->message);
+    }
     goal_handle->abort(result);
   } else {
     result->success = true;
@@ -1743,6 +1779,79 @@ bool NavigationTaskExecutor::waitForStopDuration(
         return cancel_requested_ || shutting_down_ || is_canceling();
       });
   return !interrupted;
+}
+
+void NavigationTaskExecutor::startActionThread(
+    uint64_t session_id, const std::string &action_name,
+    std::function<void()> execute,
+    std::function<void(const std::string &)> abort) {
+  std::lock_guard<std::mutex> execution_lock(execution_mutex_);
+  if (execution_thread_.joinable()) execution_thread_.join();
+
+  try {
+    execution_thread_ = std::thread(
+        [this, session_id, action_name, execute, abort]() {
+          const auto fail = [this, session_id, &action_name,
+                             &abort](const std::string &message) {
+            try {
+              recoverAfterActionException(session_id, message);
+            } catch (const std::exception &error) {
+              RCLCPP_ERROR(node_->get_logger(),
+                           "Navigation exception cleanup failed: %s",
+                           error.what());
+            } catch (...) {
+              RCLCPP_ERROR(node_->get_logger(),
+                           "Navigation exception cleanup failed");
+            }
+            try {
+              abort(message);
+            } catch (...) {
+              RCLCPP_ERROR(node_->get_logger(),
+                           "Failed to abort %s action after exception",
+                           action_name.c_str());
+            }
+          };
+          try {
+            execute();
+          } catch (const std::exception &error) {
+            fail(action_name + " action exception: " + error.what());
+          } catch (...) {
+            fail("unknown " + action_name + " action exception");
+          }
+        });
+  } catch (const std::exception &error) {
+    releaseOperation();
+    const std::string message =
+        "failed to start " + action_name + " action thread: " + error.what();
+    try {
+      abort(message);
+    } catch (...) {
+      RCLCPP_ERROR(node_->get_logger(),
+                   "Failed to abort %s action after thread creation failure",
+                   action_name.c_str());
+    }
+  }
+}
+
+void NavigationTaskExecutor::recoverAfterActionException(
+    uint64_t session_id, const std::string &message) {
+  ScopeExit release_operation([this]() { releaseOperation(); });
+  RCLCPP_ERROR(node_->get_logger(), "%s", message.c_str());
+  cancel();
+  if (state_machine_->beginStopNavigation()) callbacks_.publish_mode();
+
+  std::string stop_message;
+  const bool stopped = stopWorkers(session_id, stop_message);
+  if (stopped) {
+    // 异常可能发生在starting/navigation/paused/stop任意阶段，普通的
+    // navigationStopped()只接受stopping_navigation。Worker已经确认停止
+    // 后统一复位，避免状态残留导致下一个Action被拒绝。
+    state_machine_->resetToIdleAfterTeardown();
+    callbacks_.publish_mode();
+  } else {
+    callbacks_.enter_error(RuntimeState::NAVIGATION_ERROR,
+                           message + "; " + stop_message);
+  }
 }
 
 void NavigationTaskExecutor::resetGoalState() {

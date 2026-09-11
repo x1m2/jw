@@ -29,6 +29,19 @@ bool finitePoseFields(double x, double y, double z, double theta) {
          std::isfinite(theta);
 }
 
+class ScopeExit {
+ public:
+  explicit ScopeExit(std::function<void()> callback)
+      : callback_(std::move(callback)) {}
+  ~ScopeExit() { callback_(); }
+
+  ScopeExit(const ScopeExit &) = delete;
+  ScopeExit &operator=(const ScopeExit &) = delete;
+
+ private:
+  std::function<void()> callback_;
+};
+
 bool validMapId(const std::string &map_id, std::string &message) {
   constexpr std::size_t kMaximumIdLength = 64U;
   if (map_id.empty() || map_id.size() > kMaximumIdLength) {
@@ -292,11 +305,14 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
 
 SlamManagerNode::~SlamManagerNode() {
   shutting_down_.store(true);
+  {
+    std::lock_guard<std::mutex> lock(lifecycle_token_mutex_);
+    if (active_lifecycle_token_) active_lifecycle_token_->cancel();
+  }
   localization_result_cv_.notify_all();
   std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
-  if (localization_action_thread_.joinable()) {
+  if (localization_action_thread_.joinable())
     localization_action_thread_.join();
-  }
 }
 
 uint64_t SlamManagerNode::beginLifecycleCommand(const char *command_name) {
@@ -360,6 +376,56 @@ bool SlamManagerNode::prepareForStartCommand(
     return false;
   }
   return true;
+}
+
+std::string SlamManagerNode::recoverLocalizationActionException(
+    const std::string &message) {
+  RCLCPP_ERROR(get_logger(), "%s", message.c_str());
+  std::string result_message = message;
+  try {
+    const uint64_t generation =
+        beginLifecycleCommand("recover_localization_action");
+    std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    const auto operation_token = installLifecycleToken(generation);
+    std::string cleanup_message;
+    if (operation_token &&
+        prepareForStartCommand(generation, operation_token, cleanup_message)) {
+      result_message += "; runtime cleanup succeeded";
+    } else {
+      result_message += "; runtime cleanup failed: " + cleanup_message;
+      if (isLifecycleCommandActive(generation, operation_token)) {
+        enterError(RuntimeState::LOCALIZATION_ERROR, result_message);
+      }
+    }
+  } catch (const std::exception &cleanup_error) {
+    result_message += "; runtime cleanup exception: ";
+    result_message += cleanup_error.what();
+    enterError(RuntimeState::LOCALIZATION_ERROR, result_message);
+  } catch (...) {
+    result_message += "; unknown runtime cleanup exception";
+    enterError(RuntimeState::LOCALIZATION_ERROR, result_message);
+  }
+  return result_message;
+}
+
+void SlamManagerNode::abortLocalizationActionAfterException(
+    const std::shared_ptr<StartLocalizationGoalHandle> &goal_handle,
+    const std::string &message) noexcept {
+  try {
+    const std::string result_message =
+        recoverLocalizationActionException(message);
+    auto result = std::make_shared<StartLocalization::Result>();
+    result->success = false;
+    result->message = result_message;
+    if (goal_handle->is_active()) goal_handle->abort(result);
+  } catch (const std::exception &error) {
+    RCLCPP_ERROR(get_logger(),
+                 "Failed to recover or abort localization action: %s",
+                 error.what());
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(),
+                 "Failed to recover or abort localization action");
+  }
 }
 
 bool SlamManagerNode::stopAllAlgorithms(std::string &message) {
@@ -874,10 +940,16 @@ rclcpp_action::GoalResponse SlamManagerNode::handleLocalizationGoal(
                 "values");
     return rclcpp_action::GoalResponse::REJECT;
   }
-  if (shutting_down_.load() || localization_action_active_.exchange(true)) {
+  if (shutting_down_.load()) {
+    RCLCPP_WARN(get_logger(),
+                "Reject localization goal: the node is shutting down");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  bool expected = false;
+  if (!localization_action_active_.compare_exchange_strong(expected, true)) {
     RCLCPP_WARN(get_logger(),
                 "Reject localization goal: another localization action is "
-                "active or the node is shutting down");
+                "active; cancel it before sending a new goal");
     return rclcpp_action::GoalResponse::REJECT;
   }
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
@@ -897,12 +969,25 @@ rclcpp_action::CancelResponse SlamManagerNode::handleLocalizationCancel(
 void SlamManagerNode::handleLocalizationAccepted(
     const std::shared_ptr<StartLocalizationGoalHandle> goal_handle) {
   std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
-  if (localization_action_thread_.joinable()) {
+  // active标志只在线程完全退出时释放，因此这里最多回收一个已经结束的线程，
+  // 不会等待仍在执行的Action。
+  if (localization_action_thread_.joinable())
     localization_action_thread_.join();
-  }
   try {
-    localization_action_thread_ = std::thread(
-        &SlamManagerNode::executeLocalizationAction, this, goal_handle);
+    localization_action_thread_ = std::thread([this, goal_handle]() {
+      ScopeExit release_action(
+          [this]() { localization_action_active_.store(false); });
+      try {
+        executeLocalizationAction(goal_handle);
+      } catch (const std::exception &error) {
+        abortLocalizationActionAfterException(
+            goal_handle,
+            std::string("localization action exception: ") + error.what());
+      } catch (...) {
+        abortLocalizationActionAfterException(
+            goal_handle, "unknown localization action exception");
+      }
+    });
   } catch (const std::exception &error) {
     localization_action_active_.store(false);
     auto result = std::make_shared<StartLocalization::Result>();
@@ -943,7 +1028,6 @@ void SlamManagerNode::executeLocalizationAction(
         goal_handle->abort(result);
       }
     }
-    localization_action_active_.store(false);
   };
 
   publish_feedback("starting localization");

@@ -177,6 +177,11 @@ class NavigationTaskExecutor {
                    const std::function<bool()> &is_canceling);
   bool waitForStopDuration(double duration_sec,
                            const std::function<bool()> &is_canceling);
+  void startActionThread(uint64_t session_id, const std::string &action_name,
+                         std::function<void()> execute,
+                         std::function<void(const std::string &)> abort);
+  void recoverAfterActionException(uint64_t session_id,
+                                   const std::string &message);
   void fillCurrentPoseFeedback(StartNavigation::Feedback &feedback) const;
   void resetGoalState();
   void releaseOperation();
