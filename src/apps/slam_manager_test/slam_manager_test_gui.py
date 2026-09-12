@@ -1194,6 +1194,9 @@ class RuntimeTestGui:
 
     def _prompt_map_id(self, action_title, require_existing=False):
         """弹窗读取直接作为目录名的字符串 map_id。"""
+        if require_existing:
+            return self._select_existing_map_id(action_title)
+
         initial_value = self.current_map_id or ''
 
         while True:
@@ -1221,22 +1224,90 @@ class RuntimeTestGui:
                     parent=self.root,
                 )
                 continue
-            if require_existing:
-                map_directory = os.path.join(self.data_root, map_id)
-                if not os.path.isdir(map_directory):
-                    messagebox.showerror(
-                        '地图不存在',
-                        f'没有找到 {map_id}：\n{map_directory}',
-                        parent=self.root,
-                    )
-                    self._append_log(
-                        f'[FAIL] {action_title}: 地图目录不存在 {map_directory}'
-                    )
-                    initial_value = map_id
-                    continue
-
             self.current_map_id = map_id
             return map_id
+
+    def _existing_map_ids(self):
+        """列出包含map/globalmap.pcd的完整地图。"""
+        try:
+            entries = os.listdir(self.data_root)
+        except OSError as error:
+            self._append_log(f'[FAIL] 扫描地图目录失败: {error}')
+            return []
+
+        map_ids = []
+        for map_id in entries:
+            if map_id == 'log':
+                continue
+            try:
+                self._identifier(map_id, 'map_id')
+            except ValueError:
+                continue
+            global_map = os.path.join(
+                self.data_root, map_id, 'map', 'globalmap.pcd'
+            )
+            if os.path.isfile(global_map):
+                map_ids.append(map_id)
+        return sorted(map_ids)
+
+    def _select_existing_map_id(self, action_title):
+        """通过只读下拉框选择已有地图。"""
+        map_ids = self._existing_map_ids()
+        if not map_ids:
+            messagebox.showwarning(
+                '没有可用地图',
+                f'未在以下目录找到完整地图：\n{self.data_root}\n\n'
+                '地图必须包含 map/globalmap.pcd。',
+                parent=self.root,
+            )
+            return None
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(action_title)
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        selected = tk.StringVar(
+            value=self.current_map_id
+            if self.current_map_id in map_ids
+            else map_ids[0]
+        )
+        result = {'map_id': None}
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text='请选择已有地图：').pack(anchor='w')
+        combo = ttk.Combobox(
+            frame,
+            textvariable=selected,
+            values=map_ids,
+            state='readonly',
+            width=max(32, min(64, max(map(len, map_ids)) + 2)),
+        )
+        combo.pack(fill=tk.X, pady=(8, 14))
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(anchor='e')
+
+        def confirm():
+            result['map_id'] = selected.get()
+            dialog.destroy()
+
+        ttk.Button(buttons, text='取消', command=dialog.destroy).pack(
+            side=tk.RIGHT
+        )
+        ttk.Button(buttons, text='确定', command=confirm).pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
+        dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+        dialog.bind('<Return>', lambda _event: confirm())
+        dialog.bind('<Escape>', lambda _event: dialog.destroy())
+        combo.focus_set()
+        self.root.wait_window(dialog)
+
+        if result['map_id'] is not None:
+            self.current_map_id = result['map_id']
+        return result['map_id']
 
     def _set_mapping_active(self, active, enabled=True):
         self.mapping_request_active = active
