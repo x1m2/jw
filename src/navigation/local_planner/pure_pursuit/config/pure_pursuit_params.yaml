@@ -24,7 +24,7 @@
     local_avoidance_max_linear_velocity: 0.6 # 绕障行走阶段最大线速度（m/s）
 
     # ==================== 速度与平滑限制 ====================
-    max_linear_velocity: 0.75      # X 方向最大线速度（m/s）
+    max_linear_velocity: 0.7      # X 方向最大线速度（m/s）
     max_linear_velocity_y: 0.0    # 非全向底盘：禁止Y方向横移（m/s）
     max_angular_velocity: 0.7     # 最大角速度（rad/s）
     acceleration_limit: 0.5       # 最大加速度（m/s²）

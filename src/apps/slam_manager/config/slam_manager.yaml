@@ -14,7 +14,7 @@ slam_manager:
       stop_timeout_sec: 10.0
       # load_map每次都运行该工具，基于当前globalmap.pcd重新生成voxelmaps_coords。
       bbs:
-        saver_executable: "/home/jw/robot_rk3588_ws/env/3d_bbs/test/build/saver"
+        saver_executable: "/home/jw/ota/slam/lib/saver"
         min_level_resolution: 0.5
         max_level: 6
         generation_timeout_sec: 120.0
@@ -32,7 +32,7 @@ slam_manager:
       # 当前边会用该值覆盖局部规划器YAML中的avoid_max_distance。
       default_edge_policy:
         obstacle_avoidance_enabled: false
-        obstacle_avoidance_distance_m: 0.5
+        obstacle_avoidance_distance_m: 1.0
 
     publish:
       # /robot/cloud_body对APP的发布频率
