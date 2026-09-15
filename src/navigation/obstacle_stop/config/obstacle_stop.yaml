@@ -23,9 +23,9 @@
 
     safety_margin: 0.05
     # 近矩形：从车体前缘开始，检测到障碍后强制停车。
-    hard_stop_distance: 0.15
+    hard_stop_distance: 0.25
     # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
-    slowdown_distance: 0.25
+    slowdown_distance: 0.4
     obstacle_ratio_threshold: 0.10
 
     linear_velocity_factor: 0.40

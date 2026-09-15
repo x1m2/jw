@@ -125,6 +125,7 @@ class UwbFollowPlanner : public rclcpp::Node {
   bool manage_pure_pursuit_pause_;
   bool obstacle_stop_enabled_;
   bool obstacle_avoidance_enabled_;
+  double obstacle_avoidance_distance_m_;
 
   rclcpp::Subscription<uwb_aoa_pkg::msg::LibAoaRobotMsg>::SharedPtr
       uwb_subscriber_;

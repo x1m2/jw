@@ -147,7 +147,7 @@
       # 机器人前方扇环用于触发绕障；车体前缘～1.0m 的单侧障碍优先
       # 向相反侧规划，正前方障碍或对侧通道不足时仍判为 BLOCKED。
       avoid_min_distance: 0.5       # 绕障触发起始/近障碍阻塞分界（m）
-      avoid_max_distance: 1.8       # YAML初始值；导航时由当前边的obstacle_avoidance_distance_m覆盖
+      avoid_max_distance: 1.8       # YAML初始值；普通导航时由当前边的obstacle_avoidance_distance_m覆盖，uwb导航时由uwb_follow_planner.yaml中的obstacle_avoidance_distance_m覆盖
       avoid_sector_angle: 90.0      # 绕障检测扇形总角度（deg）
 
       safety_margin: 0.10           # 车体轮廓外扩安全距离（m）

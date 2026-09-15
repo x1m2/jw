@@ -85,3 +85,5 @@ uwb_follow_planner_node:
     obstacle_stop_enabled: true
     # UWB 跟随允许局部规划器接管运动并生成 A* 绕障路径
     obstacle_avoidance_enabled: true
+    # 发布到PathWithPolicy的绕障检测距离
+    obstacle_avoidance_distance_m: 1.8

@@ -76,6 +76,8 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       declare_parameter<bool>("obstacle_stop_enabled", true);
   obstacle_avoidance_enabled_ =
       declare_parameter<bool>("obstacle_avoidance_enabled", true);
+  obstacle_avoidance_distance_m_ =
+      declare_parameter<double>("obstacle_avoidance_distance_m", 0.5);
 
   filter_alpha_ = std::clamp(filter_alpha_, 0.0, 1.0);
   maximum_trail_points_ = std::max(maximum_trail_points_, 2);
@@ -94,7 +96,9 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       target_angle_update_threshold_degrees_ <= 0.0 ||
       target_angle_update_threshold_degrees_ > 180.0 ||
       !std::isfinite(target_position_update_threshold_) ||
-      target_position_update_threshold_ <= 0.0) {
+      target_position_update_threshold_ <= 0.0 ||
+      !std::isfinite(obstacle_avoidance_distance_m_) ||
+      obstacle_avoidance_distance_m_ <= 0.0) {
     throw std::invalid_argument("invalid UWB follow planner parameters");
   }
 
@@ -142,6 +146,11 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
       std::bind(&UwbFollowPlanner::planningTimerCallback, this));
 
   setState(FollowState::kWaitingForPose);
+  RCLCPP_INFO(get_logger(),
+              "UWB edge policy: obstacle_avoidance_enabled=%d, "
+              "obstacle_avoidance_distance_m=%.2f",
+              obstacle_avoidance_enabled_ ? 1 : 0,
+              obstacle_avoidance_distance_m_);
   if (enable_follow_command_topic_) {
     RCLCPP_INFO(get_logger(),
                 "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
@@ -704,7 +713,8 @@ bool UwbFollowPlanner::buildFollowPath(
   auto follow_policy = navigation_interfaces::makeDefaultEdgePolicy(false);
   follow_policy.obstacle_stop_enabled = obstacle_stop_enabled_;
   follow_policy.obstacle_avoidance_enabled = obstacle_avoidance_enabled_;
-  follow_policy.obstacle_avoidance_distance_m = 0.5;
+  follow_policy.obstacle_avoidance_distance_m =
+      obstacle_avoidance_distance_m_;
   output.edge_policies.assign(output.path.poses.size(), follow_policy);
   output.dynamic_path = true;
 
