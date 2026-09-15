@@ -1,9 +1,0 @@
-<?xml version="1.0"?>
-<library path="rviz_topology_editor_save_panel">
-  <class
-    name="rviz_topology_editor/SavePanel"
-    type="rviz_topology_editor::SavePanel"
-    base_class_type="rviz_common::Panel">
-    <description>Edit RViz topology points, connect nodes and generate task files.</description>
-  </class>
-</library>

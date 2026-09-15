@@ -1,9 +1,0 @@
-<library path="topology_rviz_plugin">
-  <class name="topology_rviz_plugin/TopologyTool"
-         type="topology_rviz_plugin::TopologyTool"
-         base_class_type="rviz_common::Tool">
-    <description>
-      一个用于创建和编辑拓扑地图的 RViz2 工具。支持添加节点、手动连接节点、编辑节点属性和删除操作。
-    </description>
-  </class>
-</library>

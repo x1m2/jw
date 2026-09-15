@@ -1,9 +1,0 @@
-int32 edge_id
-int32 from_id
-int32 to_id
-string edge_type
-float64 linear_velocity
-float64 angular_velocity
-int8 motion_direction
-bool obstacle_stop_enabled
-bool obstacle_avoidance_enabled
