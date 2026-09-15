@@ -32,7 +32,7 @@ slam_manager:
       # 当前边会用该值覆盖局部规划器YAML中的avoid_max_distance。
       default_edge_policy:
         obstacle_avoidance_enabled: false
-        obstacle_avoidance_distance_m: 1.0
+        obstacle_avoidance_distance_m: 1.5
 
     publish:
       # /robot/cloud_body对APP的发布频率
