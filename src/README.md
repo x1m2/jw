@@ -16,13 +16,18 @@ colcon build --packages-select quatro \
 
 ```bash
 source install/setup.bash
-colcon build --symlink-install --parallel-workers 2 \
-  --packages-skip quatro \
+colcon build --symlink-install --parallel-workers 3 \
+  --packages-skip quatro uwb_follow_planner bbs3d  fastlio_localization pgo_sc fast_lio \
   --cmake-args \
     -DCMAKE_BUILD_TYPE=Release \
     -DROS_EDITION=ROS2 \
     -DHUMBLE_ROS=humble
 
+colcon build --symlink-install \
+    --parallel-workers 1 \
+    --packages-select fast_lio fastlio_localization pgo_sc \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release
+    
 source install/setup.bash
 ```
 
