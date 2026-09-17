@@ -53,10 +53,10 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 `state`和`code`，同时节点日志输出`[NAVIGATION_GATE]`状态记录。
 
 状态检查通过后，启动导航前调用一次`/SetMode`并发送`mode: 1`。导航正常结束、
-启动失败、运行失败或取消时同样调用一次`/SetMode`并发送`mode: 1`；不进行周期调用。
+启动失败、运行失败或取消时调用一次`/SetMode`并发送`mode: 0`；不进行周期调用。
 服务响应通过`[NAVIGATION_MODE]`日志记录，设置`mode: 1`失败时不会启动导航Worker。
-暂停导航成功后同样发送一次`mode: 1`；继续导航时先发送一次`mode: 1`，成功后
-才恢复Pure Pursuit速度输出。继续失败时仍发送`mode: 1`。配置
+暂停导航成功后同样发送一次`mode: 0`；继续导航时先发送一次`mode: 1`，成功后
+才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。配置
 `navigation.enable_set_mode: false`可统一禁用上述`/SetMode`调用。
 
 `navigation.default_edge_policy`提供全局默认边策略：

@@ -1869,10 +1869,10 @@ void SlamManagerNode::pauseNavigationCallback(
 
   publishMode();
   std::string mode_message;
-  if (!setRobotMode(1, mode_message)) {
+  if (!setRobotMode(0, mode_message)) {
     response->success = false;
     response->message =
-        "navigation paused, but failed to set robot mode=1: " + mode_message;
+        "navigation paused, but failed to set robot mode=0: " + mode_message;
     return;
   }
   response->success = true;
@@ -1906,22 +1906,22 @@ void SlamManagerNode::resumeNavigationCallback(
 
   std::string message;
   if (!navigation_task_executor_->setPaused(false, message)) {
-    std::string mode_message_after_failure;
-    setRobotMode(1, mode_message_after_failure);
+    std::string reset_message;
+    setRobotMode(0, reset_message);
     response->success = false;
     response->message = "resume navigation failed: " + message +
-                        "; robot mode kept at 1: " + mode_message_after_failure;
+                        "; robot mode reset: " + reset_message;
     return;
   }
   if (!state_machine_.resumeNavigation()) {
     std::string pause_message;
     navigation_task_executor_->setPaused(true, pause_message);
-    std::string mode_message_after_failure;
-    setRobotMode(1, mode_message_after_failure);
+    std::string reset_message;
+    setRobotMode(0, reset_message);
     response->success = false;
     response->message =
-        "resume navigation state transition failed; robot mode kept at 1: " +
-        mode_message_after_failure;
+        "resume navigation state transition failed; robot mode reset: " +
+        reset_message;
     return;
   }
 
