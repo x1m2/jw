@@ -122,6 +122,8 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
                  "Failed to initialize local path planner");
     return false;
   }
+  avoidance_timing_enabled_ =
+      node_->get_parameter("avoidance_timing_enabled").as_bool();
   RCLCPP_INFO(node_->get_logger(),
               "Local path planner (A* replanning) initialized");
 
@@ -560,6 +562,28 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     local_tracking = avoidance_output.tracking_local;
   }
 
+  if (avoidance_timing_enabled_) {
+    if (avoidance_output.mode == AvoidanceTrackingMode::LOCAL_PATH &&
+        avoidance_output.local_path &&
+        !avoidance_output.local_path->poses.empty() &&
+        (timing_path_generation_ != avoidance_output.task_generation ||
+         avoidance_output.realign_local_path)) {
+      timing_path_generation_ = avoidance_output.task_generation;
+      timing_path_seen_time_ = std::chrono::steady_clock::now();
+      timing_first_motion_logged_ = false;
+      timing_first_forward_logged_ = false;
+      RCLCPP_INFO(node_->get_logger(),
+                  "[AVOID_TIMING_CONTROL] task=%lu path visible to "
+                  "controller; poses=%zu",
+                  static_cast<unsigned long>(timing_path_generation_),
+                  avoidance_output.local_path->poses.size());
+    } else if (!local_tracking) {
+      timing_path_generation_ =
+          std::numeric_limits<std::uint64_t>::max();
+      timing_path_seen_time_ = std::chrono::steady_clock::time_point{};
+    }
+  }
+
   if (local_avoidance_manager_) {
     publishAvoidanceState(avoidance_output);
   }
@@ -635,6 +659,40 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
   controller_->applyVelocityLimits(
       last_cmd_vel_, (node_->now() - last_control_time_).seconds(),
       edge_linear_velocity, edge_angular_velocity, cmd_vel);
+
+  if (avoidance_timing_enabled_ && local_tracking &&
+      timing_path_seen_time_ != std::chrono::steady_clock::time_point{}) {
+    const double since_path_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - timing_path_seen_time_).count();
+    const bool motion_command = std::abs(cmd_vel.linear.x) > 0.02 ||
+                                std::abs(cmd_vel.linear.y) > 0.02 ||
+                                std::abs(cmd_vel.angular.z) > 0.02;
+    const bool forward_command = std::abs(cmd_vel.linear.x) > 0.02 ||
+                                 std::abs(cmd_vel.linear.y) > 0.02;
+    if (motion_command && !timing_first_motion_logged_) {
+      timing_first_motion_logged_ = true;
+      RCLCPP_INFO(node_->get_logger(),
+                  "[AVOID_TIMING_CONTROL] task=%lu first_motion_ms=%.1f "
+                  "vx=%.3f wz=%.3f",
+                  static_cast<unsigned long>(timing_path_generation_),
+                  since_path_ms, cmd_vel.linear.x, cmd_vel.angular.z);
+    }
+    if (forward_command && !timing_first_forward_logged_) {
+      timing_first_forward_logged_ = true;
+      RCLCPP_INFO(node_->get_logger(),
+                  "[AVOID_TIMING_CONTROL] task=%lu first_forward_ms=%.1f "
+                  "vx=%.3f wz=%.3f",
+                  static_cast<unsigned long>(timing_path_generation_),
+                  since_path_ms, cmd_vel.linear.x, cmd_vel.angular.z);
+    } else if (!timing_first_forward_logged_) {
+      RCLCPP_INFO_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[AVOID_TIMING_CONTROL] task=%lu waiting_forward_ms=%.1f "
+          "vx=%.3f wz=%.3f",
+          static_cast<unsigned long>(timing_path_generation_), since_path_ms,
+          cmd_vel.linear.x, cmd_vel.angular.z);
+    }
+  }
 
   // 发布可视化信息
   publishVisualization(lookahead_point);

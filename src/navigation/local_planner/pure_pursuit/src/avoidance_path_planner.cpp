@@ -1182,115 +1182,87 @@ AvoidancePathPlanner::buildSideGoalCandidates(
   const double forward_step =
       std::max(0.0, config_.side_goal_forward_sample_step);
   candidates.reserve(static_cast<std::size_t>(lateral_count * forward_count));
-
-  const int expansion_rounds =
-      std::clamp(config_.side_goal_expansion_rounds, 0, 6);
-  const double expansion_lateral_step =
-      std::max(0.0, config_.side_goal_expansion_lateral_step);
-  const double expansion_forward_step =
-      std::max(0.0, config_.side_goal_expansion_forward_step);
   const char *side_name = side == AvoidanceSide::LEFT ? "LEFT" : "RIGHT";
 
-  // 先检查基础3x4候选。只有当本轮所有终点均被完整
-  // footprint拒绝时，才同时向障碍侧外和障碍后方扩展下一轮。
-  // 找到任意可用终点后立即返回该轮，避免无必要地扩大A*搜索范围。
-  for (int expansion_round = 0; expansion_round <= expansion_rounds;
-       ++expansion_round) {
-    candidates.clear();
-    const double extra_lateral =
-        expansion_round * expansion_lateral_step;
-    const double extra_forward =
-        expansion_round * expansion_forward_step;
-    int rejected_endpoints = 0;
+  // 每侧只生成一组由横向、纵向采样数决定的候选；安全检查失败时
+  // 由Manager等待新地图重试，不再向障碍侧外和后方增加扩展轮次。
+  int rejected_endpoints = 0;
+  for (int forward_index = 0; forward_index < forward_count;
+       ++forward_index) {
+    const double forward_clearance = minimum_forward_clearance +
+                                     forward_index * forward_step;
+    for (int lateral_index = 0; lateral_index < lateral_count;
+         ++lateral_index) {
+      const double boundary_clearance = minimum_boundary_clearance +
+                                        lateral_index * lateral_step;
+      const double goal_lateral =
+          side == AvoidanceSide::LEFT
+              ? left_boundary + boundary_clearance
+              : right_boundary - boundary_clearance;
+      const double lateral_motion = std::abs(goal_lateral - robot_lateral);
+      const double entry_limited_forward =
+          robot_forward + lateral_motion / std::tan(entry_angle);
+      const double goal_forward =
+          std::max(forward_boundary + forward_clearance,
+                   entry_limited_forward);
 
-    for (int forward_index = 0; forward_index < forward_count;
-         ++forward_index) {
-      const double forward_clearance = minimum_forward_clearance +
-                                       extra_forward +
-                                       forward_index * forward_step;
-      for (int lateral_index = 0; lateral_index < lateral_count;
-           ++lateral_index) {
-        const double boundary_clearance = minimum_boundary_clearance +
-                                          extra_lateral +
-                                          lateral_index * lateral_step;
-        const double goal_lateral =
-            side == AvoidanceSide::LEFT
-                ? left_boundary + boundary_clearance
-                : right_boundary - boundary_clearance;
-        const double lateral_motion = std::abs(goal_lateral - robot_lateral);
-        const double entry_limited_forward =
-            robot_forward + lateral_motion / std::tan(entry_angle);
-        const double goal_forward =
-            std::max(forward_boundary + forward_clearance,
-                     entry_limited_forward);
+      SideGoalCandidate candidate;
+      candidate.point.x = obstacle_center.x + path_x * goal_forward +
+                          left_x * goal_lateral;
+      candidate.point.y = obstacle_center.y + path_y * goal_forward +
+                          left_y * goal_lateral;
+      candidate.point.z = obstacle_center.z;
+      candidate.yaw = path_yaw;
+      candidate.side = side;
+      candidate.boundary_lateral = side == AvoidanceSide::LEFT
+                                       ? left_boundary
+                                       : right_boundary;
+      candidate.boundary_forward = forward_boundary;
+      candidate.boundary_clearance = boundary_clearance;
+      candidate.forward_clearance = forward_clearance;
 
-        SideGoalCandidate candidate;
-        candidate.point.x = obstacle_center.x + path_x * goal_forward +
-                            left_x * goal_lateral;
-        candidate.point.y = obstacle_center.y + path_y * goal_forward +
-                            left_y * goal_lateral;
-        candidate.point.z = obstacle_center.z;
-        candidate.yaw = path_yaw;
-        candidate.side = side;
-        candidate.boundary_lateral = side == AvoidanceSide::LEFT
-                                         ? left_boundary
-                                         : right_boundary;
-        candidate.boundary_forward = forward_boundary;
-        candidate.boundary_clearance = boundary_clearance;
-        candidate.forward_clearance = forward_clearance;
-
-        if (isPointInObstacle(candidate.point, candidate.yaw)) {
-          ++rejected_endpoints;
-          const int candidate_number =
-              forward_index * lateral_count + lateral_index;
-          const std::string diagnostic_name =
-              std::string("side_") + side_name + "_round_" +
-              std::to_string(expansion_round) + "_candidate_" +
-              std::to_string(candidate_number);
-          isPointInObstacleWithDiagnostics(
-              candidate.point, diagnostic_name.c_str(), candidate.yaw);
-          RCLCPP_INFO(
-              node_->get_logger(),
-              "[SIDE_CANDIDATE_REJECT] side=%s round=%d candidate=%d "
-              "goal=(%.3f,%.3f) boundary_clearance=%.3f "
-              "forward_clearance=%.3f reason=ENDPOINT_FOOTPRINT",
-              side_name, expansion_round, candidate_number,
-              candidate.point.x, candidate.point.y, boundary_clearance,
-              forward_clearance);
-          continue;
-        }
-        candidates.push_back(std::move(candidate));
+      if (isPointInObstacle(candidate.point, candidate.yaw)) {
+        ++rejected_endpoints;
+        const int candidate_number =
+            forward_index * lateral_count + lateral_index;
+        const std::string diagnostic_name =
+            std::string("side_") + side_name + "_candidate_" +
+            std::to_string(candidate_number);
+        isPointInObstacleWithDiagnostics(
+            candidate.point, diagnostic_name.c_str(), candidate.yaw);
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "[SIDE_CANDIDATE_REJECT] side=%s candidate=%d "
+            "goal=(%.3f,%.3f) boundary_clearance=%.3f "
+            "forward_clearance=%.3f reason=ENDPOINT_FOOTPRINT",
+            side_name, candidate_number,
+            candidate.point.x, candidate.point.y, boundary_clearance,
+            forward_clearance);
+        continue;
       }
-    }
-
-    RCLCPP_INFO(
-        node_->get_logger(),
-        "[SIDE_CANDIDATES] side=%s boundary_lat=%.3f "
-        "boundary_forward=%.3f round=%d extra_lat=%.3f extra_forward=%.3f "
-        "generated=%zu rejected=%d grid=%dx%d",
-        side_name,
-        side == AvoidanceSide::LEFT ? left_boundary : right_boundary,
-        forward_boundary, expansion_round, extra_lateral, extra_forward,
-        candidates.size(), rejected_endpoints, lateral_count, forward_count);
-    if (!candidates.empty()) {
-      return candidates;
-    }
-    if (expansion_round < expansion_rounds) {
-      RCLCPP_WARN(
-          node_->get_logger(),
-          "[SIDE_CANDIDATE_EXPAND] side=%s round=%d all=%d rejected; "
-          "trying round=%d with extra_lat=%.3f extra_forward=%.3f",
-          side_name, expansion_round, lateral_count * forward_count,
-          expansion_round + 1,
-          (expansion_round + 1) * expansion_lateral_step,
-          (expansion_round + 1) * expansion_forward_step);
+      candidates.push_back(std::move(candidate));
     }
   }
 
-  RCLCPP_WARN(node_->get_logger(),
-              "[SIDE_CANDIDATE_EXHAUSTED] side=%s rounds=%d; no "
-              "footprint-safe endpoint found",
-              side_name, expansion_rounds + 1);
+  RCLCPP_INFO(
+      node_->get_logger(),
+      "[SIDE_CANDIDATES] side=%s boundary_lat=%.3f "
+      "boundary_forward=%.3f generated=%zu rejected=%d grid=%dx%d",
+      side_name,
+      side == AvoidanceSide::LEFT ? left_boundary : right_boundary,
+      forward_boundary, candidates.size(), rejected_endpoints,
+      lateral_count, forward_count);
+
+  if (candidates.empty()) {
+    RCLCPP_WARN(node_->get_logger(),
+                "[SIDE_CANDIDATE_EXHAUSTED] side=%s; no "
+                "footprint-safe endpoint found",
+                side_name);
+  } else {
+    RCLCPP_INFO(node_->get_logger(),
+                "[SIDE_CANDIDATE_TOTAL] side=%s generated=%zu",
+                side_name, candidates.size());
+  }
   return candidates;
 }
 

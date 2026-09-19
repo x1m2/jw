@@ -195,6 +195,12 @@ private:
   std::atomic_bool navigation_paused_{false};
   std::atomic_bool reset_velocity_on_next_control_{false};
   std::atomic_bool obstacle_stop_active_{false};
+  bool avoidance_timing_enabled_{true};
+  std::uint64_t timing_path_generation_{
+      std::numeric_limits<std::uint64_t>::max()};
+  std::chrono::steady_clock::time_point timing_path_seen_time_{};
+  bool timing_first_motion_logged_{false};
+  bool timing_first_forward_logged_{false};
 
   /**
    * @brief 加载参数

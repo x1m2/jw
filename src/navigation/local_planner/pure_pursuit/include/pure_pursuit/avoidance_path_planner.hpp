@@ -37,9 +37,6 @@ struct AvoidancePathPlannerConfig {
   double side_goal_min_forward_clearance{0.35};
   double side_goal_forward_sample_step{0.30};
   int side_goal_forward_sample_count{4};
-  int side_goal_expansion_rounds{3};
-  double side_goal_expansion_lateral_step{0.20};
-  double side_goal_expansion_forward_step{0.30};
   double obstacle_threshold{50.0}; // Costmap障碍阈值
   std::string smoothing_method{"bezier"}; // bezier、bspline或none
   bool bezier_smoothing_enabled{true}; // 是否平滑局部A*折角

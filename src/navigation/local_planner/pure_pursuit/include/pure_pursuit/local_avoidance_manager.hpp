@@ -114,6 +114,7 @@ private:
 
   // 参数
   double planning_frequency_;  // 规划频率 (Hz)
+  bool avoidance_timing_enabled_{true};
   std::string global_frame_;   // 全局坐标系
   std::string robot_frame_;    // 机器人坐标系
   double transform_tolerance_; // TF变换容忍度
@@ -127,6 +128,7 @@ private:
   int avoidance_path_blocked_confirmations_{3};
   std::atomic<int> consecutive_blocked_path_checks_{0};
   double avoidance_temporary_goal_retry_period_{0.5};
+  double avoidance_clear_resume_path_length_{2.0};
   double avoidance_side_goal_retry_forward_step_{0.25};
   double avoidance_side_goal_retry_max_forward_offset_{0.75};
   double avoidance_side_score_path_length_weight_{1.0};
@@ -152,6 +154,7 @@ private:
   geometry_msgs::msg::Point stall_start_position_;
   double stall_start_yaw_{0.0};
   int consecutive_waiting_clear_checks_{0};
+  std::chrono::steady_clock::time_point search_clear_seen_time_{};
   std::uint64_t last_waiting_clear_costmap_version_{0};
 
   // 单段绕障任务：搜索并锁定原全局路径上的障碍后临时点，然后只跟踪
@@ -195,9 +198,13 @@ private:
   bool avoidance_corridor_selected_{false};
   int consecutive_planning_failures_{0};
   int temporary_goal_reselection_count_{0};
+  // 一批侧方候选全部失败后，下一次从后续候选开始，避免在地图未明显
+  // 变化时不断对同一组三个点重复运行A*。
+  std::size_t avoidance_side_candidate_retry_batch_{0U};
   int consecutive_temporary_goal_invalid_checks_{0};
   nav_msgs::msg::Path avoidance_temporary_path_;
   std::uint64_t avoidance_task_generation_{0};
+  std::chrono::steady_clock::time_point avoidance_trigger_time_{};
   std::uint64_t last_validated_costmap_version_{0};
   std::uint64_t last_path_checked_costmap_version_{0};
   std::uint64_t last_retry_costmap_version_{0};
@@ -237,6 +244,9 @@ private:
 
   // 辅助函数
   bool getRobotPose(geometry_msgs::msg::PoseStamped &robot_pose);
+  bool isGlobalPathClearForResume(
+      const geometry_msgs::msg::PoseStamped &robot_pose,
+      std::size_t global_path_progress_index);
   const char *avoidanceSideToString(AvoidanceSide side) const;
   int findClosestPointOnGlobalPath(
       const geometry_msgs::msg::PoseStamped &robot_pose);

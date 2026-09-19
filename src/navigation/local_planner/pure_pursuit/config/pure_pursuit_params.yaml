@@ -32,6 +32,7 @@
 
     # ==================== 局部绕障过程 ====================
     local_planning_frequency: 1.0        # 局部 A* 重规划频率（Hz）
+    avoidance_timing_enabled: false       # 输出绕障各阶段耗时；完成诊断后可关闭
     # lateral_clearance仅保留旧单侧点接口兼容；新侧方候选使用下方边界参数。
     avoidance_lateral_clearance: 1.0
     avoidance_max_entry_angle: 50.0
@@ -48,7 +49,7 @@
     avoidance_stall_timeout: 1.5          # 安全停障持续拦截且不移动多久后重规划同一临时点（s）
     avoidance_stall_distance: 0.05        # 该距离内视为机器人未产生有效位移（m）
     avoidance_stall_yaw_degrees: 5.0      # 原地角度变化超过该值视为仍在有效运动（deg）
-    avoidance_path_blocked_confirmations: 3 # 不同Costmap版本连续确认路径/临时点失效的次数
+    avoidance_path_blocked_confirmations: 1 # 不同Costmap版本连续确认路径/临时点失效的次数
     dynamic_goal_change_distance: 2.0      # 动态目标累计移动超过该距离时取消旧绕障（m）
     dynamic_goal_change_angle_degrees: 90.0 # 动态目标方向变化超过该角度时取消旧绕障（deg）
 
@@ -59,6 +60,7 @@
     avoidance_min_temporary_goal_distance_from_obstacle: 0.7 # 离开最后不安全采样后的最小弧长（m）
     avoidance_temporary_goal_sample_spacing: 0.05  # 配置上限；实际不大于半个Costmap栅格（m）
     avoidance_temporary_goal_retry_period: 0.5 # 无安全临时点或 A* 暂时失败后的重试周期（s）
+    avoidance_clear_resume_path_length: 1.5 # 搜索期间障碍清除时，恢复全局路径前验证的前方长度（m）
     avoidance_dynamic_side_goal_fallback_enabled: true # UWB短路径末端无障碍后路径点时，按已确认空旷侧生成临时点
     avoidance_static_side_transition_enabled: true # 普通导航直达回归点失败后，允许经障碍侧后方过渡点再接回全局路径
     avoidance_static_return_extended_search_distance: 10.0 # 普通导航无安全回归点时，沿剩余全局路径扩展搜索的最大弧长（m）
@@ -78,11 +80,7 @@
     avoidance_side_goal_forward_sample_step: 0.2 # 相邻纵向候选的距离增量（m）
     avoidance_side_goal_forward_sample_count: 3 # 每侧纵向候选数
 
-    # 基础3x4候选全部被终点footprint拒绝时，逐轮向侧外和障碍后方扩展。
-    # 扩展仍必须通过终点footprint、完整A*、路径净空和旋转扫掠检查。
-    avoidance_side_goal_expansion_rounds: 3
-    avoidance_side_goal_expansion_lateral_step: 0.3 # 每轮额外远离障碍侧边界（m）
-    avoidance_side_goal_expansion_forward_step: 0.40 # 每轮额外越过障碍前向边界（m）
+    # 每侧仅生成横向采样数×纵向采样数的候选，不再自动扩展到更远区域。
     avoidance_side_score_path_length_weight: 1.0 # 路径长度评分权重
     avoidance_side_score_heading_weight: 1.5 # 初始转向角评分权重
     avoidance_side_score_turn_weight: 0.5 # 整条路径累计转角评分权重
@@ -107,7 +105,7 @@
     astar_early_avoidance_distance: 0.60 # 起点后该距离内鼓励立即向选定侧偏转（m）
     astar_early_avoidance_weight: 2.0 # 起始侧绕趋势权重；只是软约束，不改变可达性
     astar_planning_timeout: 0.30         # 单个候选点A*搜索时间上限（s）；复杂环境可测试0.30~0.50
-    astar_footprint_padding: 0.1        # 矩形车体四周的硬碰撞余量（m）
+    astar_footprint_padding: 0.05        # 矩形车体四周的硬碰撞余量（m）
     astar_start_obstacle_threshold: 80  # 起点宽松阈值，独立于普通可通行阈值
     astar_footprint_obstacle_threshold: 100 # 用于footprint硬碰撞的Costmap阈值
     astar_allow_initial_footprint_escape: true # 起点被保守footprint覆盖时，允许连续向严格安全区脱离
@@ -146,8 +144,8 @@
 
       # 机器人前方扇环用于触发绕障；车体前缘～1.0m 的单侧障碍优先
       # 向相反侧规划，正前方障碍或对侧通道不足时仍判为 BLOCKED。
-      avoid_min_distance: 0.5       # 绕障触发起始/近障碍阻塞分界（m）
-      avoid_max_distance: 1.8       # YAML初始值；普通导航时由当前边的obstacle_avoidance_distance_m覆盖，uwb导航时由uwb_follow_planner.yaml中的obstacle_avoidance_distance_m覆盖
+      avoid_min_distance: 1.0       # 绕障触发起始/近障碍阻塞分界（m）
+      avoid_max_distance: 2.0       # YAML初始值；普通导航时由当前边的obstacle_avoidance_distance_m覆盖，uwb导航时由uwb_follow_planner.yaml中的obstacle_avoidance_distance_m覆盖
       avoid_sector_angle: 90.0      # 绕障检测扇形总角度（deg）
 
       safety_margin: 0.10           # 车体轮廓外扩安全距离（m）
