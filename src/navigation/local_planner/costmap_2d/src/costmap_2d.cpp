@@ -356,10 +356,23 @@ sensor_msgs::msg::LaserScan::SharedPtr CostMap2D::pointCloud2ToLaserScan(
 void CostMap2D::processLaserScan(const sensor_msgs::msg::LaserScan& scan_msg) {
   geometry_msgs::msg::TransformStamped robot_transform;
   try {
-    // 同一帧统一使用同一个最新位姿，避免重复查询TF以及各处理阶段位姿不一致。
-    robot_transform = tf_buffer_.lookupTransform(
-        global_frame_, robot_base_frame_, tf2::TimePointZero,
-        tf2::durationFromSec(0.1));
+    // base_link点云必须用采集时刻的位姿投到全局地图。用最新TF会在
+    // 机器人旋转、点云处理有延迟时把静止墙面标到错误的位置。
+    if (lidar_type_ != 1 && pointcloud2_in_base_frame_) {
+      const rclcpp::Time scan_time(scan_msg.header.stamp);
+      if (scan_time.nanoseconds() == 0) {
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                             "Base-frame obstacle cloud has no timestamp");
+        return;
+      }
+      robot_transform = tf_buffer_.lookupTransform(
+          global_frame_, robot_base_frame_, scan_time,
+          rclcpp::Duration::from_seconds(0.1));
+    } else {
+      robot_transform = tf_buffer_.lookupTransform(
+          global_frame_, robot_base_frame_, tf2::TimePointZero,
+          tf2::durationFromSec(0.1));
+    }
   } catch (const tf2::TransformException& ex) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "Failed to get robot transform: %s", ex.what());
