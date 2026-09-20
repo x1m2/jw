@@ -101,9 +101,7 @@ class TerrainFilter {
   pcl::VoxelGrid<PointType> voxel_filter_;
   pcl::StatisticalOutlierRemoval<PointType> stat_filter_;
 
-  Eigen::Matrix4d lidar_to_base_matrix_;
   Eigen::Matrix4d radar_to_base_matrix_;
-  bool lidar_transform_ready_;
   bool radar_transform_ready_;
 
   void lidarCallback(sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
@@ -114,7 +112,8 @@ class TerrainFilter {
   void loadParameters();
 
   bool getTransform(const std::string& from_frame, const std::string& to_frame,
-                    Eigen::Matrix4d& transform_matrix);
+                    Eigen::Matrix4d& transform_matrix,
+                    const rclcpp::Time& stamp = rclcpp::Time(0));
 
   pcl::PointCloud<PointType>::Ptr transformPointCloud(
       const pcl::PointCloud<PointType>::Ptr& cloud,

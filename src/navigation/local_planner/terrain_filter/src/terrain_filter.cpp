@@ -14,14 +14,12 @@ TerrainFilter::TerrainFilter(
     : node_(node),
       tf_buffer_(nullptr),
       tf_listener_(nullptr),
-      lidar_transform_ready_(false),
       radar_transform_ready_(false) {
   loadParameters();
 
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(node_->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
-  lidar_to_base_matrix_ = Eigen::Matrix4d::Identity();
   radar_to_base_matrix_ = Eigen::Matrix4d::Identity();
 
   lidar_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -89,7 +87,7 @@ TerrainFilter::~TerrainFilter() = default;
 
 void TerrainFilter::loadParameters() {
   lidar_topic_ = node_->declare_parameter<std::string>(
-      "lidar_topic", "/cloud_registered_body");
+      "lidar_topic", "/cloud_registered_nav");
   radar_topic_ =
       node_->declare_parameter<std::string>("radar_topic", "/radar_points");
   odom_topic_ = node_->declare_parameter<std::string>("odom_topic", "/odom");
@@ -213,11 +211,6 @@ void TerrainFilter::lidarCallback(
     }
   }
 
-  if (!lidar_transform_ready_) {
-    lidar_transform_ready_ =
-        getTransform(lidar_frame_, base_frame_, lidar_to_base_matrix_);
-  }
-
   processData();
 }
 
@@ -273,11 +266,23 @@ void TerrainFilter::processData() {
     return;
   }
 
-  if (lidar_transform_ready_) {
-    lidar_cloud = transformPointCloud(lidar_cloud, lidar_to_base_matrix_);
-    RCLCPP_DEBUG(node_->get_logger(), "激光雷达点云已变换到 base_link 坐标系");
-  } else {
-    RCLCPP_WARN(node_->get_logger(), "激光雷达变换矩阵未就绪，跳过变换");
+  // 配准点云位于map/odom，必须逐帧使用采集时刻的TF，不能缓存动态变换。
+  const auto& source_frame = lidar_msg->header.frame_id;
+  if (source_frame.empty()) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                         "输入点云缺少frame_id，跳过该帧");
+    return;
+  }
+  if (source_frame != base_frame_) {
+    const rclcpp::Time stamp(lidar_msg->header.stamp);
+    if (stamp.nanoseconds() == 0) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                           "输入点云缺少时间戳，跳过动态坐标变换");
+      return;
+    }
+    Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+    if (!getTransform(source_frame, base_frame_, transform, stamp)) return;
+    lidar_cloud = transformPointCloud(lidar_cloud, transform);
   }
 
   pcl::PointCloud<PointType>::Ptr radar_cloud(new pcl::PointCloud<PointType>);
@@ -369,11 +374,12 @@ void TerrainFilter::processData() {
 
 bool TerrainFilter::getTransform(
     const std::string& from_frame, const std::string& to_frame,
-    Eigen::Matrix4d& transform_matrix) {
+    Eigen::Matrix4d& transform_matrix, const rclcpp::Time& stamp) {
   try {
     geometry_msgs::msg::TransformStamped transform =
-        tf_buffer_->lookupTransform(to_frame, from_frame, tf2::TimePointZero,
-                                    tf2::durationFromSec(1.0));
+        tf_buffer_->lookupTransform(
+            to_frame, from_frame, stamp,
+            rclcpp::Duration::from_seconds(stamp.nanoseconds() == 0 ? 1.0 : 0.1));
 
     Eigen::Vector3d translation(transform.transform.translation.x,
                                 transform.transform.translation.y,
@@ -391,12 +397,13 @@ bool TerrainFilter::getTransform(
 
     transform_matrix = tf_matrix.matrix();
 
-    RCLCPP_INFO(node_->get_logger(), "获取变换矩阵: %s -> %s",
+    RCLCPP_DEBUG(node_->get_logger(), "获取变换矩阵: %s -> %s",
                 from_frame.c_str(), to_frame.c_str());
 
     return true;
   } catch (const tf2::TransformException& ex) {
-    RCLCPP_WARN(node_->get_logger(), "无法获取变换 %s -> %s: %s",
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                "无法获取变换 %s -> %s: %s",
                 from_frame.c_str(), to_frame.c_str(), ex.what());
 
     return false;
