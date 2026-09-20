@@ -7,7 +7,7 @@
     pose_topic: "/pose_stamped_localization"
     # 路径规划参数
     connection_distance_threshold: 5.0   #临时点连接第二层拓扑邻居的最大距离，单位：米
-    interpolation_points: 20
+    interpolation_spacing_m: 0.2  # 全局路径相邻插值点的目标间距（米）
     # true：距离小于 direct_connection_threshold 时，可直接生成 start_temp -> goal_temp 直连边。
     # false：优先按 navigation_topology JSON 中的边规划。
     enable_direct_connection: false

@@ -40,6 +40,26 @@ bool pointInPolygon(double x, double y,
   return inside;
 }
 
+geometry_msgs::msg::Point bezierPoint(
+    const geometry_msgs::msg::Point &start,
+    const geometry_msgs::msg::Point &control_point_1,
+    const geometry_msgs::msg::Point &control_point_2,
+    const geometry_msgs::msg::Point &end, double t) {
+  const double u = 1.0 - t;
+  const double w0 = u * u * u;
+  const double w1 = 3.0 * u * u * t;
+  const double w2 = 3.0 * u * t * t;
+  const double w3 = t * t * t;
+  geometry_msgs::msg::Point point;
+  point.x = w0 * start.x + w1 * control_point_1.x + w2 * control_point_2.x +
+            w3 * end.x;
+  point.y = w0 * start.y + w1 * control_point_1.y + w2 * control_point_2.y +
+            w3 * end.y;
+  point.z = w0 * start.z + w1 * control_point_1.z + w2 * control_point_2.z +
+            w3 * end.z;
+  return point;
+}
+
 }  // namespace
 
 GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
@@ -56,7 +76,7 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->declare_parameter<std::string>("pose_topic",
                                        "/pose_stamped_localization");
   this->declare_parameter<double>("connection_distance_threshold", 5.0);
-  this->declare_parameter<int>("interpolation_points", 20);
+  this->declare_parameter<double>("interpolation_spacing_m", 0.2);
 
   this->declare_parameter<bool>("enable_direct_connection", true);
   this->declare_parameter<double>("direct_connection_threshold", 3.0);
@@ -78,7 +98,7 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->get_parameter("pose_topic", pose_topic_);
   this->get_parameter("connection_distance_threshold",
                       connection_distance_threshold_);
-  this->get_parameter("interpolation_points", interpolation_points_);
+  this->get_parameter("interpolation_spacing_m", interpolation_spacing_m_);
   this->get_parameter("enable_direct_connection", enable_direct_connection_);
   this->get_parameter("direct_connection_threshold",
                       direct_connection_threshold_);
@@ -1099,15 +1119,14 @@ navigation_interfaces::msg::EdgePolicy GlobalPathPlanner::applyRegionPolicy(
 
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
     const geometry_msgs::msg::Point &start,
-    const geometry_msgs::msg::Point &end, int num_points) {
+    const geometry_msgs::msg::Point &end) {
   std::vector<geometry_msgs::msg::Point> points;
-
-  if (num_points <= 0) {
-    return points;
-  }
-
-  for (int i = 0; i <= num_points; ++i) {
-    double t = static_cast<double>(i) / num_points;
+  const std::size_t intervals = std::max<std::size_t>(
+      1U, static_cast<std::size_t>(std::ceil(calculateDistance(start, end) /
+                                             interpolation_spacing_m_)));
+  points.reserve(intervals + 1U);
+  for (std::size_t i = 0; i <= intervals; ++i) {
+    const double t = static_cast<double>(i) / intervals;
 
     geometry_msgs::msg::Point point;
     point.x = start.x + t * (end.x - start.x);
@@ -1124,35 +1143,47 @@ std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolateBezierPath(
     const geometry_msgs::msg::Point &start,
     const geometry_msgs::msg::Point &control_point_1,
     const geometry_msgs::msg::Point &control_point_2,
-    const geometry_msgs::msg::Point &end, int num_points) {
+    const geometry_msgs::msg::Point &end) {
   std::vector<geometry_msgs::msg::Point> points;
-
-  if (num_points <= 0) {
-    return points;
+  // 先用较密的折线估算弧长，再反查参数 t；最终点仍落在贝塞尔曲线上。
+  const double control_length =
+      calculateDistance(start, control_point_1) +
+      calculateDistance(control_point_1, control_point_2) +
+      calculateDistance(control_point_2, end);
+  const std::size_t estimate_intervals = std::max<std::size_t>(
+      32U, static_cast<std::size_t>(
+               std::ceil(4.0 * control_length / interpolation_spacing_m_)));
+  std::vector<double> cumulative_length(estimate_intervals + 1U, 0.0);
+  auto previous = start;
+  for (std::size_t i = 1; i <= estimate_intervals; ++i) {
+    const auto current =
+        bezierPoint(start, control_point_1, control_point_2, end,
+                    static_cast<double>(i) / estimate_intervals);
+    cumulative_length[i] =
+        cumulative_length[i - 1U] + calculateDistance(previous, current);
+    previous = current;
   }
-
-  points.reserve(static_cast<std::size_t>(num_points) + 1U);
-  for (int i = 0; i <= num_points; ++i) {
-    const double t = static_cast<double>(i) / num_points;
-    const double one_minus_t = 1.0 - t;
-    const double start_weight = one_minus_t * one_minus_t * one_minus_t;
-    const double first_control_weight = 3.0 * one_minus_t * one_minus_t * t;
-    const double second_control_weight = 3.0 * one_minus_t * t * t;
-    const double end_weight = t * t * t;
-
-    geometry_msgs::msg::Point point;
-    point.x = start_weight * start.x +
-              first_control_weight * control_point_1.x +
-              second_control_weight * control_point_2.x + end_weight * end.x;
-    point.y = start_weight * start.y +
-              first_control_weight * control_point_1.y +
-              second_control_weight * control_point_2.y + end_weight * end.y;
-    point.z = start_weight * start.z +
-              first_control_weight * control_point_1.z +
-              second_control_weight * control_point_2.z + end_weight * end.z;
-    points.push_back(point);
+  const double length = cumulative_length.back();
+  const std::size_t intervals = std::max<std::size_t>(
+      1U,
+      static_cast<std::size_t>(std::ceil(length / interpolation_spacing_m_)));
+  points.reserve(intervals + 1U);
+  points.push_back(start);
+  for (std::size_t i = 1; i < intervals; ++i) {
+    const double target = length * static_cast<double>(i) / intervals;
+    const auto upper = std::lower_bound(cumulative_length.begin(),
+                                        cumulative_length.end(), target);
+    const std::size_t upper_index =
+        static_cast<std::size_t>(upper - cumulative_length.begin());
+    const double lower_length = cumulative_length[upper_index - 1U];
+    const double span = *upper - lower_length;
+    const double fraction = span > 0.0 ? (target - lower_length) / span : 0.0;
+    const double t =
+        (static_cast<double>(upper_index - 1U) + fraction) / estimate_intervals;
+    points.push_back(
+        bezierPoint(start, control_point_1, control_point_2, end, t));
   }
-
+  points.push_back(end);
   return points;
 }
 
@@ -1373,16 +1404,14 @@ nav_msgs::msg::Path GlobalPathPlanner::buildCompletePathFromTempGraph(
       const auto &second_control =
           traversing_forward ? selected_edge->bezier_control_points[1]
                              : selected_edge->bezier_control_points[0];
-      segment =
-          interpolateBezierPath(waypoints[i], first_control, second_control,
-                                waypoints[i + 1U], interpolation_points_);
+      segment = interpolateBezierPath(waypoints[i], first_control,
+                                      second_control, waypoints[i + 1U]);
       RCLCPP_INFO(this->get_logger(),
                   "生成贝塞尔路径段: edge=%d, direction=%s, points=%zu",
                   selected_edge->id, traversing_forward ? "forward" : "reverse",
                   segment.size());
     } else {
-      segment = interpolatePath(waypoints[i], waypoints[i + 1U],
-                                interpolation_points_);
+      segment = interpolatePath(waypoints[i], waypoints[i + 1U]);
     }
 
     for (size_t j = 0; j < segment.size(); ++j) {

@@ -118,7 +118,7 @@ rosrun rqt_console rqt_console
 3. **规划速度过慢**：
    - 设置 `enable_temp_connection_feasibility_check: false`
    - 减少 `edge_sample_count` 值
-   - 降低 `interpolation_points` 值
+   - 适当增大 `interpolation_spacing_m` 值
 
 ## 技术实现细节
 

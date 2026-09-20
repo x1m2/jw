@@ -117,7 +117,7 @@ class GlobalPathPlanner : public rclcpp::Node {
   std::string
       pose_topic_;  // 实时定位位姿话题名，类型 geometry_msgs/msg/PoseStamped
   double connection_distance_threshold_;
-  int interpolation_points_;
+  double interpolation_spacing_m_;
 
   bool enable_direct_connection_;
   double direct_connection_threshold_;
@@ -164,13 +164,13 @@ class GlobalPathPlanner : public rclcpp::Node {
   // 路径构建方法
   std::vector<geometry_msgs::msg::Point> interpolatePath(
       const geometry_msgs::msg::Point &start,
-      const geometry_msgs::msg::Point &end, int num_points);
+      const geometry_msgs::msg::Point &end);
   // 贝塞尔曲线插值方法
   std::vector<geometry_msgs::msg::Point> interpolateBezierPath(
       const geometry_msgs::msg::Point &start,
       const geometry_msgs::msg::Point &control_point_1,
       const geometry_msgs::msg::Point &control_point_2,
-      const geometry_msgs::msg::Point &end, int num_points);
+      const geometry_msgs::msg::Point &end);
   // 工具方法
   double calculateDistance(const geometry_msgs::msg::Point &p1,
                            const geometry_msgs::msg::Point &p2);
