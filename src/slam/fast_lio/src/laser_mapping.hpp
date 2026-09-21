@@ -132,8 +132,6 @@ class LaserMappingNode : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudFull_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
-      pubLaserCloudNav_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudFull_body_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudBodyDownsampled_;

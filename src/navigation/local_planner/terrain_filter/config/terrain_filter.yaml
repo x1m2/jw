@@ -7,7 +7,7 @@
     use_patchworkpp: true                      # 是否使用PatchWorkpp高级地面分割（可检测台阶/楼梯）
 
     # 话题配置
-    lidar_topic: "/cloud_registered_nav"     # 完整配准点云，按消息时间戳从map/odom变换到base_link
+    lidar_topic: "/cloud_registered"     # 完整配准点云，按消息时间戳从map/odom变换到base_link
     radar_topic: "/lidar/points"               # 毫米波雷达点云话题 (仅在双雷达模式下使用)
     odom_topic: "/baselink2map"                # 里程计话题（可选）
 

@@ -2,15 +2,14 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <queue>
 #include <unordered_map>
 #include <vector>
 
-TerrainFilter::TerrainFilter(
-    const rclcpp::Node::SharedPtr& node)
+TerrainFilter::TerrainFilter(const rclcpp::Node::SharedPtr& node)
     : node_(node),
       tf_buffer_(nullptr),
       tf_listener_(nullptr),
@@ -67,8 +66,7 @@ TerrainFilter::TerrainFilter(
 
   if (use_patchworkpp_) {
     patchworkpp_ = std::make_shared<patchwork::PclGroundSegmenter>(node_);
-    RCLCPP_INFO(node_->get_logger(),
-                "公共 PatchWork++ 地面分割器初始化完成");
+    RCLCPP_INFO(node_->get_logger(), "公共 PatchWork++ 地面分割器初始化完成");
   }
 
   RCLCPP_INFO(node_->get_logger(), "TerrainFilter 初始化完成");
@@ -86,8 +84,8 @@ TerrainFilter::TerrainFilter(
 TerrainFilter::~TerrainFilter() = default;
 
 void TerrainFilter::loadParameters() {
-  lidar_topic_ = node_->declare_parameter<std::string>(
-      "lidar_topic", "/cloud_registered_nav");
+  lidar_topic_ =
+      node_->declare_parameter<std::string>("lidar_topic", "/cloud_registered");
   radar_topic_ =
       node_->declare_parameter<std::string>("radar_topic", "/radar_points");
   odom_topic_ = node_->declare_parameter<std::string>("odom_topic", "/odom");
@@ -173,10 +171,11 @@ void TerrainFilter::loadParameters() {
     RCLCPP_INFO(node_->get_logger(), "  楼梯逐级扩张: %s",
                 use_stair_region_growing_ ? "启用" : "禁用");
     if (use_stair_region_growing_) {
-      RCLCPP_INFO(node_->get_logger(),
-                  "  楼梯栅格: %.3f 米, 最大级高: %.3f 米, 单格最大高度跨度: %.3f 米",
-                  stair_grid_resolution_, stair_max_step_height_,
-                  stair_max_cell_height_span_);
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "  楼梯栅格: %.3f 米, 最大级高: %.3f 米, 单格最大高度跨度: %.3f 米",
+          stair_grid_resolution_, stair_max_step_height_,
+          stair_max_cell_height_span_);
       RCLCPP_INFO(node_->get_logger(),
                   "  楼梯断格跨越: %d 格, 判断保持: %d 帧, 帧间匹配: %d 格",
                   stair_max_gap_cells_, stair_hysteresis_frames_,
@@ -238,8 +237,7 @@ void TerrainFilter::radarCallback(
   }
 }
 
-void TerrainFilter::odomCallback(
-    nav_msgs::msg::Odometry::ConstSharedPtr msg) {
+void TerrainFilter::odomCallback(nav_msgs::msg::Odometry::ConstSharedPtr msg) {
   (void)msg;
 }
 
@@ -372,14 +370,15 @@ void TerrainFilter::processData() {
                  lidar_msg->header);
 }
 
-bool TerrainFilter::getTransform(
-    const std::string& from_frame, const std::string& to_frame,
-    Eigen::Matrix4d& transform_matrix, const rclcpp::Time& stamp) {
+bool TerrainFilter::getTransform(const std::string& from_frame,
+                                 const std::string& to_frame,
+                                 Eigen::Matrix4d& transform_matrix,
+                                 const rclcpp::Time& stamp) {
   try {
     geometry_msgs::msg::TransformStamped transform =
-        tf_buffer_->lookupTransform(
-            to_frame, from_frame, stamp,
-            rclcpp::Duration::from_seconds(stamp.nanoseconds() == 0 ? 1.0 : 0.1));
+        tf_buffer_->lookupTransform(to_frame, from_frame, stamp,
+                                    rclcpp::Duration::from_seconds(
+                                        stamp.nanoseconds() == 0 ? 1.0 : 0.1));
 
     Eigen::Vector3d translation(transform.transform.translation.x,
                                 transform.transform.translation.y,
@@ -398,20 +397,19 @@ bool TerrainFilter::getTransform(
     transform_matrix = tf_matrix.matrix();
 
     RCLCPP_DEBUG(node_->get_logger(), "获取变换矩阵: %s -> %s",
-                from_frame.c_str(), to_frame.c_str());
+                 from_frame.c_str(), to_frame.c_str());
 
     return true;
   } catch (const tf2::TransformException& ex) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
-                "无法获取变换 %s -> %s: %s",
-                from_frame.c_str(), to_frame.c_str(), ex.what());
+                         "无法获取变换 %s -> %s: %s", from_frame.c_str(),
+                         to_frame.c_str(), ex.what());
 
     return false;
   }
 }
 
-pcl::PointCloud<PointType>::Ptr
-TerrainFilter::transformPointCloud(
+pcl::PointCloud<PointType>::Ptr TerrainFilter::transformPointCloud(
     const pcl::PointCloud<PointType>::Ptr& cloud,
     const Eigen::Matrix4d& transform) {
   pcl::PointCloud<PointType>::Ptr transformed_cloud(
@@ -439,8 +437,7 @@ TerrainFilter::transformPointCloud(
   return transformed_cloud;
 }
 
-pcl::PointCloud<PointType>::Ptr
-TerrainFilter::combinePointClouds(
+pcl::PointCloud<PointType>::Ptr TerrainFilter::combinePointClouds(
     const pcl::PointCloud<PointType>::Ptr& lidar_cloud,
     const pcl::PointCloud<PointType>::Ptr& radar_cloud) {
   pcl::PointCloud<PointType>::Ptr combined_cloud(
@@ -464,8 +461,7 @@ TerrainFilter::combinePointClouds(
   return combined_cloud;
 }
 
-pcl::PointCloud<PointType>::Ptr
-TerrainFilter::preprocessPointCloud(
+pcl::PointCloud<PointType>::Ptr TerrainFilter::preprocessPointCloud(
     const pcl::PointCloud<PointType>::Ptr& input_cloud) {
   pcl::PointCloud<PointType>::Ptr filtered_cloud(
       new pcl::PointCloud<PointType>);
@@ -758,15 +754,14 @@ void TerrainFilter::expandGroundCloud(
   if (use_stair_region_growing_ && !obstacle_cloud->empty()) {
     if (stair_grid_resolution_ <= 0.0 || stair_max_step_height_ <= 0.0 ||
         stair_max_cell_height_span_ <= 0.0 || stair_max_gap_cells_ < 0 ||
-        stair_hysteresis_frames_ < 0 ||
-        stair_hysteresis_neighbor_cells_ < 0) {
+        stair_hysteresis_frames_ < 0 || stair_hysteresis_neighbor_cells_ < 0) {
       stair_cell_hold_frames_.clear();
-      RCLCPP_WARN_THROTTLE(
-          node_->get_logger(), *node_->get_clock(), 2000,
-          "楼梯逐级扩张参数无效，当前帧跳过: resolution=%.3f, step=%.3f, span=%.3f, gap=%d, hold=%d",
-          stair_grid_resolution_, stair_max_step_height_,
-          stair_max_cell_height_span_, stair_max_gap_cells_,
-          stair_hysteresis_frames_);
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                           "楼梯逐级扩张参数无效，当前帧跳过: resolution=%.3f, "
+                           "step=%.3f, span=%.3f, gap=%d, hold=%d",
+                           stair_grid_resolution_, stair_max_step_height_,
+                           stair_max_cell_height_span_, stair_max_gap_cells_,
+                           stair_hysteresis_frames_);
     } else {
       struct HeightCell {
         int x{0};
@@ -789,7 +784,8 @@ void TerrainFilter::expandGroundCloud(
       };
 
       std::unordered_map<std::uint64_t, HeightCell> cells;
-      cells.reserve(ground_cloud->points.size() + obstacle_cloud->points.size());
+      cells.reserve(ground_cloud->points.size() +
+                    obstacle_cloud->points.size());
 
       const auto add_point = [&](const PointType& point, bool is_ground,
                                  std::size_t obstacle_index) {
@@ -826,8 +822,7 @@ void TerrainFilter::expandGroundCloud(
 
       // 最多允许跨过两个空格，避免错误参数造成过远跳跃。长距离连接只有在
       // 中间格完全无点时才允许；若中间存在人、墙等阻挡格，绝不会跨越。
-      const int connection_radius =
-          1 + std::min(stair_max_gap_cells_, 2);
+      const int connection_radius = 1 + std::min(stair_max_gap_cells_, 2);
 
       while (!open_cells.empty()) {
         const std::uint64_t current_key = open_cells.front();
@@ -848,12 +843,14 @@ void TerrainFilter::expandGroundCloud(
             if (grid_distance > 1) {
               bool intermediate_cell_occupied = false;
               for (int step = 1; step < grid_distance; ++step) {
-                const int intermediate_x = current.x + static_cast<int>(
-                    std::round(static_cast<double>(dx * step) /
-                               grid_distance));
-                const int intermediate_y = current.y + static_cast<int>(
-                    std::round(static_cast<double>(dy * step) /
-                               grid_distance));
+                const int intermediate_x =
+                    current.x +
+                    static_cast<int>(std::round(static_cast<double>(dx * step) /
+                                                grid_distance));
+                const int intermediate_y =
+                    current.y +
+                    static_cast<int>(std::round(static_cast<double>(dy * step) /
+                                                grid_distance));
                 if (cells.find(make_key(intermediate_x, intermediate_y)) !=
                     cells.end()) {
                   intermediate_cell_occupied = true;
@@ -867,8 +864,7 @@ void TerrainFilter::expandGroundCloud(
 
             const auto neighbor_key = make_key(current.x + dx, current.y + dy);
             auto neighbor_it = cells.find(neighbor_key);
-            if (neighbor_it == cells.end() ||
-                neighbor_it->second.traversable) {
+            if (neighbor_it == cells.end() || neighbor_it->second.traversable) {
               continue;
             }
 
@@ -959,8 +955,8 @@ void TerrainFilter::expandGroundCloud(
           static_cast<std::uint32_t>(ground_cloud->points.size());
       ground_cloud->height = 1;
       ground_cloud->is_dense = true;
-      stair_filtered_obstacles->width = static_cast<std::uint32_t>(
-          stair_filtered_obstacles->points.size());
+      stair_filtered_obstacles->width =
+          static_cast<std::uint32_t>(stair_filtered_obstacles->points.size());
       stair_filtered_obstacles->height = 1;
       stair_filtered_obstacles->is_dense = true;
       *obstacle_cloud = *stair_filtered_obstacles;
@@ -998,8 +994,7 @@ void TerrainFilter::expandGroundCloud(
                expansion_height_);
 }
 
-pcl::PointCloud<PointType>::Ptr
-TerrainFilter::filterObstacleCloud(
+pcl::PointCloud<PointType>::Ptr TerrainFilter::filterObstacleCloud(
     const pcl::PointCloud<PointType>::Ptr& obstacle_cloud) {
   if (obstacle_cloud->empty()) {
     RCLCPP_DEBUG(node_->get_logger(), "障碍物点云为空，跳过聚类滤波");
@@ -1064,9 +1059,10 @@ TerrainFilter::filterObstacleCloud(
                small_cluster_points);
   RCLCPP_DEBUG(node_->get_logger(), "  有效聚类数: %zu 个",
                cluster_indices.size());
-  RCLCPP_DEBUG(node_->get_logger(),
-               "  聚类参数: 容忍距离 %.3f 米, 最小大小 %d 点, 大簇诊断阈值 %d 点",
-               cluster_tolerance_, min_cluster_size_, max_cluster_size_);
+  RCLCPP_DEBUG(
+      node_->get_logger(),
+      "  聚类参数: 容忍距离 %.3f 米, 最小大小 %d 点, 大簇诊断阈值 %d 点",
+      cluster_tolerance_, min_cluster_size_, max_cluster_size_);
 
   if (oversized_cluster_count > 0U) {
     RCLCPP_WARN_THROTTLE(

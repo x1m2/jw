@@ -206,9 +206,6 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
   pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 20);
-  // 导航专用：始终发布未经过mapping体素降采样的配准点云。
-  pubLaserCloudNav_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-      "/cloud_registered_nav", 20);
   // 发布经过运动畸变校正到IMU坐标系的点云，
   pubLaserCloudFull_body_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -1230,19 +1227,6 @@ void LaserMappingNode::publish_frame_world(
     laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
     laserCloudmsg.header.frame_id = "odom";
     pubLaserCloudFull->publish(laserCloudmsg);
-    if (dense_pub_en) {
-      pubLaserCloudNav_->publish(laserCloudmsg);
-    } else {
-      PointCloudXYZI laserCloudNav(feats_undistort->points.size(), 1);
-      for (std::size_t i = 0; i < feats_undistort->points.size(); ++i) {
-        RGBpointBodyToWorld(&feats_undistort->points[i],
-                            &laserCloudNav.points[i]);
-      }
-      sensor_msgs::msg::PointCloud2 nav_msg;
-      pcl::toROSMsg(laserCloudNav, nav_msg);
-      nav_msg.header = laserCloudmsg.header;
-      pubLaserCloudNav_->publish(nav_msg);
-    }
     publish_count -= PUBFRAME_PERIOD;
   }
 
