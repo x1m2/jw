@@ -27,6 +27,7 @@
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <tf2/LinearMath/Scalar.hpp>
 #include <tf2/utils.hpp>
@@ -132,6 +133,7 @@ public:
   bool getRobotPose(geometry_msgs::msg::PoseStamped &robot_pose);
 
 private:
+  void globalReplanCallback(std_msgs::msg::Header::ConstSharedPtr request);
   rclcpp::Subscription<slam_manager_interfaces::msg::TaskTarget>::SharedPtr
       task_target_sub_;
   // ROS相关
@@ -149,6 +151,13 @@ private:
   rclcpp::Publisher<navigation_interfaces::msg::AvoidanceState>::SharedPtr
       avoidance_state_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr paused_pub_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr global_path_accepted_pub_;
+  rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr global_replan_sub_;
+  int64_t global_replan_after_ns_{0};
+  int64_t accepted_global_path_stamp_{0};
+  std::string accepted_global_path_frame_;
+  std::atomic_bool global_replan_waiting_{false};
   rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
       global_path_with_policy_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;

@@ -112,7 +112,21 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->get_parameter("enable_temp_connection_feasibility_check",
                       enable_temp_connection_feasibility_check_);
 
-  // 初始化 TF2 和 PCL 相关对象
+  // 到点任务偏离重规划参数。
+  deviation_replan_enabled_ = declare_parameter("deviation_replan_enabled", true);
+  deviation_distance_ = declare_parameter("deviation_replan_distance", 0.5);
+  deviation_confirm_sec_ = declare_parameter("deviation_replan_confirm_sec", 0.5);
+  replan_interval_sec_ = declare_parameter("deviation_replan_interval_sec", 1.0);
+  replan_goal_tolerance_ = declare_parameter("deviation_replan_goal_tolerance", 0.2);
+  replan_pose_timeout_sec_ = declare_parameter("deviation_replan_pose_timeout_sec", 0.5);
+  if (!std::isfinite(deviation_distance_) || deviation_distance_ <= 0.0 ||
+      !std::isfinite(deviation_confirm_sec_) || deviation_confirm_sec_ < 0.0 ||
+      !std::isfinite(replan_interval_sec_) || replan_interval_sec_ <= 0.0 ||
+      !std::isfinite(replan_goal_tolerance_) || replan_goal_tolerance_ < 0.0 ||
+      !std::isfinite(replan_pose_timeout_sec_) || replan_pose_timeout_sec_ <= 0.0) {
+    throw std::invalid_argument("Invalid deviation replan parameters");
+  }
+  // 初始化 TF2 和 PCL 相关对象。
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
   free_space_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>);
@@ -149,6 +163,52 @@ bool GlobalPathPlanner::initialize() {
           "/global_path_with_policy",
           rclcpp::QoS(1).transient_local().reliable());
 
+  // 时间戳是控制器的路径接收下限，等待对应新路径通过平滑并被接收后才恢复。
+  replan_request_pub_ = create_publisher<std_msgs::msg::Header>(
+      "/navigation/global_replan_request", rclcpp::QoS(10).reliable());
+  paused_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+        navigation_paused_ = msg->data;
+        deviation_since_.reset();
+      });
+  avoidance_state_sub_ = create_subscription<navigation_interfaces::msg::AvoidanceState>(
+      "/local_avoidance/state", rclcpp::QoS(1).reliable().transient_local(),
+      [this](navigation_interfaces::msg::AvoidanceState::ConstSharedPtr msg) {
+        avoidance_state_ = msg->state;
+      });
+  nav_state_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/nav_state", 10, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+        // 避免上一目标延迟到达的完成通知终止当前到点任务。
+        if (msg->data && has_goal_ && has_current_pose_ &&
+            std::hypot(current_position_.x - goal_position_.x,
+                       current_position_.y - goal_position_.y) <= replan_goal_tolerance_) {
+          resetDeviationTracking(false);
+          has_goal_ = false;
+          planning_pending_ = false;
+        }
+      });
+  path_accepted_sub_ = create_subscription<std_msgs::msg::Header>(
+      "/navigation/global_path_accepted", 10,
+      [this](std_msgs::msg::Header::ConstSharedPtr msg) {
+        if (msg->frame_id == global_frame_ &&
+            rclcpp::Time(msg->stamp).nanoseconds() == last_published_path_stamp_ &&
+            last_published_path_stamp_ >= replan_request_stamp_) {
+          replan_pending_ = false;
+          deviation_since_.reset();
+        }
+      });
+  smoothed_path_sub_ = create_subscription<navigation_interfaces::msg::PathWithPolicy>(
+      "/smoothed_global_path_with_policy", 10,
+      [this](navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg) {
+        if (!msg->dynamic_path && !msg->path.poses.empty() &&
+            msg->path.header.frame_id == global_frame_ &&
+            rclcpp::Time(msg->path.header.stamp).nanoseconds() == last_published_path_stamp_) {
+          // 检测实际跟踪的平滑路径，避免把正常的弯道平滑误判为偏离。
+          active_path_ = msg->path;
+        }
+      });
+
   // 创建订阅器，使用 lambda 避免 Humble 下 std::bind 回调类型匹配问题
   // 实时定位位姿：/pose_stamped_localization，类型
   // geometry_msgs/msg/PoseStamped
@@ -168,6 +228,7 @@ bool GlobalPathPlanner::initialize() {
       create_subscription<slam_manager_interfaces::msg::TaskTarget>(
           "/navigation/task_target", 10,
           [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
+            resetDeviationTracking(!msg->use_topology);
             planning_pending_ = false;
             has_goal_ = false;
             task_target_.reset();
@@ -407,10 +468,26 @@ void GlobalPathPlanner::poseCallback(
                             tf2::durationFromSec(0.2));
     }
 
+    const auto &position = pose_out.pose.position;
+    const rclcpp::Time pose_stamp(pose_out.header.stamp);
+    const double pose_age = (now() - pose_stamp).seconds();
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        !std::isfinite(position.z) || pose_stamp.nanoseconds() == 0 ||
+        pose_age > replan_pose_timeout_sec_ || pose_age < -replan_pose_timeout_sec_) {
+      deviation_since_.reset();
+      has_current_pose_ = false;
+      return;
+    }
+    if (last_pose_stamp_ &&
+        ((pose_stamp - *last_pose_stamp_).seconds() > replan_pose_timeout_sec_ ||
+         pose_stamp <= *last_pose_stamp_)) {
+      deviation_since_.reset();
+    }
     current_position_.x = pose_out.pose.position.x;
     current_position_.y = pose_out.pose.position.y;
     current_position_.z = pose_out.pose.position.z;
     has_current_pose_ = true;
+    last_pose_stamp_ = pose_stamp;
 
     const double yaw = tf2::getYaw(pose_out.pose.orientation);
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
@@ -421,6 +498,8 @@ void GlobalPathPlanner::poseCallback(
     if (planning_pending_) {
       RCLCPP_INFO(this->get_logger(), "已收到有效定位，执行待处理的目标规划");
       planAndPublish();
+    } else {
+      checkPathDeviation();
     }
   } catch (tf2::TransformException &ex) {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
@@ -432,6 +511,8 @@ void GlobalPathPlanner::goalCallback(
     geometry_msgs::msg::PointStamped::ConstSharedPtr msg) {
   task_target_.reset();
   RCLCPP_INFO(this->get_logger(), "收到点击目标点");
+  resetDeviationTracking(true);
+  has_goal_ = false;
 
   // 转换目标点到全局坐标系
   geometry_msgs::msg::PointStamped goal_in_global;
@@ -452,8 +533,79 @@ void GlobalPathPlanner::goalCallback(
   }
 }
 
+void GlobalPathPlanner::resetDeviationTracking(bool point_task) {
+  point_task_active_ = point_task;
+  replan_pending_ = false;
+  replan_request_stamp_ = 0;
+  deviation_since_.reset();
+  last_replan_attempt_.reset();
+  active_path_.poses.clear();
+}
+
+double GlobalPathPlanner::distanceToActivePath() const {
+  double best = std::numeric_limits<double>::infinity();
+  // XY 点到线段距离；不因点间插值稀疏或定位高度轻微波动触发重规划。
+  for (std::size_t i = 0; i < active_path_.poses.size(); ++i) {
+    const auto &a = active_path_.poses[i].pose.position;
+    const auto &b = active_path_.poses[std::min(i + 1, active_path_.poses.size() - 1)].pose.position;
+    const double dx = b.x - a.x, dy = b.y - a.y;
+    const double length_sq = dx * dx + dy * dy;
+    const double t = length_sq > 1e-12
+        ? std::clamp(((current_position_.x - a.x) * dx +
+                      (current_position_.y - a.y) * dy) / length_sq, 0.0, 1.0)
+        : 0.0;
+    best = std::min(best, std::hypot(current_position_.x - a.x - t * dx,
+                                   current_position_.y - a.y - t * dy));
+  }
+  return best;
+}
+
+void GlobalPathPlanner::checkPathDeviation() {
+  if (!deviation_replan_enabled_ || !point_task_active_ || !has_goal_ ||
+      navigation_paused_ || active_path_.poses.empty()) {
+    deviation_since_.reset();
+    return;
+  }
+  const auto time = now();
+  // ROS 时钟回退时重建确认窗口，避免冷却条件永远无法满足。
+  if (last_replan_attempt_ && time < *last_replan_attempt_) last_replan_attempt_.reset();
+  if (deviation_since_ && time < *deviation_since_) deviation_since_.reset();
+  const double distance = distanceToActivePath();
+  if (!replan_pending_) {
+    if (avoidance_state_ != navigation_interfaces::msg::AvoidanceState::IDLE ||
+        std::hypot(current_position_.x - goal_position_.x,
+                   current_position_.y - goal_position_.y) <= replan_goal_tolerance_ ||
+        distance <= deviation_distance_) {
+      deviation_since_.reset();
+      return;
+    }
+    if (!deviation_since_) deviation_since_ = time;
+    if ((time - *deviation_since_).seconds() < deviation_confirm_sec_) return;
+  }
+  if (last_replan_attempt_ &&
+      (time - *last_replan_attempt_).seconds() < replan_interval_sec_) return;
+
+  replan_pending_ = true;
+  last_replan_attempt_ = time;
+  std_msgs::msg::Header request;
+  request.frame_id = global_frame_;
+  request.stamp = rclcpp::Time(
+      std::max(time.nanoseconds(), last_published_path_stamp_ + 1),
+      get_clock()->get_clock_type());
+  replan_request_stamp_ = rclcpp::Time(request.stamp).nanoseconds();
+  replan_request_pub_->publish(request);
+  RCLCPP_WARN(get_logger(), "[DEVIATION_REPLAN] distance=%.3f, start=(%.3f, %.3f), goal=(%.3f, %.3f)",
+              distance, current_position_.x, current_position_.y,
+              goal_position_.x, goal_position_.y);
+  // 失败时保留等待状态与旧路径几何供诊断，但控制器不再执行旧路径。
+  // 成功也要等待控制器接收确认；定位持续到达时按最小间隔重试。
+  planAndPublish();
+}
+
 void GlobalPathPlanner::planAndPublish() {
-  if (!has_current_pose_) {
+  if (!has_goal_) return;
+  if (!has_current_pose_ || !last_pose_stamp_ ||
+      (now() - *last_pose_stamp_).seconds() > replan_pose_timeout_sec_) {
     planning_pending_ = true;
     RCLCPP_WARN(this->get_logger(),
                 "尚未接收到当前位置信息，已保留目标，等待有效定位后规划");
@@ -468,6 +620,13 @@ void GlobalPathPlanner::planAndPublish() {
     return;
   }
 
+  // 成功版本时间戳严格递增，供平滑器/控制器识别旧路径。
+  const auto stamp = rclcpp::Time(
+      std::max(now().nanoseconds(), last_published_path_stamp_ + 1),
+      get_clock()->get_clock_type());
+  global_path.header.stamp = stamp;
+  last_published_path_stamp_ = stamp.nanoseconds();
+  active_path_ = global_path;
   global_path_pub_->publish(global_path);
   navigation_interfaces::msg::PathWithPolicy path_with_policy;
   path_with_policy.path = global_path;

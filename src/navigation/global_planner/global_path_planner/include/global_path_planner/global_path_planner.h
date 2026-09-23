@@ -22,6 +22,9 @@
 #include <navigation_interfaces/edge_policy_utils.hpp>
 #include <navigation_interfaces/msg/edge_policy.hpp>
 #include <navigation_interfaces/msg/path_with_policy.hpp>
+#include <navigation_interfaces/msg/avoidance_state.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <slam_manager_interfaces/msg/task_target.hpp>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -152,6 +155,36 @@ class GlobalPathPlanner : public rclcpp::Node {
       task_target_sub_;
   bool planning_pending_{false};  // 目标先到时，等待有效定位后补规划一次。
   std::vector<navigation_interfaces::msg::EdgePolicy> last_path_edge_policies_;
+
+  // 到点任务偏离重规划；巡检指定边不参与。确认与重试使用节点时钟。
+  bool deviation_replan_enabled_{true};
+  double deviation_distance_{0.5};
+  double deviation_confirm_sec_{0.5};
+  double replan_interval_sec_{1.0};
+  double replan_goal_tolerance_{0.2};
+  double replan_pose_timeout_sec_{0.5};
+  bool point_task_active_{false};
+  bool navigation_paused_{false};
+  bool replan_pending_{false};
+  uint8_t avoidance_state_{navigation_interfaces::msg::AvoidanceState::IDLE};
+  std::optional<rclcpp::Time> deviation_since_;
+  std::optional<rclcpp::Time> last_replan_attempt_;
+  std::optional<rclcpp::Time> last_pose_stamp_;
+  nav_msgs::msg::Path active_path_;
+  int64_t last_published_path_stamp_{0};
+  int64_t replan_request_stamp_{0};
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr replan_request_pub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr nav_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr paused_sub_;
+  rclcpp::Subscription<navigation_interfaces::msg::AvoidanceState>::SharedPtr
+      avoidance_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr path_accepted_sub_;
+  rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
+      smoothed_path_sub_;
+
+  void resetDeviationTracking(bool point_task);
+  void checkPathDeviation();
+  double distanceToActivePath() const;
 
   // 方法
   bool loadTopologyMap();

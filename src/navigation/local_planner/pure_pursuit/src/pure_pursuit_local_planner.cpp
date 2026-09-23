@@ -30,8 +30,33 @@ void PurePursuitLocalPlanner::stop() {
   }
 }
 
+void PurePursuitLocalPlanner::globalReplanCallback(
+    std_msgs::msg::Header::ConstSharedPtr request) {
+  const int64_t stamp = rclcpp::Time(request->stamp).nanoseconds();
+  if (request->frame_id != config_.global_frame || stamp <= 0) return;
+  // 跨话题可能乱序：若对应新路径已接收，迟到请求不能再次把机器人锁停。
+  if (accepted_global_path_frame_ == request->frame_id &&
+      accepted_global_path_stamp_ >= stamp) {
+    std_msgs::msg::Header accepted;
+    accepted.frame_id = accepted_global_path_frame_;
+    accepted.stamp = rclcpp::Time(accepted_global_path_stamp_);
+    global_path_accepted_pub_->publish(accepted);
+    return;
+  }
+  global_replan_after_ns_ = std::max(global_replan_after_ns_, stamp);
+  global_replan_waiting_.store(true);
+  reset_velocity_on_next_control_.store(true);
+  cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+  RCLCPP_WARN(node_->get_logger(), "[GLOBAL_REPLAN_WAIT] stopped old path tracking");
+}
+
 bool PurePursuitLocalPlanner::setPaused(bool paused) {
   navigation_paused_.store(paused);
+  if (paused_pub_) {
+    std_msgs::msg::Bool message;
+    message.data = paused;
+    paused_pub_->publish(message);
+  }
   if (paused) {
     // 暂停代表人工或上层接管。全局任务继续保留，但局部绕障路径是基于
     // 接管前位姿生成的一次性轨迹，恢复后不能再追逐旧临时点。
@@ -157,6 +182,19 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
           rclcpp::QoS(1).reliable().transient_local());
   LocalAvoidanceOutput initial_avoidance_output;
   publishAvoidanceState(initial_avoidance_output);
+
+  paused_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
+      "/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local());
+  std_msgs::msg::Bool paused;
+  paused.data = navigation_paused_.load();
+  paused_pub_->publish(paused);
+  global_path_accepted_pub_ = node_->create_publisher<std_msgs::msg::Header>(
+      "/navigation/global_path_accepted", rclcpp::QoS(10).reliable());
+  global_replan_sub_ = node_->create_subscription<std_msgs::msg::Header>(
+      "/navigation/global_replan_request", rclcpp::QoS(10).reliable(),
+      [this](std_msgs::msg::Header::ConstSharedPtr request) {
+        globalReplanCallback(request);
+      });
 
   // SlamManager内部控制接口，不作为APP直接调用的业务API。
   pause_service_ = node_->create_service<std_srvs::srv::SetBool>(
@@ -394,6 +432,10 @@ bool PurePursuitLocalPlanner::setGlobalPath(
 
 bool PurePursuitLocalPlanner::computeVelocityCommands(
     geometry_msgs::msg::Twist &cmd_vel) {
+  if (navigation_paused_.load() || global_replan_waiting_.load()) {
+    cmd_vel = geometry_msgs::msg::Twist();
+    return true;
+  }
   if (!path_received_) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "No global path received");
@@ -750,7 +792,7 @@ void PurePursuitLocalPlanner::controlCallback() {
     last_control_time_ = node_->now();
   }
 
-  if (navigation_paused_.load()) {
+  if (navigation_paused_.load() || global_replan_waiting_.load()) {
     // 暂停期间保留全局任务，但局部绕障状态已在setPaused(true)中清除。
     // 每个控制周期持续发送零速度，避免底盘沿用接管前的速度。
     RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
@@ -774,6 +816,15 @@ void PurePursuitLocalPlanner::controlCallback() {
 
 void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
     navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr msg) {
+  const int64_t path_stamp = rclcpp::Time(msg->path.header.stamp).nanoseconds();
+  if (global_replan_waiting_.load() &&
+      (msg->dynamic_path || msg->path.header.frame_id != config_.global_frame ||
+       path_stamp < global_replan_after_ns_)) {
+    return;
+  }
+  if (!msg->dynamic_path && accepted_global_path_frame_ == msg->path.header.frame_id &&
+      path_stamp > 0 && path_stamp < accepted_global_path_stamp_) return;
+  if (msg->path.poses.empty()) return;  // 空路径不能解除重规划等待。
   if (msg->dynamic_path) {
     const uint8_t state = avoidance_state_.load();
     if (state == navigation_interfaces::msg::AvoidanceState::AVOIDING ||
@@ -852,7 +903,15 @@ void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
       policy.obstacle_avoidance_distance_m = 0.5;
     }
   }
-  setGlobalPath(msg->path, msg->dynamic_path);
+  if (!setGlobalPath(msg->path, msg->dynamic_path)) return;
+  if (!msg->dynamic_path) {
+    accepted_global_path_stamp_ = path_stamp;
+    accepted_global_path_frame_ = msg->path.header.frame_id;
+    global_replan_waiting_.store(false);
+    reset_velocity_on_next_control_.store(true);
+    // 只清除重规划等待，不修改 navigation_paused_（人工暂停独立生效）。
+    global_path_accepted_pub_->publish(msg->path.header);
+  }
   publishCurrentObstacleStopPolicy();
 }
 

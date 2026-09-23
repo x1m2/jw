@@ -20,7 +20,19 @@ pure_pursuit
   -> /nav_state
 ```
 
-## 启动
+## 重规划等待
+
+到点任务偏离重规划时，控制器订阅 `/navigation/global_replan_request`
+（`std_msgs/Header`），立即停止旧路径跟踪，并持续输出零速度。收到时间戳
+不早于请求、非空且非动态的新全局路径后，重置跟踪进度和绕障状态，发布
+`/navigation/global_path_accepted` 确认，再解除重规划等待。队列中的旧路径
+不能解除等待；新路径先到、停止请求后到时也不会被迟到请求再次锁停。
+
+该等待状态与 `/pure_pursuit/set_paused` 的人工暂停独立：新路径到达不会
+解除人工暂停，人工恢复也不会越过尚未完成的重规划。人工暂停状态通过
+`/pure_pursuit/paused` 发布，供全局规划器避免在暂停期间触发重规划。
+
+## 启动方式
 
 完整导航：
 

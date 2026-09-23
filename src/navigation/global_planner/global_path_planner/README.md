@@ -69,6 +69,38 @@ topology_map.json + globalmap.pcd
 生成的路径交给`path_smoother`平滑；平滑器保持当前边策略不变，最终由
 Pure Pursuit执行。
 
+## 到点任务偏离重规划
+
+坐标到点任务（`TaskTarget.use_topology=false`）和 RViz `/clicked_point`
+目标支持自动重规划。机器人离开当前路径后，以最新定位作为临时起点，
+保留任务终点，重新连接拓扑图并搜索路线。拓扑巡检不启用此功能，仍执行
+任务指定的拓扑节点/边；重规划路线可以复用旧路线的后半段，不保证绕开旧路。
+
+偏离距离使用 XY 点到路径线段的最短距离。有同版本的平滑路径时使用平滑
+结果，避免把正常弯道平滑视为偏离。默认条件如下：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `deviation_replan_enabled` | `true` | 自动偏离重规划开关 |
+| `deviation_replan_distance` | `0.5` | 超过此距离开始确认偏离，米 |
+| `deviation_replan_confirm_sec` | `0.5` | 持续偏离时间，秒 |
+| `deviation_replan_interval_sec` | `1.0` | 连续规划尝试的最小间隔，秒 |
+| `deviation_replan_goal_tolerance` | `0.2` | 终点附近不触发重规划，米；应与控制器到点容差一致 |
+| `deviation_replan_pose_timeout_sec` | `0.5` | 定位时间戳最大允许偏差，秒 |
+
+
+内部协调话题（不直接控制底盘）：
+
+- `/navigation/global_replan_request`：`std_msgs/Header`，`stamp` 表示允许恢复
+  跟踪的最早路径版本，`frame_id` 为全局坐标系。
+- `/navigation/global_path_accepted`：`std_msgs/Header`，控制器实际接收的全局
+  路径版本。全局规划器持续等待匹配确认；旧版本确认不能解除等待。
+- `/pure_pursuit/paused`：`std_msgs/Bool`，控制器的人工/上层暂停状态。
+
+普通全局路径仍使用 `dynamic_path=false`。平滑器必须保留源路径的 header
+时间戳；控制器会拒绝等待期间排队的旧路径和空路径。
+
+
 ## 启动
 
 ```bash
