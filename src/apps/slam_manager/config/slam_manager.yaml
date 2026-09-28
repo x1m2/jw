@@ -23,7 +23,7 @@ slam_manager:
     navigation:
       control_timeout_sec: 3.0
       worker_timeout_sec: 30.0
-      goal_timeout_sec: 300.0
+      goal_timeout_sec: 1200.0
       # true时导航开始/结束/暂停/继续调用/SetMode；false时不下发模式指令。
       enable_set_mode: true
       # 首次执行巡检时，若当前二维位置距离首点不超过该阈值，则从第二点开始。
