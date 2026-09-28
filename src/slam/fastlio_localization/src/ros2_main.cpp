@@ -129,6 +129,12 @@ void FastlioLocalizationNode::publish_geometry_msgs(
   robotPose.header.frame_id = map_frame;
   robotPose.header.stamp = rclcpp::Time(lidar_end_time * 1e9);
   set_posestamp(robotPose, baselink_rot, baselink_pos);
+  const auto rpy = EigenMath::Quaternion2RPY(baselink_rot);
+  LOG_INFO(
+      "/pose_stamped_localization (xyz, rpy): (%.5f, %.5f, %.5f, %.5f, "
+      "%.5f, %.5f)",
+      baselink_pos.x(), baselink_pos.y(), baselink_pos.z(), RAD2DEG(rpy.x()),
+      RAD2DEG(rpy.y()), RAD2DEG(rpy.z()));
   pub_robot_pose->publish(robotPose);
 
   slam_manager_interfaces::msg::LocalizationPose app_pose;
@@ -338,7 +344,7 @@ void FastlioLocalizationNode::sensor_data_process() {
             "cost time = %.1fms.",
             slam.frontend->loger.feats_down_size,
             slam.frontend->get_match_score(), slam.frontend->loger.total_time);
-        slam.frontend->loger.print_pose(state, "cur_imu_pose");
+        // slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
         /******* Publish odometry *******/
 #ifndef WORK
@@ -407,7 +413,7 @@ void FastlioLocalizationNode::sensor_data_process() {
         "cost time = %.1fms.",
         slam.frontend->loger.feats_down_size, slam.frontend->get_match_score(),
         slam.frontend->loger.total_time);
-    slam.frontend->loger.print_pose(state, "cur_imu_pose");
+    // slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
     if (last_pose_record) {
       // record last pose
