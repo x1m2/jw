@@ -19,7 +19,8 @@ namespace slam_manager {
 namespace {
 
 constexpr char kRobotStateServiceName[] = "/GetState";
-constexpr char kNavigationRequiredRobotState[] = "Locomotion";
+constexpr char kPassiveState[] = "Passive";
+constexpr char kGetDownState[] = "GetDown";
 constexpr double kRobotStateTimeoutSec = 3.0;
 constexpr char kRobotModeServiceName[] = "/SetMode";
 constexpr double kRobotModeTimeoutSec = 3.0;
@@ -1716,18 +1717,19 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
     }
 
     const auto response = future.get();
-    const bool allowed =
-        response->code == 0 && response->state == kNavigationRequiredRobotState;
+    const bool blocked = response->state == kPassiveState ||
+                         response->state == kGetDownState;
+    const bool allowed = response->code == 0 && !blocked;
     RCLCPP_INFO(get_logger(),
                 "[NAVIGATION_GATE] GetState response: state='%s' code=%d "
-                "required_state='%s' allowed=%s",
+                "blocked_states=['%s','%s'] allowed=%s",
                 response->state.c_str(), response->code,
-                kNavigationRequiredRobotState, allowed ? "true" : "false");
+                kPassiveState, kGetDownState, allowed ? "true" : "false");
     if (!allowed) {
       message = "navigation rejected: robot state='" + response->state +
                 "', code=" + std::to_string(response->code) +
-                "; required state='" + kNavigationRequiredRobotState +
-                "' with code=0";
+                "; state must not be '" + kPassiveState + "' or '" +
+                kGetDownState + "', and code must be 0";
       RCLCPP_WARN(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
       return false;
     }
