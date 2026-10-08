@@ -79,6 +79,11 @@ bool ObstacleStop::initialize(std::string &message) {
       "/emergency_stop", 10,
       std::bind(&ObstacleStop::emergencyStopCallback, this,
                 std::placeholders::_1));
+  posture_stop_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/navigation/posture_stop",
+      rclcpp::QoS(1).reliable().transient_local(),
+      std::bind(&ObstacleStop::postureStopCallback, this,
+                std::placeholders::_1));
   obstacle_stop_enabled_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
       "/obstacle_stop/enabled", rclcpp::QoS(1).transient_local(),
       std::bind(&ObstacleStop::obstacleStopEnabledCallback, this,
@@ -95,6 +100,8 @@ bool ObstacleStop::initialize(std::string &message) {
       node_->create_publisher<geometry_msgs::msg::Twist>(safe_cmd_topic_, 10);
   stop_active_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
       "/obstacle_stop/active", rclcpp::QoS(1).transient_local());
+  obstacle_stopped_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
+      "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local());
   if (config_.publish_visualization) {
     marker_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
         "/obstacle_stop/detection_marker", 1);
@@ -517,6 +524,15 @@ void ObstacleStop::emergencyStopCallback(
   emergency_stop_active_ = message->data;
 }
 
+void ObstacleStop::postureStopCallback(
+    const std_msgs::msg::Bool::ConstSharedPtr message) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    posture_stop_active_ = message->data;
+  }
+  if (message->data) publishZeroVelocity();
+}
+
 void ObstacleStop::obstacleStopEnabledCallback(
     const std_msgs::msg::Bool::ConstSharedPtr message) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -710,6 +726,7 @@ void ObstacleStop::controlCallback() {
   bool hard_stop = false;
   bool slowdown = false;
   bool emergency_stop = false;
+  bool posture_stop = false;
   bool obstacle_stop_enabled = true;
   bool directional_escape_release = false;
   rclcpp::Time lidar_time(0, 0, node_->get_clock()->get_clock_type());
@@ -723,6 +740,7 @@ void ObstacleStop::controlCallback() {
     hard_stop = hard_stop_active_;
     slowdown = slowdown_active_;
     emergency_stop = emergency_stop_active_;
+    posture_stop = posture_stop_active_;
     obstacle_stop_enabled = obstacle_stop_enabled_;
     directional_escape_release = directional_escape_release_active_;
     lidar_time = last_lidar_time_;
@@ -746,6 +764,9 @@ void ObstacleStop::controlCallback() {
   if (emergency_stop) {
     state = State::kEmergencyStop;
     reason = "external emergency stop";
+  } else if (posture_stop) {
+    state = State::kPostureStop;
+    reason = "navigation blocked by robot posture";
   } else if (!command_fresh) {
     state = State::kWaitingForCommand;
     reason = has_command ? "planned velocity timed out"
@@ -790,6 +811,9 @@ void ObstacleStop::controlCallback() {
   std_msgs::msg::Bool stop_active;
   stop_active.data = state != State::kClear;
   stop_active_pub_->publish(stop_active);
+  std_msgs::msg::Bool obstacle_stopped;
+  obstacle_stopped.data = state == State::kObstacleStop;
+  obstacle_stopped_pub_->publish(obstacle_stopped);
   logStateChange(state, reason);
 }
 
@@ -831,6 +855,11 @@ void ObstacleStop::publishDetectionMarkers(bool hard_stop, bool slowdown) {
 
 void ObstacleStop::stop() {
   if (control_timer_) control_timer_->cancel();
+  if (obstacle_stopped_pub_) {
+    std_msgs::msg::Bool stopped;
+    stopped.data = false;
+    obstacle_stopped_pub_->publish(stopped);
+  }
   // Worker停止前主动发送一次零速度。
   publishZeroVelocity();
 }
@@ -864,6 +893,8 @@ const char *ObstacleStop::stateName(State state) {
       return "obstacle_slowdown";
     case State::kObstacleStop:
       return "obstacle_stop";
+    case State::kPostureStop:
+      return "posture_stop";
     case State::kEmergencyStop:
       return "emergency_stop";
     case State::kSensorFault:

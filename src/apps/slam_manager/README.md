@@ -47,10 +47,13 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 ## 巡检导航流程
 
 开始巡检或单点导航前，`slam_manager`会调用
-`/GetState`（`woodox_ros2_interface/srv/GetState`）。只有响应为
-`state: Locomotion`且`code: 0`时才启动导航Worker。服务不可用、响应超时或
-机器人处于其他状态时，Action将以`ABORTED`结束，`result.message`包含实际
-`state`和`code`，同时节点日志输出`[NAVIGATION_GATE]`状态记录。
+`/GetState`（`woodox_ros2_interface/srv/GetState`）。只有响应`code: 0`且`state`不是`Passive`或`GetDown`时才启动导航Worker。
+服务不可用、响应超时或机器人处于上述两个禁行状态时，Action将以`ABORTED`
+结束，`result.message`包含实际`state`和`code`，同时节点日志输出
+`[NAVIGATION_GATE]`状态记录。导航期间每500 ms复查姿态；进入`Passive`或
+`GetDown`时冻结当前目标的超时计时，同时通过`obstacle_stop`将最终速度压为零；
+恢复到其他允许导航的姿态后解除零速并继续累计。姿态服务不可用、响应错误或
+超时时按失效安全策略保持零速度。
 
 状态检查通过后，启动导航前调用一次`/SetMode`并发送`mode: 1`。导航正常结束、
 启动失败、运行失败或取消时调用一次`/SetMode`并发送`mode: 0`；不进行周期调用。
@@ -137,6 +140,10 @@ A -> B为map_connection时：
   启动导航Workers后才逻辑完成，并执行该节点的`stop_duration_sec`。
 - `map_connection`重定位继续使用当前`map_id`的PCD和已生成BBS体素，不重新
   执行`load_map`或生成体素。
+- `navigation.goal_timeout_sec`按每个运动目标分别计算，只累计有效导航时间。
+  手动暂停、机器人姿态为`Passive`/`GetDown`、或停障状态严格为
+  `OBSTACLE_STOP`时冻结；多个冻结原因重叠时不重复计算，全部解除后继续累计。
+  到点后的`stop_duration_sec`不属于目标导航超时。
 - 普通节点到达后按`stop_duration_sec`等待，再执行下一个节点。
 
 边策略随本次相邻节点导航下发：

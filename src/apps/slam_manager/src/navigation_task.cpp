@@ -956,6 +956,9 @@ bool NavigationTaskExecutor::reserveOperation(std::string &message) {
     cancel_requested_ = false;
     goal_armed_ = false;
     goal_reached_ = false;
+    goal_hold_reasons_ &= static_cast<uint8_t>(~kManualPause);
+    goal_timer_active_ = false;
+    goal_active_time_ = std::chrono::duration<double>::zero();
   }
   return true;
 }
@@ -1724,7 +1727,52 @@ void NavigationTaskExecutor::onNavigationState(bool reached) {
 }
 
 bool NavigationTaskExecutor::setPaused(bool paused, std::string &message) {
-  return controller_.setPaused(paused, config_.control_timeout_sec, message);
+  if (!controller_.setPaused(paused, config_.control_timeout_sec, message)) {
+    return false;
+  }
+  setGoalHold(kManualPause, paused);
+  return true;
+}
+
+void NavigationTaskExecutor::setPostureBlocked(bool blocked) {
+  setGoalHold(kPostureBlocked, blocked);
+}
+
+void NavigationTaskExecutor::setObstacleStopped(bool stopped) {
+  setGoalHold(kObstacleStop, stopped);
+}
+
+void NavigationTaskExecutor::setGoalHold(uint8_t reason, bool enabled) {
+  uint8_t old_reasons = 0U;
+  uint8_t new_reasons = 0U;
+  double active_sec = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(result_mutex_);
+    updateGoalElapsed(std::chrono::steady_clock::now());
+    old_reasons = goal_hold_reasons_;
+    if (enabled) {
+      goal_hold_reasons_ |= reason;
+    } else {
+      goal_hold_reasons_ &= static_cast<uint8_t>(~reason);
+    }
+    new_reasons = goal_hold_reasons_;
+    active_sec = goal_active_time_.count();
+  }
+  if (old_reasons != new_reasons) {
+    RCLCPP_INFO(node_->get_logger(),
+                "[NAV_TIMEOUT] hold_mask=0x%02x active_time=%.3fs",
+                static_cast<unsigned int>(new_reasons), active_sec);
+    result_cv_.notify_all();
+  }
+}
+
+void NavigationTaskExecutor::updateGoalElapsed(
+    std::chrono::steady_clock::time_point now) {
+  if (!goal_timer_active_) return;
+  if (goal_hold_reasons_ == 0U) {
+    goal_active_time_ += now - goal_timer_updated_;
+  }
+  goal_timer_updated_ = now;
 }
 
 bool NavigationTaskExecutor::startWorkers(uint64_t session_id,
@@ -1763,13 +1811,31 @@ bool NavigationTaskExecutor::stopWorkers(uint64_t session_id,
 
 bool NavigationTaskExecutor::waitForGoal(
     double timeout_sec, const std::function<bool()> &is_canceling) {
+  const auto timeout = std::chrono::duration<double>(timeout_sec);
+  const auto poll_period = std::chrono::milliseconds(100);
   std::unique_lock<std::mutex> lock(result_mutex_);
-  return result_cv_.wait_for(lock, std::chrono::duration<double>(timeout_sec),
-                             [this, &is_canceling]() {
-                               return goal_reached_ || cancel_requested_ ||
-                                      shutting_down_ || is_canceling();
-                             }) &&
-         goal_reached_;
+  goal_active_time_ = std::chrono::duration<double>::zero();
+  goal_timer_updated_ = std::chrono::steady_clock::now();
+  goal_timer_active_ = true;
+
+  while (true) {
+    updateGoalElapsed(std::chrono::steady_clock::now());
+    if (goal_reached_) {
+      goal_timer_active_ = false;
+      return true;
+    }
+    if (cancel_requested_ || shutting_down_ || is_canceling()) {
+      goal_timer_active_ = false;
+      return false;
+    }
+    const auto remaining = timeout - goal_active_time_;
+    if (remaining <= std::chrono::duration<double>::zero()) {
+      goal_timer_active_ = false;
+      return false;
+    }
+    result_cv_.wait_for(lock, std::min(remaining,
+                                      std::chrono::duration<double>(poll_period)));
+  }
 }
 
 bool NavigationTaskExecutor::waitForStopDuration(
@@ -1862,6 +1928,9 @@ void NavigationTaskExecutor::resetGoalState() {
   cancel_requested_ = false;
   goal_armed_ = false;
   goal_reached_ = false;
+  goal_hold_reasons_ &= static_cast<uint8_t>(~kManualPause);
+  goal_timer_active_ = false;
+  goal_active_time_ = std::chrono::duration<double>::zero();
 }
 
 void NavigationTaskExecutor::releaseOperation() {

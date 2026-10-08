@@ -22,6 +22,7 @@ constexpr char kRobotStateServiceName[] = "/GetState";
 constexpr char kPassiveState[] = "Passive";
 constexpr char kGetDownState[] = "GetDown";
 constexpr double kRobotStateTimeoutSec = 3.0;
+constexpr auto kRobotStatePollPeriod = std::chrono::milliseconds(500);
 constexpr char kRobotModeServiceName[] = "/SetMode";
 constexpr double kRobotModeTimeoutSec = 3.0;
 
@@ -182,6 +183,12 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
                  std::string &message) {
             return relocalizeForMapConnection(node, is_canceling, message);
           }});
+  posture_stop_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/navigation/posture_stop",
+      rclcpp::QoS(1).reliable().transient_local());
+  robot_state_timer_ = create_wall_timer(
+      kRobotStatePollPeriod, std::bind(&SlamManagerNode::pollRobotState, this),
+      robot_control_callback_group_);
 
   // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。
   runtime_state_pub_ = create_publisher<RuntimeState>(
@@ -298,6 +305,11 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::navigationStateCallback, this,
                 std::placeholders::_1),
       navigation_subscription_options);
+  obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/obstacle_stop/stopped",
+      rclcpp::QoS(1).reliable().transient_local(),
+      std::bind(&SlamManagerNode::obstacleStopCallback, this,
+                std::placeholders::_1));
 
   state_machine_.initialize();
   publishMode();
@@ -1719,6 +1731,7 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
     const auto response = future.get();
     const bool blocked = response->state == kPassiveState ||
                          response->state == kGetDownState;
+    setPostureStop(response->code == 0 ? blocked : true);
     const bool allowed = response->code == 0 && !blocked;
     RCLCPP_INFO(get_logger(),
                 "[NAVIGATION_GATE] GetState response: state='%s' code=%d "
@@ -1742,6 +1755,89 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
     RCLCPP_ERROR(get_logger(), "[NAVIGATION_GATE] %s", message.c_str());
     return false;
   }
+}
+
+void SlamManagerNode::pollRobotState() {
+  const auto mode = state_machine_.mode();
+  if (mode != SlamMode::kNavigating &&
+      mode != SlamMode::kNavigationPaused) {
+    if (state_req_pending_.exchange(false)) {
+      state_req_seq_.fetch_add(1U);
+      get_robot_state_client_->prune_pending_requests();
+    }
+    return;
+  }
+
+  const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  if (state_req_pending_.load()) {
+    const auto timeout_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::duration<double>(
+                                    kRobotStateTimeoutSec))
+                                .count();
+    if (now_ns - state_req_started_ns_.load() >= timeout_ns &&
+        state_req_pending_.exchange(false)) {
+      state_req_seq_.fetch_add(1U);
+      get_robot_state_client_->prune_pending_requests();
+      setPostureStop(true);
+      RCLCPP_WARN(get_logger(),
+                  "[NAV_POSTURE] GetState timed out; holding zero velocity");
+    }
+    return;
+  }
+
+  if (!get_robot_state_client_->service_is_ready()) {
+    setPostureStop(true);
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "[NAV_POSTURE] GetState unavailable; holding zero velocity");
+    return;
+  }
+
+  bool expected = false;
+  if (!state_req_pending_.compare_exchange_strong(expected, true)) return;
+  state_req_started_ns_.store(now_ns);
+  const uint64_t request_seq = state_req_seq_.fetch_add(1U) + 1U;
+  try {
+    auto request = std::make_shared<GetState::Request>();
+    get_robot_state_client_->async_send_request(
+        request, [this, request_seq](
+                     rclcpp::Client<GetState>::SharedFuture future) {
+          if (request_seq != state_req_seq_.load()) return;
+          state_req_pending_.store(false);
+          if (shutting_down_.load()) return;
+          try {
+            const auto response = future.get();
+            const auto mode = state_machine_.mode();
+            if (mode != SlamMode::kNavigating &&
+                mode != SlamMode::kNavigationPaused) {
+              return;
+            }
+            const bool blocked = response->code != 0 ||
+                                 response->state == kPassiveState ||
+                                 response->state == kGetDownState;
+            setPostureStop(blocked);
+          } catch (const std::exception &error) {
+            setPostureStop(true);
+            RCLCPP_WARN(get_logger(),
+                        "[NAV_POSTURE] robot state query failed: %s",
+                        error.what());
+          }
+        });
+  } catch (const std::exception &error) {
+    state_req_pending_.store(false);
+    setPostureStop(true);
+    RCLCPP_WARN(get_logger(), "[NAV_POSTURE] robot state request failed: %s",
+                error.what());
+  }
+}
+
+void SlamManagerNode::setPostureStop(bool stopped) {
+  navigation_task_executor_->setPostureBlocked(stopped);
+  std_msgs::msg::Bool message;
+  message.data = stopped;
+  posture_stop_pub_->publish(message);
 }
 
 bool SlamManagerNode::setRobotMode(int32_t mode, std::string &message) {
@@ -1793,6 +1889,11 @@ void SlamManagerNode::navigationStateCallback(
     const std_msgs::msg::Bool::SharedPtr message) {
   // Pure Pursuit发布false表示开始跟踪，随后true表示当前目标到达。
   navigation_task_executor_->onNavigationState(message->data);
+}
+
+void SlamManagerNode::obstacleStopCallback(
+    const std_msgs::msg::Bool::SharedPtr message) {
+  navigation_task_executor_->setObstacleStopped(message->data);
 }
 
 void SlamManagerNode::currentPoseCallback(

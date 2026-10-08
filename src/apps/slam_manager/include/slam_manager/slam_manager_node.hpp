@@ -153,6 +153,9 @@ class SlamManagerNode : public rclcpp::Node {
   void handleNavigateToPoseAccepted(
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
   bool robotStateAllowsNavigation(std::string &message);
+  void pollRobotState();
+  void setPostureStop(bool stopped);
+  void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr message);
   bool setRobotMode(int32_t mode, std::string &message);
 
   // 算法内部结果及协议2.10～2.12数据Topic的转发回调。
@@ -222,6 +225,9 @@ class SlamManagerNode : public rclcpp::Node {
   std::atomic_bool relocalization_succeeded_{false};
   std::atomic_bool localization_action_active_{false};
   std::atomic_bool shutting_down_{false};
+  std::atomic_bool state_req_pending_{false};
+  std::atomic<int64_t> state_req_started_ns_{0};
+  std::atomic<uint64_t> state_req_seq_{0U};
   std::mutex localization_action_thread_mutex_;
   std::thread localization_action_thread_;
 
@@ -254,12 +260,14 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Service<Trigger>::SharedPtr resume_navigation_service_;
   rclcpp::Client<GetState>::SharedPtr get_robot_state_client_;
   rclcpp::Client<SetMode>::SharedPtr set_robot_mode_client_;
+  rclcpp::TimerBase::SharedPtr robot_state_timer_;
   rclcpp_action::Server<StartNavigation>::SharedPtr start_navigation_action_;
   rclcpp_action::Server<NavigateToPose>::SharedPtr navigate_to_pose_action_;
   rclcpp_action::Server<StartLocalization>::SharedPtr
       start_localization_action_;
 
   rclcpp::Publisher<RuntimeState>::SharedPtr runtime_state_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr posture_stop_pub_;
   rclcpp::Publisher<MapKeyframe>::SharedPtr keyframe_cloud_pub_;
   rclcpp::Publisher<RobotPose>::SharedPtr current_pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr body_cloud_pub_;
@@ -275,6 +283,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
       relocalization_result_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr navigation_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
 };
 
 }  // namespace slam_manager

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -157,6 +158,8 @@ class NavigationTaskExecutor {
 
   void onNavigationState(bool reached);
   bool setPaused(bool paused, std::string &message);
+  void setPostureBlocked(bool blocked);
+  void setObstacleStopped(bool stopped);
 
  private:
   void executePatrolAction(
@@ -176,6 +179,8 @@ class NavigationTaskExecutor {
   bool stopWorkers(uint64_t session_id, std::string &message);
   bool waitForGoal(double timeout_sec,
                    const std::function<bool()> &is_canceling);
+  void setGoalHold(uint8_t reason, bool enabled);
+  void updateGoalElapsed(std::chrono::steady_clock::time_point now);
   bool waitForStopDuration(double duration_sec,
                            const std::function<bool()> &is_canceling);
   void startActionThread(uint64_t session_id, const std::string &action_name,
@@ -203,6 +208,13 @@ class NavigationTaskExecutor {
   std::condition_variable result_cv_;
   bool goal_armed_{false};
   bool goal_reached_{false};
+  static constexpr uint8_t kManualPause = 1U << 0;
+  static constexpr uint8_t kPostureBlocked = 1U << 1;
+  static constexpr uint8_t kObstacleStop = 1U << 2;
+  uint8_t goal_hold_reasons_{0U};
+  bool goal_timer_active_{false};
+  std::chrono::steady_clock::time_point goal_timer_updated_{};
+  std::chrono::duration<double> goal_active_time_{0.0};
   bool cancel_requested_{false};
   bool shutting_down_{false};
   std::mutex execution_mutex_;
