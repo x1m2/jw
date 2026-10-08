@@ -9,27 +9,25 @@
     # 话题配置
     lidar_topic: "/cloud_registered"     # 完整配准点云，按消息时间戳从map/odom变换到base_link
     radar_topic: "/lidar/points"               # 毫米波雷达点云话题 (仅在双雷达模式下使用)
-    odom_topic: "/baselink2map"                # 里程计话题（可选）
 
     # 坐标系配置
     base_frame: "base_link"                    # 机器人基坐标系（水平坐标系，用于地面分割）
-    lidar_frame: "map"                  # 旧参数保留兼容；输入坐标系以消息header.frame_id为准
     radar_frame: "radar"                       # 毫米波雷达坐标系
 
     # 数据同步配置
     time_sync_threshold: 0.05                 # 时间同步阈值（秒）
 
     # 点云处理参数
-    voxel_leaf_size: 0.05                     # 体素滤波器叶子大小（米）
+    voxel_leaf_size: 0.03                     # 保留低矮、小型障碍的细节
     height_threshold: 0.5                     # 地面高度阈值（米），参考PGO设置
     refined_height_threshold: 0.1             # PatchWorkpp精细高度过滤阈值（米）
     robot_radius: 0.3                         # 机器人半径（米）
     max_range: 10.0                           # 最大处理距离（米）
 
     # 滤波参数
-    use_statistical_filter: true              # 是否使用统计滤波
-    statistical_filter_k: 50                  # 统计滤波邻居数
-    statistical_filter_std: 1.0               # 统计滤波标准差倍数
+    use_statistical_filter: false             # 稀疏矮障碍可能被统计滤波误删
+    statistical_filter_k: 15
+    statistical_filter_std: 1.5
 
     # PatchWorkpp地面分割参数
     patchworkpp:
@@ -38,10 +36,10 @@
       num_iter: 3
       num_lpr: 20
       num_min_pts: 6                           # 减少最小点数要求
-      th_seeds: 0.0                           # 使用PGO的种子阈值
-      th_dist: 0.05                            # 使用PGO的距离阈值
-      th_seeds_v: 0.25                         # 垂直结构种子阈值
-      th_dist_v: 0.1                           # 垂直结构距离阈值
+      th_seeds: 0.05                           # base_link位于地面，保守提取地面种子
+      th_dist: 0.03                            # 缩小地面厚度，保留低矮凸起
+      th_seeds_v: 0.15                         # 垂直结构种子阈值
+      th_dist_v: 0.06                          # 垂直结构距离阈值
       max_r: 10.0                              # 减少最大范围到合理值
       min_r: 0.01                              # 使用PGO的最小范围，避免忽略近距离点
       uprightness_thr: 0.707                   # 使用PGO的直立度阈值
@@ -63,20 +61,35 @@
         elevation_thresholds: [0.1, 0.1, 0.1, 0.1]  # 使用PGO的高度阈值
         flatness_thresholds: [0.0, 0.0, 0.0, 0.0]
 
-    # 地面点云膨胀参数
-    use_ground_expansion: true                 # 启用地面点云膨胀（用于处理楼梯等场景）
-    expansion_radius: 0.1                     # 膨胀半径（米）- 地面点周围多少米内的点视为可行区域
-    expansion_height: 0.1                     # 膨胀高度范围（米）- 地面点上下多少米内的点视为可行区域
-    use_stair_region_growing: true             # 从地面沿相邻低高度跨度单元逐级扩张到楼梯
+    # 楼梯结构识别参数
+    use_stair_region_growing: true             # 独立验证完整多级楼梯结构
+    use_stair_riser_detection: true            # 使用连续立面序列作为主要楼梯特征
     stair_grid_resolution: 0.05                # 楼梯高度图栅格分辨率（米）
-    stair_max_step_height: 0.15                # 相邻台阶允许的最大级高（米）
-    stair_max_cell_height_span: 0.2           # 单格垂直跨度上限；人和墙通常超过此值并保留
-    stair_max_gap_cells: 1                     # 允许跨过一个无点空格，降低稀疏点云造成的断裂
-    stair_hysteresis_frames: 10                # 楼梯判定保持约1秒，抑制连续漏判造成的低频闪烁
-    stair_hysteresis_neighbor_cells: 1         # 帧间允许移动一格，补偿机器人运动和点云抖动
+    stair_max_step_height: 0.20                # 相邻立面允许的最大级高（米）
+    stair_max_cell_height_span: 0.20           # 单格垂直跨度上限
+    stair_max_gap_cells: 2                     # 可跨两个完全无回波的稀疏栅格
+    stair_hysteresis_frames: 30                # 完整识别后最多保持约3秒（输入约10 Hz）
+    stair_hysteresis_neighbor_cells: 2         # 帧间允许10 cm栅格位移，补偿运动和点云抖动
+    stair_surface_tolerance: 0.05              # 同一踏面的高度聚类容差
+    stair_min_step_height: 0.06                 # 放宽最小级高，仍排除普通地面起伏
+    stair_min_step_count: 3                     # 未接地时三级连续立面即可判定楼梯
+    stair_min_total_rise: 0.15                  # 三级立面序列允许的最小总高差
+    stair_min_tread_depth: 0.08                 # 稀疏回波下相邻立面的最小间距
+    stair_max_tread_depth: 0.50                 # 相邻立面的最大间距
+    stair_step_height_tolerance: 0.05           # 级高一致性及同立面分段容差
+    stair_model_tread_height_tolerance: 0.07    # 靠近时踏面抖动及姿态误差的高度容差
+    stair_model_riser_position_tolerance: 0.10  # 靠近时完整立面匹配的位置容差
+    stair_model_max_extrapolated_steps: 6       # 从已验证三级序列最多继续匹配六级高处台阶
+    stair_surface_history_duration: 3.0        # 固定坐标系下已确认楼梯表面的记忆时长（秒）；0关闭
+    stair_surface_history_distance: 0.04       # 当前点到历史表面的最大三维距离（米），不按整区域删除
+    stair_direction_tolerance_deg: 45.0         # 稀疏回波下各级立面方向允许偏差
+    stair_min_width: 0.30                       # 放宽单帧可观测立面最小宽度
+    stair_ground_seed_min_points: 3             # 纯地面种子的最少点数
+    stair_ground_seed_max_span: 0.03            # 纯地面种子的最大垂直跨度
+    stair_ground_reference_max_abs_height: 0.06 # base_link在地面时仅使用零高度附近点估计地面
 
     # 障碍物点云聚类滤波参数
     use_obstacle_clustering: true             # 启用障碍物点云聚类滤波（去除孤立点）
     cluster_tolerance: 0.15                  # 聚类连接距离；避免把相邻的人和楼梯过度粘成一簇
-    min_cluster_size: 3                     # 最小聚类大小（点数）- 小于此值的聚类将被过滤掉
+    min_cluster_size: 5                     # 安全优先，保留稀疏低矮障碍
     max_cluster_size: 25000                  # 大簇诊断阈值；超过后报警但仍保留，避免漏掉人/墙

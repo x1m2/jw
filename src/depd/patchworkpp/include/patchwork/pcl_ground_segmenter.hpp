@@ -33,7 +33,8 @@ class PclGroundSegmenter {
   bool segment(const pcl::PointCloud<pcl::PointXYZI> &input,
                pcl::PointCloud<pcl::PointXYZI> &ground,
                pcl::PointCloud<pcl::PointXYZI> &nonground,
-               double *time_taken_sec = nullptr) {
+               double *time_taken_sec = nullptr,
+               std::vector<std::uint8_t> *labels = nullptr) {
     ground.clear();
     nonground.clear();
 
@@ -42,6 +43,10 @@ class PclGroundSegmenter {
         *time_taken_sec = 0.0;
       }
       return false;
+    }
+
+    if (labels != nullptr) {
+      labels->assign(input.size(), 0U);
     }
 
     std::vector<int> row_to_input_index;
@@ -86,6 +91,12 @@ class PclGroundSegmenter {
                     ground);
     appendByIndices(input, row_to_input_index, patchwork_.getNongroundIndices(),
                     nonground);
+    if (labels != nullptr) {
+      labelByIndices(row_to_input_index, patchwork_.getGroundIndices(), 1U,
+                     *labels);
+      labelByIndices(row_to_input_index, patchwork_.getNongroundIndices(), 2U,
+                     *labels);
+    }
 
     finalizeCloudLike(input, ground);
     finalizeCloudLike(input, nonground);
@@ -211,6 +222,23 @@ class PclGroundSegmenter {
       }
 
       output.push_back(input.points[static_cast<std::size_t>(input_index)]);
+    }
+  }
+
+  static void labelByIndices(const std::vector<int> &row_to_input_index,
+                             const Eigen::VectorXi &indices,
+                             std::uint8_t label,
+                             std::vector<std::uint8_t> &labels) {
+    for (int i = 0; i < indices.size(); ++i) {
+      const int row_index = indices(i);
+      if (row_index < 0 ||
+          row_index >= static_cast<int>(row_to_input_index.size())) {
+        continue;
+      }
+      const int input_index = row_to_input_index[row_index];
+      if (input_index >= 0 && input_index < static_cast<int>(labels.size())) {
+        labels[static_cast<std::size_t>(input_index)] = label;
+      }
     }
   }
 
