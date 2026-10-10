@@ -95,11 +95,11 @@ class System {
 
   bool run_relocalization(PointCloudType::Ptr scan,
                           const double &lidar_beg_time,
-                          const GravityInitialization::Result &gravity) {
+                          const V3D &mean_acc) {
     run_relocalization_thread = true;
     if (!system_state_vaild) {
       Eigen::Matrix4d imu_pose;
-      if (relocalization->run(scan, imu_pose, lidar_beg_time, gravity)) {
+      if (relocalization->run(scan, imu_pose, lidar_beg_time, mean_acc)) {
         frontend->reset_state(imu_pose);
         system_state_vaild = true;
       } else {
@@ -112,6 +112,15 @@ class System {
     return system_state_vaild;
   }
 
+  static V3D mean_acceleration(const MeasureCollection &measures) {
+    V3D mean_acc = ZERO3D;
+    if (measures.imu.empty()) return mean_acc;
+    for (const auto &imu : measures.imu) {
+      mean_acc += imu->linear_acceleration;
+    }
+    return mean_acc / static_cast<double>(measures.imu.size());
+  }
+
 
  public:
   bool system_state_vaild = false;  // true: system ok
@@ -119,7 +128,6 @@ class System {
   std::thread relocalization_thread;
 
   /*** module ***/
-  GravityInitialization gravity_initialization;
   shared_ptr<FastlioOdometry> frontend;
   shared_ptr<Relocalization> relocalization;
   shared_ptr<Pcd2Pgm> p2p;

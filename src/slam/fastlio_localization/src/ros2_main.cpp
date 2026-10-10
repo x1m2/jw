@@ -5,9 +5,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <unistd.h>
 
-#include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <csignal>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -18,7 +16,6 @@
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <stdexcept>
 
 #include "livox_ros_driver2/msg/custom_msg.hpp"
 #include "system/Header.h"
@@ -61,7 +58,7 @@ void FastlioLocalizationNode::publish_cloud_body(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
     PointCloudType::Ptr cloud, const double &lidar_end_time) {
   PointCloudType::Ptr cloud_body(new PointCloudType());
-  pcl::transformPointCloud(*cloud, *cloud_body, output_base_lidar());
+  pcl::transformPointCloud(*cloud, *cloud_body, T_base_lidar);
   publish_cloud(publisher, cloud_body, lidar_end_time, baselink_frame);
 }
 
@@ -107,43 +104,10 @@ void FastlioLocalizationNode::compute_baselink_pose(const state_ikfom &state,
   T_imu_lidar.topRightCorner(3, 1) = state.offset_T_L_I;
 
   // ^M T_B = ^M T_I * ^I T_L * inverse(^B T_L).
-  const Eigen::Matrix4d T_base_lidar = output_base_lidar();
   const Eigen::Matrix4d T_map_base =
       T_map_imu * T_imu_lidar * T_base_lidar.inverse();
   baselink_rot = QD(M3D(T_map_base.topLeftCorner(3, 3)));
   baselink_pos = T_map_base.topRightCorner(3, 1);
-}
-
-Eigen::Matrix3d FastlioLocalizationNode::compute_output_lidar_rotation(
-    const GravityInitialization::Result &gravity) const {
-  const V3D &mean_acc = gravity.mean_acc;
-  const Eigen::Matrix3d R_gravity_imu =
-      gravity.gravity_from_imu.topLeftCorner<3, 3>();
-  const Eigen::Matrix3d R_gravity_lidar =
-      R_gravity_imu * slam.frontend->offset_Rli;
-  const double lidar_roll =
-      std::atan2(R_gravity_lidar(2, 1), R_gravity_lidar(2, 2));
-  const double lidar_pitch =
-      std::atan2(-R_gravity_lidar(2, 0),
-                 std::hypot(R_gravity_lidar(0, 0),
-                            R_gravity_lidar(1, 0)));
-
-  const Eigen::Matrix3d rotation =
-      (Eigen::AngleAxisd(lidar_pitch, Eigen::Vector3d::UnitY()) *
-       Eigen::AngleAxisd(lidar_roll, Eigen::Vector3d::UnitX()))
-          .toRotationMatrix();
-  LOG_WARN(
-      "[OUTPUT_TILT] gravity initialized: samples=%zu, lidar_roll=%.2f deg, "
-      "lidar_pitch=%.2f deg, mean_acc=[%.3f %.3f %.3f]",
-      gravity.sample_count, RAD2DEG(lidar_roll), RAD2DEG(lidar_pitch),
-      mean_acc.x(), mean_acc.y(),
-      mean_acc.z());
-  return rotation;
-}
-
-Eigen::Matrix4d FastlioLocalizationNode::output_base_lidar() const {
-  std::lock_guard<std::mutex> lock(output_initialization_mutex);
-  return T_base_lidar_output;
 }
 
 void FastlioLocalizationNode::publish_geometry_msgs(
@@ -334,15 +298,6 @@ void FastlioLocalizationNode::sensor_data_process() {
 #ifdef MEASURES_BUFFER
   static std::deque<shared_ptr<MeasureCollection>> measures_cache;
 #endif
-  bool output_ready;
-  {
-    std::lock_guard<std::mutex> lock(output_initialization_mutex);
-    output_ready = output_initialized;
-  }
-  if (!output_ready) {
-    publish_module_status(false);
-    return;
-  }
   if (!slam.system_state_vaild) {
     if (last_pose_record && load_last_pose(slam.frontend->measures->lidar)) {
       // only for restart!
@@ -355,10 +310,11 @@ void FastlioLocalizationNode::sensor_data_process() {
 
       PointCloudType::Ptr cur_scan(new PointCloudType);
       *cur_scan = *slam.frontend->measures->lidar;
-      const auto gravity = slam.gravity_initialization.snapshot();
+      const V3D mean_acc =
+          System::mean_acceleration(*slam.frontend->measures);
       slam.relocalization_thread =
           std::thread(&System::run_relocalization, &slam, cur_scan,
-                      slam.frontend->measures->lidar_beg_time, gravity);
+                      slam.frontend->measures->lidar_beg_time, mean_acc);
     }
     // publish_module_status(slam.frontend->measures->lidar_end_time,
     // robot_msgs::Level::WARN);
@@ -598,8 +554,6 @@ void FastlioLocalizationNode::imu_cbk(
                       slam.frontend->imu->imu_meas_check))
     return;
 
-  update_gravity_initialization(linear_acceleration);
-
   static double last_time = 0;
   check_time_interval(
       last_time, msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9,
@@ -649,32 +603,8 @@ void FastlioLocalizationNode::publish_global_map() {
   }
 }
 
-void FastlioLocalizationNode::update_gravity_initialization(
-    const V3D &linear_acceleration) {
-  geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr pending_pose;
-  {
-    std::lock_guard<std::mutex> lock(output_initialization_mutex);
-    if (output_initialized) return;
-
-    const std::size_t required_samples = static_cast<std::size_t>(
-        std::max(10, slam.frontend->imu->imu_rate));
-    if (!slam.gravity_initialization.add_sample(linear_acceleration,
-                                               required_samples)) {
-      return;
-    }
-    const auto gravity = slam.gravity_initialization.snapshot();
-    T_base_lidar_output.topLeftCorner<3, 3>() =
-        compute_output_lidar_rotation(gravity);
-
-    output_initialized = true;
-    pending_pose = std::move(pending_initial_pose);
-  }
-
-  if (pending_pose) apply_initial_pose(pending_pose);
-}
-
-void FastlioLocalizationNode::apply_initial_pose(
-    const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr &msg) {
+void FastlioLocalizationNode::initialPoseCallback(
+    const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
   const geometry_msgs::msg::Pose &pose = msg->pose.pose;
   const auto &ori = msg->pose.pose.orientation;
   const Eigen::Quaterniond quat(ori.w, ori.x, ori.y, ori.z);
@@ -683,20 +613,13 @@ void FastlioLocalizationNode::apply_initial_pose(
     return;
   }
 
-  // /initialpose supplies map position and yaw. Roll/pitch come from the same
-  // gravity snapshot that relocalization and published poses use.
-  const Eigen::Matrix3d initial_rotation =
-      quat.normalized().toRotationMatrix();
-  const double yaw =
-      std::atan2(initial_rotation(1, 0), initial_rotation(0, 0));
-
   // T_map_imu = T_map_base * T_base_lidar * inverse(T_imu_lidar).
   Eigen::Matrix4d imu_pose_matrix = Eigen::Matrix4d::Identity();
   imu_pose_matrix.topLeftCorner<3, 3>() =
-      Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      quat.normalized().toRotationMatrix();
   imu_pose_matrix.topRightCorner<3, 1>() =
       Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
-  imu_pose_matrix *= output_base_lidar();
+  imu_pose_matrix *= T_base_lidar;
   imu_pose_matrix *=
       slam.relocalization->lidar_extrinsic.toMatrix4d().inverse();
 
@@ -705,19 +628,6 @@ void FastlioLocalizationNode::apply_initial_pose(
                                    init_pose.z, init_pose.roll, init_pose.pitch,
                                    init_pose.yaw);
   slam.relocalization->set_init_pose(init_pose);
-}
-
-void FastlioLocalizationNode::initialPoseCallback(
-    const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
-  {
-    std::lock_guard<std::mutex> lock(output_initialization_mutex);
-    if (!output_initialized) {
-      pending_initial_pose = msg;
-      LOG_WARN("gravity is not ready; defer /initialpose");
-      return;
-    }
-  }
-  apply_initial_pose(msg);
 }
 
 FastlioLocalizationNode::FastlioLocalizationNode(
@@ -738,11 +648,19 @@ void FastlioLocalizationNode::initialize() {
 
   node->declare_parameter<std::vector<double>>("lidar_to_base_T",
                                                std::vector<double>(3, 0.0));
+  node->declare_parameter<std::vector<double>>("lidar_to_base_R",
+                                               std::vector<double>(3, 0.0));
   node->get_parameter("lidar_to_base_T", lidar_to_base_T);
+  node->get_parameter("lidar_to_base_R", lidar_to_base_R);
 
-  // Rotation is filled once gravity initialization completes.
-  T_base_lidar_output.setIdentity();
-  T_base_lidar_output.topRightCorner(3, 1) = Eigen::Vector3d(
+  // Fixed LiDAR pose in base_link, ^B T_L, from robot_param.yaml.
+  T_base_lidar.setIdentity();
+  T_base_lidar.topLeftCorner<3, 3>() =
+      (Eigen::AngleAxisd(lidar_to_base_R[2], Eigen::Vector3d::UnitZ()) *
+       Eigen::AngleAxisd(lidar_to_base_R[1], Eigen::Vector3d::UnitY()) *
+       Eigen::AngleAxisd(lidar_to_base_R[0], Eigen::Vector3d::UnitX()))
+          .toRotationMatrix();
+  T_base_lidar.topRightCorner(3, 1) = Eigen::Vector3d(
       lidar_to_base_T[0], lidar_to_base_T[1], lidar_to_base_T[2]);
 
   load_log_parameters(node, relocate_use_last_pose, last_pose_record_path,

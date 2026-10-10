@@ -211,9 +211,6 @@ class LaserMappingNode : public rclcpp::Node {
   vector<double> extrinR;
   vector<double> lidar_to_base_T;
   vector<double> lidar_to_base_R;
-  bool gravity_aligned_lidar_tilt_initialized_ = false;
-  double gravity_aligned_lidar_roll_ = 0.0;
-  double gravity_aligned_lidar_pitch_ = 0.0;
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   deque<double> time_buffer;
