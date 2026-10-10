@@ -107,11 +107,16 @@ void test_rosbag(const std::string &bagfile, const std::string &config_path, con
         if (slam.system_state_vaild)
         {
             Eigen::Matrix4d imu_pose;
-            const V3D mean_acc =
-                System::mean_acceleration(*slam.frontend->measures);
+            const auto &imu_samples = slam.frontend->measures->imu;
+            for (const auto &imu : imu_samples)
+            {
+                slam.gravity_initialization.add_sample(
+                    imu->linear_acceleration, imu_samples.size());
+            }
+            const auto gravity = slam.gravity_initialization.snapshot();
             bool flag = slam.relocalization->run(
                 slam.frontend->measures->lidar, imu_pose,
-                slam.frontend->measures->lidar_beg_time, mean_acc);
+                slam.frontend->measures->lidar_beg_time, gravity);
             const auto &imu_state = slam.frontend->get_state();
             LogAnalysis::save_trajectory(fp, imu_state.pos, imu_state.rot, time_stamp);
             if (flag)

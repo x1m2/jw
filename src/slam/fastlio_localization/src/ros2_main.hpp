@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include "system/DataDef.h"
+#include "system/GravityInitialization.hpp"
 
 class System;
 
@@ -53,6 +55,12 @@ class FastlioLocalizationNode : public rclcpp::Node {
   void compute_baselink_pose(const state_ikfom &state,
                              QD &baselink_rotation,
                              V3D &baselink_position) const;
+  Eigen::Matrix3d compute_output_lidar_rotation(
+      const GravityInitialization::Result &gravity) const;
+  Eigen::Matrix4d output_base_lidar() const;
+  void update_gravity_initialization(const V3D &linear_acceleration);
+  void apply_initial_pose(
+      const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr &message);
   void publish_geometry_msgs(
       rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr &publisher,
       const state_ikfom &state, const double &lidar_end_time, QD &baselink_rotation,
@@ -91,8 +99,12 @@ class FastlioLocalizationNode : public rclcpp::Node {
   FILE *last_pose_record{nullptr};
 
   std::vector<double> lidar_to_base_T;
-  std::vector<double> lidar_to_base_R;
-  Eigen::Matrix4d T_base_lidar{Eigen::Matrix4d::Identity()};
+  Eigen::Matrix4d T_base_lidar_output{Eigen::Matrix4d::Identity()};
+  // Protect the output transform, its readiness, and deferred /initialpose.
+  mutable std::mutex output_initialization_mutex;
+  bool output_initialized{false};
+  geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr
+      pending_initial_pose;
   bool path_en{true};
   bool scan_pub_en{false};
   bool dense_pub_en{false};
