@@ -61,5 +61,19 @@ LIBGL_ALWAYS_SOFTWARE=1 pcl_viewer globalmap.pcd --no-vbo
 ros2 service call /map_save std_srvs/srv/Trigger
 ros2 topic pub --once /save_dir std_msgs/msg/Empty "{}"
 ```
+src/run_offline_reloc.sh \
+  --bag /home/jw-zkl/robotics_platform/robot_ws/airy96_fastlio_20250604_222402 \
+  --rate 1.0 \
+  --scan-index 250
 
-- 感归控板：`192.168.50.103`
+离线重定位支持两种雷达，默认使用 Airy：
+
+```bash
+# MID360：/livox/lidar (CustomMsg) 和 /livox/imu，使用 ros2_param.yaml
+src/run_offline_reloc.sh --lidar mid360 --bag /path/to/mid360_bag
+
+# Airy：/rslidar_points 和 /rslidar_imu_data
+src/run_offline_reloc.sh --lidar airy --bag /path/to/airy_bag
+```
+
+两种模式都支持 `--rate`、`--scan-index` 和 `--prepare-only`。

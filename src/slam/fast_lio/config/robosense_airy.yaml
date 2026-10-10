@@ -1,0 +1,55 @@
+/**:
+  ros__parameters:
+    feature_extract_enable: false
+    point_filter_num: 2
+    max_iteration: 5
+    filter_size_surf: 0.3
+    filter_size_map: 0.2
+    cube_side_length: 1000.0
+    runtime_pos_log_enable: false
+    align_gravity: true
+
+    common:
+      # Point cloud topic observed on the current Airy ROS 2 system.
+      lid_topic: "/rslidar_points"
+      # Confirm this topic against the running Airy driver before launching.
+      imu_topic: "/rslidar_imu_data"
+      time_sync_en: false
+      time_offset_lidar_to_imu: 0.0
+
+    preprocess:
+      lidar_type: 5            # RSAIRY: x/y/z/intensity/ring/timestamp
+      scan_line: 96
+      scan_rate: 10
+      timestamp_unit: 0       # RoboSense point timestamp is in seconds
+      blind: 0.5
+
+    mapping:
+      acc_cov: 0.1
+      gyr_cov: 0.1
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      fov_degree: 360.0
+      det_range: 100.0
+      extrinsic_est_en: false
+      # Device-specific Airy LiDAR pose in the IMU frame from the ROS 1 config.
+      # Verify these values for the actual sensor before mapping.
+      extrinsic_T: [0.0042, -0.015, 0.011]
+      extrinsic_R: [0.0371031, -0.999192, 0.0154193,
+                    -0.999305, -0.037043, 0.00416679,
+                    -0.00359224, -0.0155632, -0.999872]
+
+    publish:
+      path_en: false
+      effect_map_en: false
+      map_en: true
+      scan_publish_en: true
+      dense_publish_en: true
+      scan_bodyframe_pub_en: true
+
+    pcd_save:
+      pcd_save_en: true
+      interval: -1
+      # export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      # export FASTRTPS_DEFAULT_PROFILES_FILE=/home/jw/airy_ws/src/rslidar_sdk/config/fastshm.xml
+      # export RMW_FASTRTPS_USE_QOS_FROM_XML=1

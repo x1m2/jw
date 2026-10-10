@@ -125,8 +125,7 @@ Eigen::Matrix3d FastlioLocalizationNode::compute_output_lidar_rotation(
       std::atan2(R_gravity_lidar(2, 1), R_gravity_lidar(2, 2));
   const double lidar_pitch =
       std::atan2(-R_gravity_lidar(2, 0),
-                 std::hypot(R_gravity_lidar(0, 0),
-                            R_gravity_lidar(1, 0)));
+                 std::hypot(R_gravity_lidar(0, 0), R_gravity_lidar(1, 0)));
 
   const Eigen::Matrix3d rotation =
       (Eigen::AngleAxisd(lidar_pitch, Eigen::Vector3d::UnitY()) *
@@ -136,8 +135,7 @@ Eigen::Matrix3d FastlioLocalizationNode::compute_output_lidar_rotation(
       "[OUTPUT_TILT] gravity initialized: samples=%zu, lidar_roll=%.2f deg, "
       "lidar_pitch=%.2f deg, mean_acc=[%.3f %.3f %.3f]",
       gravity.sample_count, RAD2DEG(lidar_roll), RAD2DEG(lidar_pitch),
-      mean_acc.x(), mean_acc.y(),
-      mean_acc.z());
+      mean_acc.x(), mean_acc.y(), mean_acc.z());
   return rotation;
 }
 
@@ -344,6 +342,7 @@ void FastlioLocalizationNode::sensor_data_process() {
     return;
   }
   if (!slam.system_state_vaild) {
+    publish_module_status(false);
     if (last_pose_record && load_last_pose(slam.frontend->measures->lidar)) {
       // only for restart!
     } else if (!slam.run_relocalization_thread) {
@@ -356,13 +355,17 @@ void FastlioLocalizationNode::sensor_data_process() {
       PointCloudType::Ptr cur_scan(new PointCloudType);
       *cur_scan = *slam.frontend->measures->lidar;
       const auto gravity = slam.gravity_initialization.snapshot();
-      slam.relocalization_thread =
-          std::thread(&System::run_relocalization, &slam, cur_scan,
-                      slam.frontend->measures->lidar_beg_time, gravity);
+      const double lidar_beg_time = slam.frontend->measures->lidar_beg_time;
+      slam.relocalization_thread = std::thread(
+          [this, cur_scan, lidar_beg_time, gravity]() {
+            if (slam.run_relocalization(cur_scan, lidar_beg_time, gravity)) {
+              // Report completion even when offline playback is paused.
+              publish_module_status(true);
+            }
+          });
     }
     // publish_module_status(slam.frontend->measures->lidar_end_time,
     // robot_msgs::Level::WARN);
-    publish_module_status(false);
 #ifdef MEASURES_BUFFER
     measures_cache.emplace_back(std::make_shared<MeasureCollection>());
     *measures_cache.back() = *slam.frontend->measures;
@@ -537,7 +540,38 @@ void FastlioLocalizationNode::standard_pcl_cbk(
       break;
 
     case VELO16:
+    case RSAIRY:
+      if (lidar_type == RSAIRY) {
+        const auto has_field = [msg](const char *name, uint8_t datatype) {
+          return std::any_of(msg->fields.begin(), msg->fields.end(),
+                             [name, datatype](const auto &field) {
+                               return field.name == name &&
+                                      field.datatype == datatype;
+                             });
+        };
+        using PointField = sensor_msgs::msg::PointField;
+        if (!has_field("x", PointField::FLOAT32) ||
+            !has_field("y", PointField::FLOAT32) ||
+            !has_field("z", PointField::FLOAT32) ||
+            !has_field("intensity", PointField::FLOAT32) ||
+            !has_field("ring", PointField::UINT16) ||
+            !has_field("timestamp", PointField::FLOAT64)) {
+          RCLCPP_ERROR_ONCE(
+              get_logger(),
+              "Airy requires x/y/z/intensity(float32), ring(uint16), "
+              "timestamp(float64) PointCloud2 fields");
+          return;
+        }
+      }
       pcl::fromROSMsg(*msg, pl_orig_velo);
+      if (lidar_type == RSAIRY &&
+          (pl_orig_velo.empty() ||
+           !std::isfinite(pl_orig_velo.points.front().timestamp) ||
+           !std::isfinite(pl_orig_velo.points.back().timestamp) ||
+           pl_orig_velo.points.back().timestamp <= 0.0)) {
+        RCLCPP_ERROR_ONCE(get_logger(), "Airy point timestamps are invalid");
+        return;
+      }
       slam.frontend->lidar->velodyne_handler(pl_orig_velo, scan);
       break;
 
@@ -656,10 +690,9 @@ void FastlioLocalizationNode::update_gravity_initialization(
     std::lock_guard<std::mutex> lock(output_initialization_mutex);
     if (output_initialized) return;
 
-    const std::size_t required_samples = static_cast<std::size_t>(
-        std::max(10, slam.frontend->imu->imu_rate));
+    constexpr std::size_t required_samples = 10;
     if (!slam.gravity_initialization.add_sample(linear_acceleration,
-                                               required_samples)) {
+                                                required_samples)) {
       return;
     }
     const auto gravity = slam.gravity_initialization.snapshot();
@@ -685,10 +718,8 @@ void FastlioLocalizationNode::apply_initial_pose(
 
   // /initialpose supplies map position and yaw. Roll/pitch come from the same
   // gravity snapshot that relocalization and published poses use.
-  const Eigen::Matrix3d initial_rotation =
-      quat.normalized().toRotationMatrix();
-  const double yaw =
-      std::atan2(initial_rotation(1, 0), initial_rotation(0, 0));
+  const Eigen::Matrix3d initial_rotation = quat.normalized().toRotationMatrix();
+  const double yaw = std::atan2(initial_rotation(1, 0), initial_rotation(0, 0));
 
   // T_map_imu = T_map_base * T_base_lidar * inverse(T_imu_lidar).
   Eigen::Matrix4d imu_pose_matrix = Eigen::Matrix4d::Identity();

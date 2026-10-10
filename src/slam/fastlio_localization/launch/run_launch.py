@@ -30,8 +30,10 @@ def find_robot_param(package_share):
 
 def generate_launch_description():
     package_share = get_package_share_directory('fastlio_localization')
-    config = os.path.join(package_share, 'config', 'ros2_param.yaml')
-    robot_param = find_robot_param(package_share)
+    config = PathJoinSubstitution([
+        package_share, 'config', LaunchConfiguration('config_file')
+    ])
+    default_robot_param = find_robot_param(package_share)
     rviz_config = os.path.join(
         package_share, 'rviz_cfg', 'localization_ros2.rviz')
 
@@ -39,6 +41,18 @@ def generate_launch_description():
         'localization_use_rviz',
         default_value='true',
         description='是否启动定位 RViz 界面'
+    )
+
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value='ros2_param.yaml',
+        description='Localization ROS 2 parameter file in the config directory'
+    )
+
+    robot_param_file_arg = DeclareLaunchArgument(
+        'robot_param_file',
+        default_value=default_robot_param,
+        description='Robot dimensions and LiDAR pose parameter file'
     )
 
     data_dir_arg = DeclareLaunchArgument(
@@ -57,6 +71,14 @@ def generate_launch_description():
         "'map_' + '", LaunchConfiguration('map_id'), "'"
     ])
 
+    map_path_arg = DeclareLaunchArgument(
+        'map_path',
+        default_value=PathJoinSubstitution([
+            LaunchConfiguration('data_dir'), map_directory, 'map'
+        ]),
+        description='Directory containing globalmap.pcd and BBS3D voxel maps'
+    )
+
     fastlio_localization = Node(
         package="fastlio_localization",
         executable="fastlio_localization_ros2",
@@ -64,14 +86,10 @@ def generate_launch_description():
         output='screen',
         parameters=[
             config,
-            robot_param,
+            LaunchConfiguration('robot_param_file'),
             {
                 'runtime_profile': 'test',
-                'map_path': PathJoinSubstitution([
-                    LaunchConfiguration('data_dir'),
-                    map_directory,
-                    'map',
-                ]),
+                'map_path': LaunchConfiguration('map_path'),
             },
         ])
     rviz2 = Node(
@@ -82,8 +100,11 @@ def generate_launch_description():
     )
     return LaunchDescription([
         localization_use_rviz_arg,
+        config_file_arg,
+        robot_param_file_arg,
         data_dir_arg,
         map_id_arg,
+        map_path_arg,
         fastlio_localization,
         rviz2,
     ])

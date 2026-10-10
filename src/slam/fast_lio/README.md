@@ -184,6 +184,22 @@ roslaunch fast_lio mapping_velodyne.launch
 rosbag play YOUR_DOWNLOADED.bag
 ```
 
+### 4.3 RoboSense Airy (ROS 2)
+
+```bash
+ros2 launch fast_lio mapping.launch.py config_file:=robosense_airy.yaml
+```
+
+This profile uses `preprocess.lidar_type: 5` and subscribes to `/rslidar_points`
+as `sensor_msgs/msg/PointCloud2`. The RoboSense driver must publish
+`x/y/z/intensity` (float32), `ring` (uint16), and `timestamp` (float64,
+seconds). The handler converts each point timestamp to milliseconds relative
+to the first point in its scan for IMU motion compensation. A plain XYZI cloud
+cannot provide that timing. Configure the driver to publish XYZIRT and check
+its `ts_first_point` setting. Confirm the IMU topic and LiDAR-to-IMU extrinsics
+in `config/robosense_airy.yaml` against the connected sensor before mapping.
+
+
 ## 5.Implementation on UAV
 In order to validate the robustness and computational efficiency of FAST-LIO in actual mobile robots, we build a small-scale quadrotor which can carry a Livox Avia LiDAR with 70 degree FoV and a DJI Manifold 2-C onboard computer with a 1.8 GHz Intel i7-8550U CPU and 8 G RAM, as shown in below.
 

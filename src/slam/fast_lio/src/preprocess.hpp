@@ -2,6 +2,8 @@
 #define PREPROCESS_HPP
 #include <pcl_conversions/pcl_conversions.h>
 
+#include <cstdint>
+
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -13,7 +15,7 @@ using namespace std;
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
-enum LID_TYPE { AVIA = 1, VELO16, OUST64, MID360 };  //{1, 2, 3}
+enum LID_TYPE { AVIA = 1, VELO16, OUST64, MID360, RSAIRY };
 enum TIME_UNIT { SEC = 0, MS = 1, US = 2, NS = 3 };
 enum Feature {
   Nor,
@@ -42,6 +44,20 @@ struct orgtype {
     intersect = 2;
   }
 };
+
+namespace robosense {
+struct EIGEN_ALIGN16 Point {
+  PCL_ADD_POINT4D;
+  float intensity;
+  std::uint16_t ring;
+  double timestamp;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+}  // namespace robosense
+POINT_CLOUD_REGISTER_POINT_STRUCT(
+    robosense::Point,
+    (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(
+        std::uint16_t, ring, ring)(double, timestamp, timestamp))
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {
@@ -150,6 +166,7 @@ private:
   void oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
+  void robosense_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void default_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void give_feature(PointCloudXYZI &pl, vector<orgtype> &types);
   void pub_func(PointCloudXYZI &pl, const rclcpp::Time &ct);

@@ -10,7 +10,8 @@ enum LID_TYPE
 {
   AVIA = 1,
   VELO16,
-  OUST64
+  OUST64,
+  RSAIRY = 5
 };
 
 enum TIME_UNIT
