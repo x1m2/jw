@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <Eigen/Core>
 #include <filesystem>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
@@ -18,6 +19,7 @@
 #include <std_srvs/srv/trigger.hpp>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "slam_manager/localization.hpp"
 #include "slam_manager/map_check.hpp"
@@ -33,6 +35,7 @@
 #include "slam_manager_interfaces/msg/robot_pose.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
 #include "slam_manager_interfaces/srv/delete_map.hpp"
+#include "slam_manager_interfaces/srv/calibrate_lidar_tilt.hpp"
 #include "slam_manager_interfaces/srv/load_map.hpp"
 #include "slam_manager_interfaces/srv/start_mapping.hpp"
 #include "woodox_ros2_interface/srv/get_state.hpp"
@@ -48,6 +51,7 @@ class SlamManagerNode : public rclcpp::Node {
 
  private:
   using Trigger = std_srvs::srv::Trigger;
+  using CalibrateLidarTilt = slam_manager_interfaces::srv::CalibrateLidarTilt;
   using DeleteMap = slam_manager_interfaces::srv::DeleteMap;
   using LoadMap = slam_manager_interfaces::srv::LoadMap;
   using LocalizationPose = slam_manager_interfaces::msg::LocalizationPose;
@@ -152,6 +156,10 @@ class SlamManagerNode : public rclcpp::Node {
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
   void handleNavigateToPoseAccepted(
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
+
+  void calibrateLidarTiltCallback(
+      const CalibrateLidarTilt::Request::SharedPtr request,
+      CalibrateLidarTilt::Response::SharedPtr response);
   bool robotStateAllowsNavigation(std::string &message);
   void pollRobotState();
   void setPostureStop(bool stopped);
@@ -205,6 +213,10 @@ class SlamManagerNode : public rclcpp::Node {
   double finish_mapping_timeout_sec_{300.0};
   double relocalization_timeout_sec_{60.0};
   double localization_stop_timeout_sec_{10.0};
+  std::string imu_calibration_topic_{"/livox/imu"};
+  std::size_t imu_calibration_sample_count_{200U};
+  double imu_calibration_timeout_sec_{5.0};
+  Eigen::Matrix3d imu_from_lidar_rotation_{Eigen::Matrix3d::Identity()};
   bool enable_set_mode_{true};
   double body_cloud_publish_hz_{5.0};
   double last_body_cloud_publish_time_{-1.0};
@@ -244,6 +256,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::CallbackGroup::SharedPtr localization_result_callback_group_;
   rclcpp::CallbackGroup::SharedPtr navigation_result_callback_group_;
   rclcpp::CallbackGroup::SharedPtr robot_control_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr imu_calibration_callback_group_;
   std::unique_ptr<MappingController> mapping_controller_;
   std::unique_ptr<LocalizationController> localization_controller_;
   std::unique_ptr<MapStorage> map_storage_;
@@ -258,6 +271,8 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Service<DeleteMap>::SharedPtr delete_map_service_;
   rclcpp::Service<Trigger>::SharedPtr pause_navigation_service_;
   rclcpp::Service<Trigger>::SharedPtr resume_navigation_service_;
+  rclcpp::Service<CalibrateLidarTilt>::SharedPtr
+      calibrate_lidar_tilt_service_;
   rclcpp::Client<GetState>::SharedPtr get_robot_state_client_;
   rclcpp::Client<SetMode>::SharedPtr set_robot_mode_client_;
   rclcpp::TimerBase::SharedPtr robot_state_timer_;

@@ -1,0 +1,4 @@
+---
+bool success
+float64 roll_rad
+float64 pitch_rad

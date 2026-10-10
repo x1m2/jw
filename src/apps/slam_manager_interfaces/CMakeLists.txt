@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/StartLocalization.action"
   "action/StartNavigation.action"
   "srv/DeleteMap.srv"
+  "srv/CalibrateLidarTilt.srv"
   "srv/LoadMap.srv"
   "srv/SetWorkerState.srv"
   "srv/StartMapping.srv"

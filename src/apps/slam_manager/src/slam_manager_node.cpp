@@ -2,12 +2,14 @@
 
 #include <tf2/utils.h>
 
+#include <Eigen/Geometry>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <sensor_msgs/msg/imu.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -88,6 +90,21 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       "localization.relocalization_timeout_sec", 60.0);
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
+  imu_calibration_topic_ =
+      declare_parameter<std::string>("imu_calibration.topic", "/livox/imu");
+  const auto configured_imu_calibration_sample_count =
+      declare_parameter<int64_t>("imu_calibration.sample_count", 200);
+  imu_calibration_timeout_sec_ =
+      declare_parameter<double>("imu_calibration.timeout_sec", 5.0);
+  const auto imu_calibration_extrinsic_rotation =
+      declare_parameter<std::vector<double>>(
+          "imu_calibration.extrinsic_R",
+          {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+  imu_calibration_sample_count_ =
+      static_cast<std::size_t>(configured_imu_calibration_sample_count);
+  imu_from_lidar_rotation_ =
+      Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(
+          imu_calibration_extrinsic_rotation.data());
   body_cloud_publish_hz_ =
       declare_parameter<double>("publish.body_cloud_hz", 5.0);
 
@@ -140,6 +157,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   // 导航执行线程会同步等待底盘服务；独立可重入组保证响应可由执行器处理。
   robot_control_callback_group_ =
       create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  imu_calibration_callback_group_ =
+      create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   get_robot_state_client_ = create_client<GetState>(
       kRobotStateServiceName, rmw_qos_profile_services_default,
       robot_control_callback_group_);
@@ -184,8 +203,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
             return relocalizeForMapConnection(node, is_canceling, message);
           }});
   posture_stop_pub_ = create_publisher<std_msgs::msg::Bool>(
-      "/navigation/posture_stop",
-      rclcpp::QoS(1).reliable().transient_local());
+      "/navigation/posture_stop", rclcpp::QoS(1).reliable().transient_local());
   robot_state_timer_ = create_wall_timer(
       kRobotStatePollPeriod, std::bind(&SlamManagerNode::pollRobotState, this),
       robot_control_callback_group_);
@@ -257,6 +275,10 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::resumeNavigationCallback, this,
                 std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default, lifecycle_control_callback_group_);
+  calibrate_lidar_tilt_service_ = create_service<CalibrateLidarTilt>(
+      "/robot/calibrate_lidar_tilt",
+      std::bind(&SlamManagerNode::calibrateLidarTiltCallback, this,
+                std::placeholders::_1, std::placeholders::_2));
 
   // 协议2.6：巡检导航使用Action，支持逐点反馈、最终结果和任务取消。
   start_navigation_action_ = rclcpp_action::create_server<StartNavigation>(
@@ -306,8 +328,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
                 std::placeholders::_1),
       navigation_subscription_options);
   obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/obstacle_stop/stopped",
-      rclcpp::QoS(1).reliable().transient_local(),
+      "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local(),
       std::bind(&SlamManagerNode::obstacleStopCallback, this,
                 std::placeholders::_1));
 
@@ -326,6 +347,84 @@ SlamManagerNode::~SlamManagerNode() {
   std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
   if (localization_action_thread_.joinable())
     localization_action_thread_.join();
+}
+
+void SlamManagerNode::calibrateLidarTiltCallback(
+    const CalibrateLidarTilt::Request::SharedPtr,
+    CalibrateLidarTilt::Response::SharedPtr response) {
+  struct CalibrationData {
+    std::mutex mutex;
+    std::condition_variable cv;
+    Eigen::Vector3d acceleration_sum{Eigen::Vector3d::Zero()};
+    std::size_t sample_count{0U};
+  };
+  const auto data = std::make_shared<CalibrationData>();
+
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = imu_calibration_callback_group_;
+  auto imu_subscription = create_subscription<sensor_msgs::msg::Imu>(
+      imu_calibration_topic_, rclcpp::SensorDataQoS(),
+      [data, target_samples = imu_calibration_sample_count_](
+          const sensor_msgs::msg::Imu::SharedPtr message) {
+        const Eigen::Vector3d acceleration(message->linear_acceleration.x,
+                                           message->linear_acceleration.y,
+                                           message->linear_acceleration.z);
+        if (!acceleration.allFinite()) return;
+
+        std::lock_guard<std::mutex> lock(data->mutex);
+        data->acceleration_sum += acceleration;
+        ++data->sample_count;
+        if (data->sample_count >= target_samples) data->cv.notify_one();
+      },
+      options);
+
+  RCLCPP_INFO(get_logger(),
+              "LiDAR tilt calibration started: topic=%s, samples=%zu",
+              imu_calibration_topic_.c_str(), imu_calibration_sample_count_);
+
+  std::unique_lock<std::mutex> lock(data->mutex);
+  const bool completed = data->cv.wait_for(
+      lock, std::chrono::duration<double>(imu_calibration_timeout_sec_),
+      [data, target_samples = imu_calibration_sample_count_]() {
+        return data->sample_count >= target_samples;
+      });
+  const Eigen::Vector3d acceleration_sum = data->acceleration_sum;
+  const std::size_t collected_samples = data->sample_count;
+  lock.unlock();
+  imu_subscription.reset();
+
+  if (!completed || collected_samples < imu_calibration_sample_count_) {
+    response->success = false;
+    RCLCPP_WARN(get_logger(),
+                "LiDAR tilt calibration timed out after %zu samples",
+                collected_samples);
+    return;
+  }
+
+  const Eigen::Vector3d mean_acc_imu =
+      acceleration_sum / static_cast<double>(collected_samples);
+  const Eigen::Vector3d mean_acc_lidar =
+      imu_from_lidar_rotation_.transpose() * mean_acc_imu;
+  if (!mean_acc_lidar.allFinite() || mean_acc_lidar.norm() <= 1e-3) {
+    response->success = false;
+    RCLCPP_ERROR(get_logger(),
+                 "LiDAR tilt calibration failed: invalid mean acceleration");
+    return;
+  }
+
+  const Eigen::Matrix3d rotation =
+      Eigen::Quaterniond::FromTwoVectors((-mean_acc_lidar).normalized(),
+                                         Eigen::Vector3d(0.0, 0.0, -1.0))
+          .normalized()
+          .toRotationMatrix();
+  response->roll_rad = std::atan2(rotation(2, 1), rotation(2, 2));
+  response->pitch_rad =
+      std::atan2(-rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
+  response->success = true;
+  RCLCPP_INFO(get_logger(),
+              "LiDAR tilt calibration succeeded: samples=%zu, roll=%.6f, "
+              "pitch=%.6f",
+              collected_samples, response->roll_rad, response->pitch_rad);
 }
 
 uint64_t SlamManagerNode::beginLifecycleCommand(const char *command_name) {
@@ -1729,15 +1828,15 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
     }
 
     const auto response = future.get();
-    const bool blocked = response->state == kPassiveState ||
-                         response->state == kGetDownState;
+    const bool blocked =
+        response->state == kPassiveState || response->state == kGetDownState;
     setPostureStop(response->code == 0 ? blocked : true);
     const bool allowed = response->code == 0 && !blocked;
     RCLCPP_INFO(get_logger(),
                 "[NAVIGATION_GATE] GetState response: state='%s' code=%d "
                 "blocked_states=['%s','%s'] allowed=%s",
-                response->state.c_str(), response->code,
-                kPassiveState, kGetDownState, allowed ? "true" : "false");
+                response->state.c_str(), response->code, kPassiveState,
+                kGetDownState, allowed ? "true" : "false");
     if (!allowed) {
       message = "navigation rejected: robot state='" + response->state +
                 "', code=" + std::to_string(response->code) +
@@ -1759,8 +1858,7 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
 
 void SlamManagerNode::pollRobotState() {
   const auto mode = state_machine_.mode();
-  if (mode != SlamMode::kNavigating &&
-      mode != SlamMode::kNavigationPaused) {
+  if (mode != SlamMode::kNavigating && mode != SlamMode::kNavigationPaused) {
     if (state_req_pending_.exchange(false)) {
       state_req_seq_.fetch_add(1U);
       get_robot_state_client_->prune_pending_requests();
@@ -1772,10 +1870,10 @@ void SlamManagerNode::pollRobotState() {
                           std::chrono::steady_clock::now().time_since_epoch())
                           .count();
   if (state_req_pending_.load()) {
-    const auto timeout_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                std::chrono::duration<double>(
-                                    kRobotStateTimeoutSec))
-                                .count();
+    const auto timeout_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::duration<double>(kRobotStateTimeoutSec))
+            .count();
     if (now_ns - state_req_started_ns_.load() >= timeout_ns &&
         state_req_pending_.exchange(false)) {
       state_req_seq_.fetch_add(1U);
@@ -1802,8 +1900,8 @@ void SlamManagerNode::pollRobotState() {
   try {
     auto request = std::make_shared<GetState::Request>();
     get_robot_state_client_->async_send_request(
-        request, [this, request_seq](
-                     rclcpp::Client<GetState>::SharedFuture future) {
+        request,
+        [this, request_seq](rclcpp::Client<GetState>::SharedFuture future) {
           if (request_seq != state_req_seq_.load()) return;
           state_req_pending_.store(false);
           if (shutting_down_.load()) return;

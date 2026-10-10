@@ -214,6 +214,20 @@ ros2 action send_goal /robot/navigate_to_pose slam_manager_interfaces/action/Nav
   旧导航Action返回`ABORTED`，不会被误报为客户端取消。
 - 正常完成返回`SUCCEEDED`，规划失败或超时返回`ABORTED`。
 
+## 雷达倾角标定
+
+`/robot/calibrate_lidar_tilt`在收到Service请求后临时订阅`/livox/imu`，默认采集
+200个有效加速度样本，计算雷达相对水平面的roll和pitch并返回。标定完成、
+取消或超过5秒后都会销毁IMU订阅。该接口不计算yaw，也不修改配置文件。
+`imu_calibration.extrinsic_R`表示LiDAR坐标到IMU坐标的旋转矩阵，与FAST-LIO
+的`mapping.extrinsic_R`方向一致。计算前会用其转置将IMU加速度转换到LiDAR
+坐标系；Mid-360S的内置IMU使用单位矩阵。
+
+```bash
+ros2 service call /robot/calibrate_lidar_tilt \
+  slam_manager_interfaces/srv/CalibrateLidarTilt '{}'
+```
+
 ## 地图目录
 
 `map_id`长度为1～64，可使用字母、数字、`_`和`-`，不再强制

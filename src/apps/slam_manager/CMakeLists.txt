@@ -6,6 +6,7 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -44,7 +45,10 @@ ament_target_dependencies(${PROJECT_NAME}_core
   tf2_geometry_msgs
   woodox_ros2_interface
 )
-target_link_libraries(${PROJECT_NAME}_core nlohmann_json::nlohmann_json)
+target_link_libraries(${PROJECT_NAME}_core
+  Eigen3::Eigen
+  nlohmann_json::nlohmann_json
+)
 
 add_executable(slam_manager_node src/main.cpp)
 target_link_libraries(slam_manager_node ${PROJECT_NAME}_core)
