@@ -5,7 +5,9 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -299,6 +301,7 @@ void FastlioLocalizationNode::sensor_data_process() {
   static std::deque<shared_ptr<MeasureCollection>> measures_cache;
 #endif
   if (!slam.system_state_vaild) {
+    publish_module_status(false);
     if (last_pose_record && load_last_pose(slam.frontend->measures->lidar)) {
       // only for restart!
     } else if (!slam.run_relocalization_thread) {
@@ -312,13 +315,17 @@ void FastlioLocalizationNode::sensor_data_process() {
       *cur_scan = *slam.frontend->measures->lidar;
       const V3D mean_acc =
           System::mean_acceleration(*slam.frontend->measures);
-      slam.relocalization_thread =
-          std::thread(&System::run_relocalization, &slam, cur_scan,
-                      slam.frontend->measures->lidar_beg_time, mean_acc);
+      const double lidar_beg_time = slam.frontend->measures->lidar_beg_time;
+      slam.relocalization_thread = std::thread(
+          [this, cur_scan, lidar_beg_time, mean_acc]() {
+            if (slam.run_relocalization(cur_scan, lidar_beg_time, mean_acc)) {
+              // Report completion even when offline playback is paused.
+              publish_module_status(true);
+            }
+          });
     }
     // publish_module_status(slam.frontend->measures->lidar_end_time,
     // robot_msgs::Level::WARN);
-    publish_module_status(false);
 #ifdef MEASURES_BUFFER
     measures_cache.emplace_back(std::make_shared<MeasureCollection>());
     *measures_cache.back() = *slam.frontend->measures;
@@ -493,7 +500,38 @@ void FastlioLocalizationNode::standard_pcl_cbk(
       break;
 
     case VELO16:
+    case RSAIRY:
+      if (lidar_type == RSAIRY) {
+        const auto has_field = [msg](const char *name, uint8_t datatype) {
+          return std::any_of(msg->fields.begin(), msg->fields.end(),
+                             [name, datatype](const auto &field) {
+                               return field.name == name &&
+                                      field.datatype == datatype;
+                             });
+        };
+        using PointField = sensor_msgs::msg::PointField;
+        if (!has_field("x", PointField::FLOAT32) ||
+            !has_field("y", PointField::FLOAT32) ||
+            !has_field("z", PointField::FLOAT32) ||
+            !has_field("intensity", PointField::FLOAT32) ||
+            !has_field("ring", PointField::UINT16) ||
+            !has_field("timestamp", PointField::FLOAT64)) {
+          RCLCPP_ERROR_ONCE(
+              get_logger(),
+              "Airy requires x/y/z/intensity(float32), ring(uint16), "
+              "timestamp(float64) PointCloud2 fields");
+          return;
+        }
+      }
       pcl::fromROSMsg(*msg, pl_orig_velo);
+      if (lidar_type == RSAIRY &&
+          (pl_orig_velo.empty() ||
+           !std::isfinite(pl_orig_velo.points.front().timestamp) ||
+           !std::isfinite(pl_orig_velo.points.back().timestamp) ||
+           pl_orig_velo.points.back().timestamp <= 0.0)) {
+        RCLCPP_ERROR_ONCE(get_logger(), "Airy point timestamps are invalid");
+        return;
+      }
       slam.frontend->lidar->velodyne_handler(pl_orig_velo, scan);
       break;
 

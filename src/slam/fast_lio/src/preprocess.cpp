@@ -2,6 +2,10 @@
 
 #include <pcl/common/common.h>
 
+#include <algorithm>
+#include <cmath>
+#include <sensor_msgs/msg/point_field.hpp>
+
 #define RETURN0 0x00
 #define RETURN0AND1 0x10
 
@@ -79,6 +83,10 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr& msg,
 
     case MID360:
       mid360_handler(msg);
+      break;
+
+    case RSAIRY:
+      robosense_handler(msg);
       break;
 
     default:
@@ -504,6 +512,101 @@ void Preprocess::mid360_handler(
             added_pt.z * added_pt.z >
         (blind * blind)) {
       pl_surf.push_back(std::move(added_pt));
+    }
+  }
+}
+
+void Preprocess::robosense_handler(
+    const sensor_msgs::msg::PointCloud2::UniquePtr& msg) {
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+
+  const auto has_field = [&msg](const char* name, std::uint8_t datatype) {
+    return std::any_of(msg->fields.begin(), msg->fields.end(),
+                       [name, datatype](const auto& field) {
+                         return field.name == name && field.datatype == datatype;
+                       });
+  };
+  using PointField = sensor_msgs::msg::PointField;
+  if (!has_field("x", PointField::FLOAT32) ||
+      !has_field("y", PointField::FLOAT32) ||
+      !has_field("z", PointField::FLOAT32) ||
+      !has_field("intensity", PointField::FLOAT32) ||
+      !has_field("ring", PointField::UINT16) ||
+      !has_field("timestamp", PointField::FLOAT64)) {
+    RCLCPP_ERROR_ONCE(
+        rclcpp::get_logger("fast_lio.preprocess"),
+        "RoboSense Airy requires x/y/z/intensity(float32), ring(uint16), "
+        "timestamp(float64) PointCloud2 fields; check rslidar_sdk POINT_TYPE");
+    return;
+  }
+
+  pcl::PointCloud<robosense::Point> input;
+  pcl::fromROSMsg(*msg, input);
+  if (input.empty()) return;
+  pl_surf.reserve(input.size());
+
+  const double first_timestamp = input.points.front().timestamp;
+  if (!std::isfinite(first_timestamp) ||
+      !std::isfinite(input.points.back().timestamp) ||
+      input.points.back().timestamp <= 0.0) {
+    RCLCPP_ERROR_ONCE(rclcpp::get_logger("fast_lio.preprocess"),
+                      "RoboSense Airy point timestamps are invalid; check "
+                      "rslidar_sdk ts_first_point");
+    return;
+  }
+
+  if (feature_enabled) {
+    for (int ring = 0; ring < N_SCANS; ++ring) {
+      pl_buff[ring].clear();
+      pl_buff[ring].reserve(input.size());
+    }
+    for (const auto& source : input.points) {
+      if (source.ring >= N_SCANS || !std::isfinite(source.timestamp)) continue;
+      PointType point;
+      point.x = source.x;
+      point.y = source.y;
+      point.z = source.z;
+      point.intensity = source.intensity;
+      point.normal_x = point.normal_y = point.normal_z = 0.0f;
+      point.curvature =
+          (source.timestamp - first_timestamp) * time_unit_scale;
+      pl_buff[source.ring].push_back(point);
+    }
+    for (int ring = 0; ring < N_SCANS; ++ring) {
+      auto& points = pl_buff[ring];
+      if (points.size() < 2) continue;
+      auto& types = typess[ring];
+      types.clear();
+      types.resize(points.size());
+      for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+        types[i].range = std::hypot(points[i].x, points[i].y);
+        const double dx = points[i].x - points[i + 1].x;
+        const double dy = points[i].y - points[i + 1].y;
+        const double dz = points[i].z - points[i + 1].z;
+        types[i].dista = std::sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      types.back().range = std::hypot(points.back().x, points.back().y);
+      give_feature(points, types);
+    }
+  } else {
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      if (i % point_filter_num != 0) continue;
+      const auto& source = input.points[i];
+      if (!std::isfinite(source.timestamp)) continue;
+      const double range_sq = source.x * source.x + source.y * source.y +
+                              source.z * source.z;
+      if (!(range_sq > blind * blind)) continue;
+      PointType point;
+      point.x = source.x;
+      point.y = source.y;
+      point.z = source.z;
+      point.intensity = source.intensity;
+      point.normal_x = point.normal_y = point.normal_z = 0.0f;
+      point.curvature =
+          (source.timestamp - first_timestamp) * time_unit_scale;
+      pl_surf.push_back(point);
     }
   }
 }
