@@ -172,7 +172,6 @@ void FastlioLocalizationNode::publish_odometry(
 
 void FastlioLocalizationNode::publish_module_status(bool level) {
   // robot_msgs::ModuleStatus status;
-  // status.header.stamp = ros::Time().fromSec(time);
   // status.header.frame_id = "LOCATION";
   // status.level = level;
   // robot_msgs::ModuleStatusItem item;

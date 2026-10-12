@@ -72,119 +72,60 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS})
 
-if(ROS_EDITION STREQUAL "ROS1")
-  find_package(catkin REQUIRED COMPONENTS
-    geometry_msgs
-    nav_msgs
-    sensor_msgs
-    roscpp
-    rospy
-    std_msgs
-    pcl_ros
-    tf
-    livox_ros_driver
-    eigen_conversions
-  )
-
-  include_directories(
-    ${catkin_INCLUDE_DIRS}
-    include)
-
-  catkin_package(
-    CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs
-    DEPENDS EIGEN3 PCL
-    INCLUDE_DIRS
-  )
-
-  add_library(${PROJECT_NAME} SHARED
-    include/ikd-Tree/ikd_Tree.cpp
-    include/global_localization/scancontext/Scancontext.cpp
-    include/global_localization/InitCoordinate.cpp
-    include/system/frontend/ImuProcessor.cpp
-    include/system/frontend/use-ikfom.cpp
-    include/system/System.hpp)
-  target_link_libraries(${PROJECT_NAME} stdc++fs ${PCL_LIBRARIES})
-  if(BUILD_CUDA)
-    target_link_libraries(${PROJECT_NAME} ${gpu_bbs3d_LIBRARY})
-  else()
-    target_link_libraries(${PROJECT_NAME} ${cpu_bbs3d_LIBRARY})
-  endif()
-
-  add_executable(fastlio_localization_test_bag_lcalization test/read_rosbag_test_lcalization.cpp)
-  target_link_libraries(fastlio_localization_test_bag_lcalization ${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
-
-  add_executable(fastlio_localization_test_bag_relcalization test/read_rosbag_test_relcalization.cpp)
-  target_link_libraries(fastlio_localization_test_bag_relcalization ${PROJECT_NAME} ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
-
-  install(TARGETS ${PROJECT_NAME}
-    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-  )
-
-  install(DIRECTORY launch config rviz_cfg Log
-    DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
-  )
-
-else(ROS_EDITION STREQUAL "ROS2")
-  if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    add_compile_options(-Wall -Wextra -Wpedantic)
-  endif()
-
-  # find dependencies
-  find_package(ament_cmake REQUIRED)
-  find_package(rclcpp REQUIRED)
-  find_package(rclpy REQUIRED)
-  find_package(nav_msgs REQUIRED)
-  find_package(sensor_msgs REQUIRED)
-  find_package(pcl_conversions REQUIRED)
-  find_package(tf2_ros REQUIRED)
-  find_package(livox_ros_driver2 REQUIRED)
-  find_package(slam_manager REQUIRED)
-  find_package(slam_manager_interfaces REQUIRED)
-
-  include_directories(
-    ${pcl_conversions_INCLUDE_DIRS}
-    include)
-
-  if(BUILD_TESTING)
-    find_package(ament_lint_auto REQUIRED)
-    # the following line skips the linter which checks for copyrights
-    # uncomment the line when a copyright and license is not present in all source files
-    #set(ament_cmake_copyright_FOUND TRUE)
-    # the following line skips cpplint (only works in a git repo)
-    # uncomment the line when this package is not in a git repo
-    #set(ament_cmake_cpplint_FOUND TRUE)
-    ament_lint_auto_find_test_dependencies()
-  endif()
-
-  ament_package()
-
-  add_executable(fastlio_localization_ros2
-    src/main.cpp
-    src/ros2_main.cpp
-    include/ikd-Tree/ikd_Tree.cpp
-    include/global_localization/scancontext/Scancontext.cpp
-    include/global_localization/InitCoordinate.cpp
-    include/system/frontend/ImuProcessor.cpp
-    include/system/frontend/use-ikfom.cpp
-    include/system/System.hpp)
-  target_link_libraries(fastlio_localization_ros2 stdc++fs ${PCL_LIBRARIES})
-  if(BUILD_CUDA)
-    target_link_libraries(fastlio_localization_ros2 ${gpu_bbs3d_LIBRARY})
-  else()
-    target_link_libraries(fastlio_localization_ros2 ${cpu_bbs3d_LIBRARY})
-  endif()
-  ament_target_dependencies(fastlio_localization_ros2
-    rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 slam_manager_interfaces
-    slam_manager)
-
-  # add_executable(fastlio_sam_test_bag test/read_rosbag_test.cpp)
-  # target_link_libraries(fastlio_sam_test_bag ${PROJECT_NAME} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
-
-  install(TARGETS fastlio_localization_ros2
-    DESTINATION lib/${PROJECT_NAME}
-  )
-  install(DIRECTORY launch config rviz_cfg
-    DESTINATION share/${PROJECT_NAME})
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
+
+# find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
+find_package(slam_manager REQUIRED)
+find_package(slam_manager_interfaces REQUIRED)
+
+include_directories(
+  ${pcl_conversions_INCLUDE_DIRS}
+  include)
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # uncomment the line when a copyright and license is not present in all source files
+  #set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # uncomment the line when this package is not in a git repo
+  #set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()
+
+add_executable(fastlio_localization_ros2
+  src/main.cpp
+  src/ros2_main.cpp
+  include/ikd-Tree/ikd_Tree.cpp
+  include/global_localization/scancontext/Scancontext.cpp
+  include/global_localization/InitCoordinate.cpp
+  include/system/frontend/ImuProcessor.cpp
+  include/system/frontend/use-ikfom.cpp
+  include/system/System.hpp)
+target_link_libraries(fastlio_localization_ros2 stdc++fs ${PCL_LIBRARIES})
+if(BUILD_CUDA)
+  target_link_libraries(fastlio_localization_ros2 ${gpu_bbs3d_LIBRARY})
+else()
+  target_link_libraries(fastlio_localization_ros2 ${cpu_bbs3d_LIBRARY})
+endif()
+ament_target_dependencies(fastlio_localization_ros2
+  rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 slam_manager_interfaces
+  slam_manager)
+
+install(TARGETS fastlio_localization_ros2
+  DESTINATION lib/${PROJECT_NAME}
+)
+install(DIRECTORY launch config rviz_cfg
+  DESTINATION share/${PROJECT_NAME})
