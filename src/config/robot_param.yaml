@@ -20,5 +20,5 @@
       # robot_length: 1.10
 
       # # 雷达坐标系在base_link中的位姿：平移单位m，旋转单位rad。
-      # lidar_to_base_T: [0.4, 0.0, 0.50]     # [x, y, z]
-      # lidar_to_base_R: [0.0, 1.4, 0.0]      # [roll, pitch, yaw]
+      # lidar_to_base_T: [0.4, 0.0, 0.55]     # [x, y, z]
+      # lidar_to_base_R: [0.0, 1.46, 0.0]     # [roll, pitch, yaw]
