@@ -51,13 +51,11 @@ void PurePursuitLocalPlanner::globalReplanCallback(
 }
 
 bool PurePursuitLocalPlanner::setPaused(bool paused) {
-  navigation_paused_.store(paused);
-  if (paused_pub_) {
-    std_msgs::msg::Bool message;
-    message.data = paused;
-    paused_pub_->publish(message);
-  }
   if (paused) {
+    navigation_paused_.store(true);
+    pause_pose_valid_ = getRobotPose(pause_pose_);
+    resume_replan_waiting_.store(false);
+    resume_replan_after_ns_.store(0);
     // 暂停代表人工或上层接管。全局任务继续保留，但局部绕障路径是基于
     // 接管前位姿生成的一次性轨迹，恢复后不能再追逐旧临时点。
     if (local_avoidance_manager_) {
@@ -87,7 +85,35 @@ bool PurePursuitLocalPlanner::setPaused(bool paused) {
   } else {
     // 不恢复暂停前的速度；下一周期以零速度为基准重新计算。
     reset_velocity_on_next_control_.store(true);
+    geometry_msgs::msg::PoseStamped current_pose;
+    if (pause_pose_valid_ && path_received_ && !dynamic_path_ &&
+        point_task_active_ &&
+        getRobotPose(current_pose)) {
+      const double moved = std::hypot(
+          current_pose.pose.position.x - pause_pose_.pose.position.x,
+          current_pose.pose.position.y - pause_pose_.pose.position.y);
+      if (moved > config_.resume_replan_distance) {
+        resume_replan_after_ns_.store(
+            rclcpp::Time(global_path_.header.stamp).nanoseconds());
+        resume_replan_waiting_.store(true);
+        if (cmd_vel_pub_) cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+        RCLCPP_WARN(node_->get_logger(),
+                    "[PP_RESUME_REPLAN_WAIT] manual displacement=%.3f m; "
+                    "holding old global path until a new path is accepted",
+                    moved);
+      }
+    }
+    pause_pose_valid_ = false;
     RCLCPP_INFO(node_->get_logger(), "Navigation velocity output resumed");
+  }
+  // Clear the pause only after the resume displacement guard is ready.
+  navigation_paused_.store(paused);
+  // Publish the state after a resume displacement has installed its local zero-
+  // velocity guard, so the planner cannot request a replan before the guard.
+  if (paused_pub_) {
+    std_msgs::msg::Bool message;
+    message.data = paused;
+    paused_pub_->publish(message);
   }
   return true;
 }
@@ -232,6 +258,7 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   task_target_sub_ = node_->create_subscription<slam_manager_interfaces::msg::TaskTarget>(
       "/navigation/task_target", 10,
       [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
+        point_task_active_ = !msg->use_topology;
         auto pose = std::make_shared<geometry_msgs::msg::Pose>();
         pose->position.x = msg->target.x;
         pose->position.y = msg->target.y;
@@ -312,6 +339,8 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.lookahead_distance_max =
       declareOrGetParameter(node_, "lookahead_distance_max", 0.8);
   config_.goal_tolerance = declareOrGetParameter(node_, "goal_tolerance", 0.2);
+  config_.resume_replan_distance = std::max(
+      0.0, declareOrGetParameter(node_, "resume_replan_distance", 0.25));
 
   // Speed parameters
   config_.max_linear_velocity =
@@ -386,6 +415,7 @@ bool PurePursuitLocalPlanner::setGlobalPath(
   }
 
   global_path_ = global_path;
+  dynamic_path_ = dynamic_path;
   path_received_ = true;
   goal_reached_ = false;
   goal_position_reached_ = false;  // 新增：新路径开始，重置到点锁存
@@ -432,7 +462,8 @@ bool PurePursuitLocalPlanner::setGlobalPath(
 
 bool PurePursuitLocalPlanner::computeVelocityCommands(
     geometry_msgs::msg::Twist &cmd_vel) {
-  if (navigation_paused_.load() || global_replan_waiting_.load()) {
+  if (navigation_paused_.load() || global_replan_waiting_.load() ||
+      resume_replan_waiting_.load()) {
     cmd_vel = geometry_msgs::msg::Twist();
     return true;
   }
@@ -908,6 +939,14 @@ void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
     accepted_global_path_stamp_ = path_stamp;
     accepted_global_path_frame_ = msg->path.header.frame_id;
     global_replan_waiting_.store(false);
+    if (resume_replan_waiting_.load() &&
+        msg->path.header.frame_id == config_.global_frame &&
+        path_stamp > resume_replan_after_ns_.load()) {
+      resume_replan_waiting_.store(false);
+      RCLCPP_INFO(node_->get_logger(),
+                  "[PP_RESUME_REPLAN_ACCEPTED] new global path accepted; "
+                  "resuming velocity output");
+    }
     reset_velocity_on_next_control_.store(true);
     // 只清除重规划等待，不修改 navigation_paused_（人工暂停独立生效）。
     global_path_accepted_pub_->publish(msg->path.header);

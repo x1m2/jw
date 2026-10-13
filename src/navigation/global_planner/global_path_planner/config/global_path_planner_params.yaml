@@ -15,6 +15,7 @@
     deviation_replan_interval_sec: 1.0   # 规划失败/等待控制器接收时的最小重试间隔
     deviation_replan_goal_tolerance: 0.2 # 终点附近不重规划，留给控制器完成调角
     deviation_replan_pose_timeout_sec: 0.5 # 拒绝过期定位（回放需使用一致的 ROS 时钟）
+    resume_replan_distance: 0.25         # 暂停后人工移动超过此距离，恢复时从当前位置重规划（米）
     # true：距离小于 direct_connection_threshold 时，可直接生成 start_temp -> goal_temp 直连边。
     # false：优先按 navigation_topology JSON 中的边规划。
     enable_direct_connection: false

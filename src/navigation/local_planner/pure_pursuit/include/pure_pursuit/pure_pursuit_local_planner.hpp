@@ -50,6 +50,7 @@ struct PlannerConfig {
   double lookahead_distance_min; // 最小前瞻距离
   double lookahead_distance_max; // 最大前瞻距离
   double goal_tolerance;         // 目标点容忍距离
+  double resume_replan_distance{0.25};
 
   // Speed parameters
   double max_linear_velocity;   // 最大线速度 (X方向)
@@ -158,6 +159,8 @@ private:
   int64_t accepted_global_path_stamp_{0};
   std::string accepted_global_path_frame_;
   std::atomic_bool global_replan_waiting_{false};
+  std::atomic_bool resume_replan_waiting_{false};
+  std::atomic<int64_t> resume_replan_after_ns_{0};
   rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr
       global_path_with_policy_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
@@ -181,6 +184,8 @@ private:
   bool path_received_;
   bool goal_reached_;
   bool goal_position_reached_;           // 新增：目标位置到达锁存
+  bool dynamic_path_{false};
+  bool point_task_active_{true};
   geometry_msgs::msg::Pose target_pose_; // 新增：目标位姿
   bool target_pose_received_;            // 新增：目标位姿接收标志
   int current_path_index_;
@@ -202,6 +207,8 @@ private:
   geometry_msgs::msg::Twist last_cmd_vel_;
   rclcpp::Time last_control_time_;
   std::atomic_bool navigation_paused_{false};
+  geometry_msgs::msg::PoseStamped pause_pose_;
+  bool pause_pose_valid_{false};
   std::atomic_bool reset_velocity_on_next_control_{false};
   std::atomic_bool obstacle_stop_active_{false};
   bool avoidance_timing_enabled_{true};

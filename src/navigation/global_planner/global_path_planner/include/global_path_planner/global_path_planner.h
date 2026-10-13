@@ -163,8 +163,13 @@ class GlobalPathPlanner : public rclcpp::Node {
   double replan_interval_sec_{1.0};
   double replan_goal_tolerance_{0.2};
   double replan_pose_timeout_sec_{0.5};
+  double resume_replan_distance_{0.25};
   bool point_task_active_{false};
   bool navigation_paused_{false};
+  bool pause_position_valid_{false};
+  bool resume_replan_check_pending_{false};
+  geometry_msgs::msg::Point pause_position_;
+  std::optional<rclcpp::Time> resume_replan_check_deadline_;
   bool replan_pending_{false};
   uint8_t avoidance_state_{navigation_interfaces::msg::AvoidanceState::IDLE};
   std::optional<rclcpp::Time> deviation_since_;
@@ -183,7 +188,9 @@ class GlobalPathPlanner : public rclcpp::Node {
       smoothed_path_sub_;
 
   void resetDeviationTracking(bool point_task);
+  void checkResumeReplan();
   void checkPathDeviation();
+  void requestGlobalReplan(double distance, const char *reason);
   double distanceToActivePath() const;
 
   // 方法

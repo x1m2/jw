@@ -10,6 +10,7 @@
     lookahead_distance_min: 0.4   # 低速最小前瞻距离（m）；越小转向越灵敏
     lookahead_distance_max: 0.7   # 高速最大前瞻距离（m）；越大行驶越平稳
     use_smoothed_path: false      # 是否使用外部发布的平滑局部路径
+    resume_replan_distance: 0.25 # 暂停后移动超过此距离时，等待新全局路径再恢复输出（米）
 
     # ==================== 目标到达与最终朝向 ====================
     goal_tolerance: 0.10                  # 目标位置容差（m）
