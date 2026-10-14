@@ -17,6 +17,9 @@
       history_keyframe_search_z_tolerance: 2.5    # reject candidates on another floor
       history_keyframe_min_index_diff: 20         # exclude the latest 20 keyframes, same as ScanContext
 
+    # Add a Z factor after the locked height differs by this distance.
+    add_height_factor_threshold: 0.1
+
     quatro_nano_gicp_voxel_resolution: 0.3        # voxel resolution to use Quatro and Nano-GICP matching
     save_voxel_resolution: 0.3                    # voxel resolution to save map in .pcd format
     scancontext_max_correspondence_distance: 35.0 # inactive while ScanContext candidate detection is disabled

@@ -131,6 +131,10 @@ void LaserMappingNode::readParameters() {
   this->get_parameter_or<vector<double>>("lidar_to_base_R", lidar_to_base_R,
                                          vector<double>(3, 0.0));
 
+  RCLCPP_INFO(this->get_logger(),
+              "lidar_to_base_R: [%.6f, %.6f, %.6f]",
+              lidar_to_base_R[0], lidar_to_base_R[1], lidar_to_base_R[2]);
+
   RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 }
 

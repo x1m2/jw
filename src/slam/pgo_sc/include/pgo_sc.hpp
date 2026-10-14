@@ -5,6 +5,7 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -14,6 +15,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -35,14 +37,15 @@
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_storage/storage_options.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
-#include <std_msgs/msg/string.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 ///// GTSAM
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
@@ -50,7 +53,6 @@
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
-#include <limits>
 ///// Coded headers
 #include "loop_closure.hpp"
 #include "pose_pcd.hpp"
@@ -75,12 +77,21 @@ class PgoSc : public rclcpp::Node {
   bool saveMap(const std::string &map_path);
 
  private:
+  struct LoopConstraint {
+    size_t source_index;
+    size_t target_index;
+    gtsam::Pose3 relative_pose;
+    double score;
+  };
+
   ///// Basic params
   std::string map_frame_;
   std::string package_path_;
   std::string seq_name_;
   std::mutex realtime_pose_mutex_, keyframes_mutex_;
   std::mutex graph_mutex_, vis_mutex_;
+  std::mutex z_constraint_mutex_;
+  std::mutex loop_results_mutex_;
   Eigen::Matrix4d last_corrected_pose_ = Eigen::Matrix4d::Identity();
   Eigen::Matrix4d odom_delta_ = Eigen::Matrix4d::Identity();
   PosePcd current_frame_;
@@ -88,7 +99,7 @@ class PgoSc : public rclcpp::Node {
   int current_keyframe_idx_ = 0;
 
   ///// Graph and values
-  bool is_initialized_;
+  std::atomic_bool is_initialized_;
   bool loop_added_flag_vis_;
   std::shared_ptr<gtsam::ISAM2> isam_handler_;
   gtsam::NonlinearFactorGraph gtsam_graph_;
@@ -99,7 +110,13 @@ class PgoSc : public rclcpp::Node {
   double voxel_res_;
   int sub_key_num_;
   int last_loop_src_idx_ = -1;
+  std::deque<LoopConstraint> pending_loop_constraints_;
   std::vector<std::pair<size_t, size_t>> loop_idx_pairs_;  // for vis
+
+  ///// Z-axis constraint
+  bool z_axis_locked_ = false;
+  std::optional<double> locked_height_;
+  double add_height_factor_threshold_ = 0.1;
 
   ///// Visualize
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -134,8 +151,10 @@ class PgoSc : public rclcpp::Node {
       keyframe_cloud_pub_;
   ///// ROS2 Subscribers
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_save_flag_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr z_lock_cmd_sub_;
   rclcpp::TimerBase::SharedPtr loop_timer_;
   rclcpp::TimerBase::SharedPtr vis_timer_;
+  rclcpp::CallbackGroup::SharedPtr loop_callback_group_;
 
   ///// Odom/PCD sync
   std::shared_ptr<message_filters::Synchronizer<odom_pcd_sync_pol>>
@@ -156,13 +175,15 @@ class PgoSc : public rclcpp::Node {
                        const PosePcd &latest_pose_pcd);
   visualization_msgs::msg::Marker getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
-  void optimizeGraph(bool is_loop);
+  bool addHeightFactor(const gtsam::Pose3 &pose, size_t index);
+  void optimizeGraph(bool is_loop, bool is_height_constrained = false);
   void publishKeyframe(const PosePcd &keyframe);
 
   // Callbacks
   void odomPcdCallback(
       const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg,
       const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pcd_msg);
+  void zLockCmdCallback(const std_msgs::msg::Bool::ConstSharedPtr msg);
   bool saveFlagCallback();
   void loopTimerFunc();
   void visTimerFunc();

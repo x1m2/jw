@@ -4,6 +4,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include <Eigen/Geometry>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -40,6 +41,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("loop.history_keyframe_search_z_tolerance",
                                   1.5);
   this->declare_parameter<int>("loop.history_keyframe_min_index_diff", 30);
+
+  this->declare_parameter<double>("add_height_factor_threshold", 0.1);
 
   this->declare_parameter<double>("scancontext_max_correspondence_distance",
                                   35.0);
@@ -85,8 +88,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                       lc_config.voxel_res_);
 
   this->get_parameter("keyframe.keyframe_threshold", keyframe_thr_);
-  this->get_parameter("keyframe.num_submap_keyframes",
-                      lc_config.num_submap_keyframes_);
+  this->get_parameter("keyframe.num_submap_keyframes", sub_key_num_);
+  lc_config.num_submap_keyframes_ = sub_key_num_;
   this->get_parameter("keyframe.enable_submap_matching",
                       lc_config.enable_submap_matching_);
 
@@ -99,7 +102,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                       lc_config.history_keyframe_search_z_tolerance_);
   this->get_parameter("loop.history_keyframe_min_index_diff",
                       lc_config.history_keyframe_min_index_diff_);
-
+  this->get_parameter("add_height_factor_threshold",
+                      add_height_factor_threshold_);
   this->get_parameter("nano_gicp.thread_number", gc.nano_thread_number_);
   this->get_parameter("nano_gicp.icp_score_threshold", gc.icp_score_thr_);
   this->get_parameter("nano_gicp.correspondences_number",
@@ -184,6 +188,9 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
       this->create_publisher<slam_manager_interfaces::msg::MapKeyframe>(
           "/pgo/keyframe_cloud", 100);
 
+  loop_callback_group_ = this->create_callback_group(
+      rclcpp::CallbackGroupType::MutuallyExclusive);
+
   /* subscribers */
   sub_odom_ =
       std::make_shared<message_filters::Subscriber<nav_msgs::msg::Odometry>>();
@@ -202,30 +209,49 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
                                                  std::placeholders::_2));
 
   sub_save_flag_ = this->create_subscription<std_msgs::msg::Empty>(
-      "/save_dir", 1,
-      [this](std_msgs::msg::Empty::SharedPtr /*msg*/) {
+      "/save_dir", 1, [this](std_msgs::msg::Empty::SharedPtr /*msg*/) {
         RCLCPP_INFO(this->get_logger(),
                     "Receive save trigger, start saving...");
         if (!this->saveFlagCallback()) {
           RCLCPP_ERROR(this->get_logger(), "Map save failed.");
         }
       });
+  z_lock_cmd_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+      "/pgo/z_lock_cmd", 10,
+      std::bind(&PgoSc::zLockCmdCallback, this, std::placeholders::_1));
   save_done_pub_ = this->create_publisher<std_msgs::msg::Empty>(
       "/save_done", rclcpp::QoS(1).transient_local());
 
   /* timers */
   loop_timer_ = this->create_wall_timer(
       std::chrono::duration<double>(1.0 / loop_update_hz),
-      std::bind(&PgoSc::loopTimerFunc, this));
+      std::bind(&PgoSc::loopTimerFunc, this), loop_callback_group_);
 
   vis_timer_ =
       this->create_wall_timer(std::chrono::duration<double>(1.0 / vis_hz),
                               std::bind(&PgoSc::visTimerFunc, this));
 
   RCLCPP_INFO(this->get_logger(), "Main class, starting node...");
+  RCLCPP_INFO(this->get_logger(), "Z constraint: locked=%d, threshold=%.3f m",
+              z_axis_locked_, add_height_factor_threshold_);
 }
 
 PgoSc::~PgoSc() {}
+
+void PgoSc::zLockCmdCallback(const std_msgs::msg::Bool::ConstSharedPtr msg) {
+  std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+  z_axis_locked_ = msg->data;
+  if (z_axis_locked_) {
+    if (locked_height_) {
+      RCLCPP_WARN(this->get_logger(), "Z LOCKED at %.3f m", *locked_height_);
+    } else {
+      RCLCPP_WARN(this->get_logger(),
+                  "Z LOCKED; waiting for the first valid height");
+    }
+  } else {
+    RCLCPP_WARN(this->get_logger(), "Z RELEASED; height follows odometry");
+  }
+}
 
 // ====================== odom + pcd callback ======================
 // 功能：前端位姿估计 + 关键帧管理 + 后端图优化
@@ -304,6 +330,13 @@ void PgoSc::odomPcdCallback(
 
     broadcaster_->sendTransform(tf_msg);
   }
+
+  {
+    std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+    if (!z_axis_locked_ || !locked_height_) {
+      locked_height_ = current_frame_.pose_corrected_eig_(2, 3);
+    }
+  }
   // 发布当前校正点云
   corrected_current_pcd_pub_->publish(pclToPclRos(
       transformPcd(current_frame_.pcd_, current_frame_.pose_corrected_eig_),
@@ -337,11 +370,18 @@ void PgoSc::odomPcdCallback(
 
   // ==== 2. 判断是否是新关键帧 ====
   // auto t2 = std::chrono::high_resolution_clock::now();
-  if (checkIfKeyframe(current_frame_, keyframes_.back())) {
-    {
-      std::lock_guard<std::mutex> lock(keyframes_mutex_);
+  bool is_keyframe = false;
+  gtsam::Pose3 pose_from;
+  {
+    std::lock_guard<std::mutex> lock(keyframes_mutex_);
+    is_keyframe = checkIfKeyframe(current_frame_, keyframes_.back());
+    if (is_keyframe) {
+      pose_from =
+          poseEigToGtsamPose(keyframes_.back().pose_corrected_eig_);
       keyframes_.push_back(current_frame_);
     }
+  }
+  if (is_keyframe) {
     publishKeyframe(current_frame_);
 
     // ==== 3. 添加到图优化 ====
@@ -349,16 +389,44 @@ void PgoSc::odomPcdCallback(
         (gtsam::Vector(6) << 1e-4, 1e-4, 1e-4, 1e-2, 1e-2, 1e-2).finished();
     auto odom_noise = gtsam::noiseModel::Diagonal::Variances(variance_vector);
 
-    gtsam::Pose3 pose_from = poseEigToGtsamPose(
-        keyframes_[current_keyframe_idx_ - 1].pose_corrected_eig_);
     gtsam::Pose3 pose_to =
         poseEigToGtsamPose(current_frame_.pose_corrected_eig_);
+
+    std::deque<LoopConstraint> ready_loop_constraints;
+    {
+      std::lock_guard<std::mutex> lock(loop_results_mutex_);
+      ready_loop_constraints.swap(pending_loop_constraints_);
+    }
+
+    const bool loop_factor_added = !ready_loop_constraints.empty();
+    bool height_factor_added = false;
     {
       std::lock_guard<std::mutex> lock(graph_mutex_);
       gtsam_graph_.add(gtsam::BetweenFactor<gtsam::Pose3>(
           current_keyframe_idx_ - 1, current_keyframe_idx_,
           pose_from.between(pose_to), odom_noise));
       init_esti_.insert(current_keyframe_idx_, pose_to);
+
+      for (const auto &constraint : ready_loop_constraints) {
+        auto base_loop_noise = gtsam::noiseModel::Diagonal::Variances(
+            (gtsam::Vector(6) << constraint.score, constraint.score,
+             constraint.score, constraint.score, constraint.score,
+             constraint.score)
+                .finished());
+        auto loop_noise = gtsam::noiseModel::Robust::Create(
+            gtsam::noiseModel::mEstimator::Cauchy::Create(
+                loop_robust_kernel_scale_),
+            base_loop_noise);
+        gtsam_graph_.add(gtsam::BetweenFactor<gtsam::Pose3>(
+            constraint.source_index, constraint.target_index,
+            constraint.relative_pose, loop_noise));
+        loop_idx_pairs_.push_back(
+            {constraint.source_index, constraint.target_index});
+      }
+
+      if (!loop_factor_added) {
+        height_factor_added = addHeightFactor(pose_to, current_keyframe_idx_);
+      }
     }
 
     current_keyframe_idx_++;
@@ -375,43 +443,77 @@ void PgoSc::odomPcdCallback(
 
     // ==== 5. 图优化（ISAM2） ====
     // auto t4 = std::chrono::high_resolution_clock::now();
-    optimizeGraph(false);
+    optimizeGraph(loop_factor_added, height_factor_added);
+    if (loop_factor_added) {
+      RCLCPP_INFO(this->get_logger(),
+                  "Consumed %zu loop constraint(s); height factor skipped "
+                  "for keyframe %d",
+                  ready_loop_constraints.size(), current_keyframe_idx_ - 1);
+    }
+    if (loop_factor_added || height_factor_added) {
+      loop_added_flag_vis_ = true;
+      global_map_vis_switch_ = true;
+    }
     // ==== 7. ROS2 中可以省略详细时间统计，保留简单日志 ====
     auto t6 = std::chrono::high_resolution_clock::now();
     RCLCPP_INFO(
         this->get_logger(), "Keyframe added, total time: %.1f ms",
-        std::chrono::duration_cast<std::chrono::milliseconds>(t6 - t1).count());
+        static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(t6 - t1)
+                .count()) /
+            1e3);
   }
 }
 
-// ====================== loop closure timer ======================
+// ================= asynchronous loop closure detection =================
 void PgoSc::loopTimerFunc() {
-  if (!is_initialized_ || keyframes_.empty()) return;
-
-  auto &latest_keyframe = keyframes_.back();
-  if (latest_keyframe.processed_) return;
-  latest_keyframe.processed_ = true;
+  if (!is_initialized_) return;
 
   constexpr int kLoopCooldownKeyframes = 20;
-  const int latest_idx = latest_keyframe.idx_;
+  auto t1 = std::chrono::high_resolution_clock::now();
+  std::vector<PosePcd> keyframes_snapshot;
+  int latest_idx = -1;
+  int closest_keyframe_idx = -1;
 
-  if (last_loop_src_idx_ >= 0 &&
-      latest_idx - last_loop_src_idx_ < kLoopCooldownKeyframes) {
-    return;
+  {
+    std::lock_guard<std::mutex> lock(keyframes_mutex_);
+    if (keyframes_.empty()) return;
+
+    auto &latest_keyframe = keyframes_.back();
+    if (latest_keyframe.processed_) return;
+    latest_keyframe.processed_ = true;
+    latest_idx = latest_keyframe.idx_;
+
+    if (last_loop_src_idx_ >= 0 &&
+        latest_idx - last_loop_src_idx_ < kLoopCooldownKeyframes) {
+      return;
+    }
+
+    // Candidate search only reads poses and remains under the lock briefly.
+    closest_keyframe_idx = loop_closure_->fetchRadiusSearchCandidateIdx(
+        latest_keyframe, keyframes_);
+    if (closest_keyframe_idx < 0) return;
+
+    // Copy only the bounded source/target neighborhoods needed by registration.
+    // Registration then runs without holding keyframes_mutex_.
+    keyframes_snapshot.resize(keyframes_.size());
+    auto copy_neighborhood = [&](int center_idx) {
+      const int first = std::max(0, center_idx - sub_key_num_);
+      const int last = std::min(static_cast<int>(keyframes_.size()) - 1,
+                                center_idx + sub_key_num_);
+      for (int i = first; i <= last; ++i) {
+        keyframes_snapshot[i] = keyframes_[i];
+      }
+    };
+    copy_neighborhood(latest_idx);
+    copy_neighborhood(closest_keyframe_idx);
   }
 
-  auto t1 = std::chrono::high_resolution_clock::now();
-
-  // ==== 1. XY半径＋高度差＋关键帧索引间隔搜索 ====
-  // int closest_keyframe_idx =
-  //     loop_closure_->fetchCandidateKeyframeIdx(latest_keyframe, keyframes_);
-  int closest_keyframe_idx =
-      loop_closure_->fetchRadiusSearchCandidateIdx(latest_keyframe, keyframes_);
-  if (closest_keyframe_idx < 0) return;
+  const auto &latest_keyframe = keyframes_snapshot[latest_idx];
   RegistrationOutput reg_output = loop_closure_->performLoopClosure(
-      latest_keyframe, keyframes_, closest_keyframe_idx);
+      latest_keyframe, keyframes_snapshot, closest_keyframe_idx);
 
-  // ==== 2. 如果 loop closure 有效，加入图优化 ====
+  // The loop callback only produces a result. The backend callback owns GTSAM.
   if (reg_output.is_valid_) {
     RCLCPP_INFO(this->get_logger(),
                 "\033[1;32mLoop closure accepted. Score: %.3f\033[0m",
@@ -420,32 +522,19 @@ void PgoSc::loopTimerFunc() {
     gtsam::Pose3 pose_from = poseEigToGtsamPose(
         reg_output.pose_between_eig_ * latest_keyframe.pose_corrected_eig_);
     gtsam::Pose3 pose_to = poseEigToGtsamPose(
-        keyframes_[closest_keyframe_idx].pose_corrected_eig_);
-
-    auto variance_vector =
-        (gtsam::Vector(6) << reg_output.score_, reg_output.score_,
-         reg_output.score_, reg_output.score_, reg_output.score_,
-         reg_output.score_)
-            .finished();
-
-    auto base_loop_noise =
-        gtsam::noiseModel::Diagonal::Variances(variance_vector);
-    auto loop_noise = gtsam::noiseModel::Robust::Create(
-        gtsam::noiseModel::mEstimator::Cauchy::Create(
-            loop_robust_kernel_scale_),
-        base_loop_noise);
+        keyframes_snapshot[closest_keyframe_idx].pose_corrected_eig_);
 
     {
-      std::lock_guard<std::mutex> lock(graph_mutex_);
-      gtsam_graph_.add(gtsam::BetweenFactor<gtsam::Pose3>(
-          latest_keyframe.idx_, closest_keyframe_idx,
-          pose_from.between(pose_to), loop_noise));
+      std::lock_guard<std::mutex> lock(loop_results_mutex_);
+      pending_loop_constraints_.push_back(
+          {static_cast<size_t>(latest_keyframe.idx_),
+           static_cast<size_t>(closest_keyframe_idx),
+           pose_from.between(pose_to), reg_output.score_});
     }
-    optimizeGraph(true);
-    // 保存 loop closure 信息用于可视化
-    loop_idx_pairs_.push_back({latest_keyframe.idx_, closest_keyframe_idx});
-    loop_added_flag_vis_ = true;
     last_loop_src_idx_ = latest_keyframe.idx_;
+    RCLCPP_INFO(this->get_logger(),
+                "Loop constraint queued: source=%d, target=%d",
+                latest_keyframe.idx_, closest_keyframe_idx);
   } else {
     RCLCPP_WARN(this->get_logger(), "Loop closure rejected. Score: %.3f",
                 reg_output.score_);
@@ -454,7 +543,7 @@ void PgoSc::loopTimerFunc() {
     if (reg_output.score_ < reject_detail_score_thr) {
       // 只有 score < 2.0 的 rejected 才打印详细原因
 
-      const auto &cand_keyframe = keyframes_[closest_keyframe_idx];
+      const auto &cand_keyframe = keyframes_snapshot[closest_keyframe_idx];
 
       Eigen::Vector3d t_latest =
           latest_keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
@@ -611,8 +700,39 @@ void PgoSc::visTimerFunc() {
           1e3);
 }
 
+bool PgoSc::addHeightFactor(const gtsam::Pose3 &pose, size_t index) {
+  double reference_height = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+    if (!z_axis_locked_ || !locked_height_) return false;
+    reference_height = *locked_height_;
+  }
+
+  const double current_height = pose.translation().z();
+  if (std::abs(reference_height - current_height) <
+      add_height_factor_threshold_) {
+    return false;
+  }
+
+  constexpr double kHeightVarianceZ = 0.05;
+  auto height_noise = gtsam::noiseModel::Diagonal::Variances(
+      (gtsam::Vector(3) << 1e8, 1e8, kHeightVarianceZ).finished());
+  gtsam_graph_.add(
+      gtsam::GPSFactor(index,
+                       gtsam::Point3(pose.translation().x(),
+                                     pose.translation().y(), reference_height),
+                       height_noise));
+
+  RCLCPP_WARN(this->get_logger(),
+              "Z factor added: keyframe=%zu, current_z=%.3f, reference_z=%.3f, "
+              "threshold=%.3f",
+              index, current_height, reference_height,
+              add_height_factor_threshold_);
+  return true;
+}
+
 // ====================== optimizeGraph ======================
-void PgoSc::optimizeGraph(bool is_loop) {
+void PgoSc::optimizeGraph(bool is_loop, bool is_height_constrained) {
   gtsam::Values new_estimate;
 
   // 1. 更新 iSAM2
@@ -624,6 +744,14 @@ void PgoSc::optimizeGraph(bool is_loop) {
 
     if (is_loop) {
       // 回环约束加入后，多更新几次促进重线性化
+      isam_handler_->update();
+      isam_handler_->update();
+      isam_handler_->update();
+    }
+    if (is_height_constrained) {
+      // Match FAST-LIO-SAM: perform extra updates after adding a height factor.
+      isam_handler_->update();
+      isam_handler_->update();
       isam_handler_->update();
       isam_handler_->update();
       isam_handler_->update();
@@ -656,8 +784,15 @@ void PgoSc::optimizeGraph(bool is_loop) {
     }
   }
 
-  // 3. 回环后更新全部关键帧
   if (is_loop) {
+    std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+    locked_height_ = new_estimate.at<gtsam::Pose3>(new_estimate.size() - 1)
+                         .translation()
+                         .z();
+  }
+
+  // 3. 回环或高度约束后更新全部关键帧
+  if (is_loop || is_height_constrained) {
     std::lock_guard<std::mutex> lock(keyframes_mutex_);
 
     for (size_t i = 0; i < new_estimate.size(); ++i) {
@@ -918,10 +1053,9 @@ bool PgoSc::saveMap(const std::string &map_path) {
   std::error_code directory_error;
   if (!fs::is_directory(map_path, directory_error) || directory_error) {
     throw std::runtime_error(
-        directory_error
-            ? "failed to inspect map save directory: " +
-                  directory_error.message()
-            : "map save directory does not exist: " + map_path);
+        directory_error ? "failed to inspect map save directory: " +
+                              directory_error.message()
+                        : "map save directory does not exist: " + map_path);
   }
   package_path_ = map_path;
   return saveFlagCallback();

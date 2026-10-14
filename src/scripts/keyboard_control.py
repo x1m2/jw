@@ -43,6 +43,14 @@ class KeyboardControl(Node):
             10
         )
 
+        # PGO Z 轴锁定命令：True 锁定，False 释放。
+        self.z_axis_locked = False
+        self.pgo_z_lock_cmd_pub = self.create_publisher(
+            Bool,
+            '/pgo/z_lock_cmd',
+            10
+        )
+
         self.running = True
 
         self.publish_thread = threading.Thread(
@@ -87,6 +95,7 @@ W   : 前进（固定线速度 0.55 m/s）
 S   : 后退（固定线速度 0.55 m/s）
 Q/E : 左转/右转
 K   : 保存当前纯定位位姿为拓扑节点（需先启动在线打点）
+Z   : 锁定/解除 PGO Z 轴约束
 空格 : 停止
 ESC : 退出
 CTRL-C : 退出
@@ -151,6 +160,16 @@ CTRL-C : 退出
                     msg.data = True
                     self.topology_pub.publish(msg)
                     self.get_logger().info('已发布在线拓扑节点保存命令')
+
+                elif key == 'z':
+                    # 使用 Z 键避免与后退键 S 冲突。
+                    self.publish_stop_once()
+                    self.z_axis_locked = not self.z_axis_locked
+                    msg = Bool()
+                    msg.data = self.z_axis_locked
+                    self.pgo_z_lock_cmd_pub.publish(msg)
+                    state = '锁定' if self.z_axis_locked else '释放'
+                    self.get_logger().info(f'已发送 PGO Z 轴{state}命令')
 
                 else:
                     continue
