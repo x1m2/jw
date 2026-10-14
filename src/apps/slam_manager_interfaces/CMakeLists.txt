@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotPose.msg"
   "msg/RuntimeState.msg"
   "msg/WorkerStatus.msg"
+  "msg/ZConstraintState.msg"
   "action/NavigateToPose.action"
   "action/StartLocalization.action"
   "action/StartNavigation.action"

@@ -187,9 +187,10 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   keyframe_cloud_pub_ =
       this->create_publisher<slam_manager_interfaces::msg::MapKeyframe>(
           "/pgo/keyframe_cloud", 100);
-  z_lock_state_pub_ = this->create_publisher<std_msgs::msg::Bool>(
-      "/pgo/z_lock_state",
-      rclcpp::QoS(1).reliable().transient_local());
+  z_constraint_state_pub_ =
+      this->create_publisher<slam_manager_interfaces::msg::ZConstraintState>(
+          "/pgo/z_constraint_state",
+          rclcpp::QoS(1).reliable().transient_local());
 
   loop_callback_group_ = this->create_callback_group(
       rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -237,42 +238,46 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   RCLCPP_INFO(this->get_logger(), "Main class, starting node...");
   RCLCPP_INFO(this->get_logger(), "Z constraint: locked=%d, threshold=%.3f m",
               z_axis_locked_, add_height_factor_threshold_);
-  publishZLockState(z_axis_locked_);
+  publishZConstraintState(false, 0.0);
 }
 
 PgoSc::~PgoSc() {}
 
 void PgoSc::zLockCmdCallback(const std_msgs::msg::Bool::ConstSharedPtr msg) {
-  bool state_changed = false;
-  {
-    std::lock_guard<std::mutex> lock(z_constraint_mutex_);
-    state_changed = z_axis_locked_ != msg->data;
-    z_axis_locked_ = msg->data;
+  std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+  const bool state_changed = z_axis_locked_ != msg->data;
+  z_axis_locked_ = msg->data;
 
-    if (!state_changed) {
-      RCLCPP_INFO(this->get_logger(), "Z constraint already %s",
-                  z_axis_locked_ ? "LOCKED" : "RELEASED");
-    } else if (z_axis_locked_) {
-      if (locked_height_) {
-        RCLCPP_WARN(this->get_logger(), "Z LOCKED at %.3f m", *locked_height_);
-      } else {
-        RCLCPP_WARN(this->get_logger(),
-                    "Z LOCKED; waiting for the first valid height");
-      }
+  if (!state_changed) {
+    RCLCPP_INFO(this->get_logger(), "Z constraint already %s",
+                z_axis_locked_ ? "LOCKED" : "RELEASED");
+  } else if (z_axis_locked_) {
+    if (locked_height_) {
+      RCLCPP_WARN(this->get_logger(), "Z LOCKED at %.3f m", *locked_height_);
+      publishZConstraintState(true, *locked_height_);
     } else {
-      RCLCPP_WARN(this->get_logger(), "Z RELEASED; height follows odometry");
+      RCLCPP_WARN(this->get_logger(),
+                  "Z LOCKED; waiting for the first valid height");
     }
+  } else {
+    RCLCPP_WARN(this->get_logger(), "Z RELEASED; height follows odometry");
+    publishZConstraintState(false, 0.0);
   }
-
-  if (state_changed) publishZLockState(msg->data);
 }
 
-void PgoSc::publishZLockState(bool locked) {
-  std_msgs::msg::Bool state;
-  state.data = locked;
-  z_lock_state_pub_->publish(state);
-  RCLCPP_INFO(this->get_logger(), "Published /pgo/z_lock_state: %s",
-              locked ? "LOCKED" : "RELEASED");
+void PgoSc::publishZConstraintState(bool locked, double height) {
+  slam_manager_interfaces::msg::ZConstraintState state;
+  state.locked = locked;
+  state.height = locked ? height : 0.0;
+  z_constraint_state_pub_->publish(state);
+  if (locked) {
+    RCLCPP_INFO(this->get_logger(),
+                "Published /pgo/z_constraint_state: LOCKED at %.3f m",
+                state.height);
+  } else {
+    RCLCPP_INFO(this->get_logger(),
+                "Published /pgo/z_constraint_state: RELEASED");
+  }
 }
 
 // ====================== odom + pcd callback ======================
@@ -355,8 +360,15 @@ void PgoSc::odomPcdCallback(
 
   {
     std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+    const bool was_waiting_for_height =
+        z_axis_locked_ && !locked_height_.has_value();
     if (!z_axis_locked_ || !locked_height_) {
       locked_height_ = current_frame_.pose_corrected_eig_(2, 3);
+    }
+    if (was_waiting_for_height && locked_height_) {
+      RCLCPP_WARN(this->get_logger(), "Z LOCKED at first valid height %.3f m",
+                  *locked_height_);
+      publishZConstraintState(true, *locked_height_);
     }
   }
   // 发布当前校正点云
@@ -807,10 +819,17 @@ void PgoSc::optimizeGraph(bool is_loop, bool is_height_constrained) {
   }
 
   if (is_loop) {
+    const double optimized_height =
+        new_estimate.at<gtsam::Pose3>(new_estimate.size() - 1)
+            .translation()
+            .z();
     std::lock_guard<std::mutex> lock(z_constraint_mutex_);
-    locked_height_ = new_estimate.at<gtsam::Pose3>(new_estimate.size() - 1)
-                         .translation()
-                         .z();
+    const bool height_changed =
+        !locked_height_ || std::abs(*locked_height_ - optimized_height) > 1e-9;
+    locked_height_ = optimized_height;
+    if (z_axis_locked_ && height_changed) {
+      publishZConstraintState(true, optimized_height);
+    }
   }
 
   // 3. 回环或高度约束后更新全部关键帧
