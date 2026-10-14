@@ -51,9 +51,11 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 服务不可用、响应超时或机器人处于上述两个禁行状态时，Action将以`ABORTED`
 结束，`result.message`包含实际`state`和`code`，同时节点日志输出
 `[NAVIGATION_GATE]`状态记录。导航期间每500 ms复查姿态；进入`Passive`或
-`GetDown`时冻结当前目标的超时计时，同时通过`obstacle_stop`将最终速度压为零；
-恢复到其他允许导航的姿态后解除零速并继续累计。姿态服务不可用、响应错误或
-超时时按失效安全策略保持零速度。
+`GetDown`时通过`obstacle_stop`将最终速度压为零，并将当前导航切换到
+`navigation_paused`。姿态恢复后仍保持暂停，必须由APP调用
+`/robot/resume_navigation`才会继续原目标；继续前会再次检查机器人姿态。
+姿态服务不可用、响应错误或超时时同样进入暂停并保持零速度。APP也可以在暂停
+状态直接取消当前导航Action。
 
 状态检查通过后，启动导航前调用一次`/SetMode`并发送`mode: 1`。导航正常结束、
 启动失败、运行失败或取消时调用一次`/SetMode`并发送`mode: 0`；不进行周期调用。

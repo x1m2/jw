@@ -1878,7 +1878,7 @@ void SlamManagerNode::pollRobotState() {
         state_req_pending_.exchange(false)) {
       state_req_seq_.fetch_add(1U);
       get_robot_state_client_->prune_pending_requests();
-      setPostureStop(true);
+      handlePostureState(true);
       RCLCPP_WARN(get_logger(),
                   "[NAV_POSTURE] GetState timed out; holding zero velocity");
     }
@@ -1886,7 +1886,7 @@ void SlamManagerNode::pollRobotState() {
   }
 
   if (!get_robot_state_client_->service_is_ready()) {
-    setPostureStop(true);
+    handlePostureState(true);
     RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 3000,
         "[NAV_POSTURE] GetState unavailable; holding zero velocity");
@@ -1915,9 +1915,9 @@ void SlamManagerNode::pollRobotState() {
             const bool blocked = response->code != 0 ||
                                  response->state == kPassiveState ||
                                  response->state == kGetDownState;
-            setPostureStop(blocked);
+            handlePostureState(blocked);
           } catch (const std::exception &error) {
-            setPostureStop(true);
+            handlePostureState(true);
             RCLCPP_WARN(get_logger(),
                         "[NAV_POSTURE] robot state query failed: %s",
                         error.what());
@@ -1925,10 +1925,37 @@ void SlamManagerNode::pollRobotState() {
         });
   } catch (const std::exception &error) {
     state_req_pending_.store(false);
-    setPostureStop(true);
+    handlePostureState(true);
     RCLCPP_WARN(get_logger(), "[NAV_POSTURE] robot state request failed: %s",
                 error.what());
   }
+}
+
+void SlamManagerNode::handlePostureState(bool stopped) {
+  // 姿态封锁先于状态切换生效，确保暂停服务处理期间最终速度已经为零。
+  setPostureStop(stopped);
+  if (!stopped) {
+    // 姿态恢复只解除姿态封锁。若此前触发了暂停，kManualPause仍然有效，
+    // 导航保持navigation_paused，直到APP显式调用resume_navigation。
+    return;
+  }
+
+  std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
+  const auto mode = state_machine_.mode();
+  if (mode == SlamMode::kNavigationPaused) return;
+  if (mode != SlamMode::kNavigating) return;
+
+  std::string message;
+  if (!pauseNavigationLocked(message)) {
+    RCLCPP_ERROR(get_logger(),
+                 "[NAV_POSTURE] failed to pause navigation: %s; zero velocity "
+                 "remains enforced",
+                 message.c_str());
+    return;
+  }
+  RCLCPP_WARN(get_logger(),
+              "[NAV_POSTURE] navigation paused: %s; waiting for APP resume",
+              message.c_str());
 }
 
 void SlamManagerNode::setPostureStop(bool stopped) {
@@ -2057,27 +2084,40 @@ void SlamManagerNode::pauseNavigationCallback(
   }
 
   std::string message;
-  if (!navigation_task_executor_->setPaused(true, message)) {
+  if (!pauseNavigationLocked(message)) {
     response->success = false;
     response->message = "pause navigation failed: " + message;
     return;
   }
+  response->success = true;
+  response->message = message;
+}
+
+bool SlamManagerNode::pauseNavigationLocked(std::string &message) {
+  if (state_machine_.mode() != SlamMode::kNavigating) {
+    message = "current state=" + std::string(toString(state_machine_.mode()));
+    return false;
+  }
+
+  std::string pause_message;
+  if (!navigation_task_executor_->setPaused(true, pause_message)) {
+    message = "Pure Pursuit pause failed: " + pause_message;
+    return false;
+  }
   if (!state_machine_.pauseNavigation()) {
-    response->success = false;
-    response->message = "pause navigation state transition failed";
-    return;
+    message = "navigation state transition failed";
+    return false;
   }
 
   publishMode();
   std::string mode_message;
   if (!setRobotMode(0, mode_message)) {
-    response->success = false;
-    response->message =
+    message =
         "navigation paused, but failed to set robot mode=0: " + mode_message;
-    return;
+    return false;
   }
-  response->success = true;
-  response->message = message + "; " + mode_message;
+  message = pause_message + "; " + mode_message;
+  return true;
 }
 
 void SlamManagerNode::resumeNavigationCallback(
@@ -2094,6 +2134,15 @@ void SlamManagerNode::resumeNavigationCallback(
     response->success = false;
     response->message = "resume navigation rejected, current state=" +
                         std::string(toString(state_machine_.mode()));
+    return;
+  }
+
+  // 手动暂停和姿态触发的暂停共用同一状态。每次继续前重新查询姿态，
+  // 防止APP在Passive/GetDown或状态服务异常时解除暂停。
+  std::string posture_message;
+  if (!robotStateAllowsNavigation(posture_message)) {
+    response->success = false;
+    response->message = "resume navigation rejected: " + posture_message;
     return;
   }
 

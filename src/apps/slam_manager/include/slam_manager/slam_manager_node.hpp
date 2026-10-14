@@ -160,8 +160,10 @@ class SlamManagerNode : public rclcpp::Node {
   void calibrateLidarTiltCallback(
       const CalibrateLidarTilt::Request::SharedPtr request,
       CalibrateLidarTilt::Response::SharedPtr response);
+  bool pauseNavigationLocked(std::string &message);
   bool robotStateAllowsNavigation(std::string &message);
   void pollRobotState();
+  void handlePostureState(bool stopped);
   void setPostureStop(bool stopped);
   void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr message);
   bool setRobotMode(int32_t mode, std::string &message);
