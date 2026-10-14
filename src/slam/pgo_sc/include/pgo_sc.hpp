@@ -149,6 +149,7 @@ class PgoSc : public rclcpp::Node {
       debug_fine_aligned_pub_;
   rclcpp::Publisher<slam_manager_interfaces::msg::MapKeyframe>::SharedPtr
       keyframe_cloud_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr z_lock_state_pub_;
   ///// ROS2 Subscribers
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_save_flag_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr z_lock_cmd_sub_;
@@ -176,6 +177,7 @@ class PgoSc : public rclcpp::Node {
   visualization_msgs::msg::Marker getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
   bool addHeightFactor(const gtsam::Pose3 &pose, size_t index);
+  void publishZLockState(bool locked);
   void optimizeGraph(bool is_loop, bool is_height_constrained = false);
   void publishKeyframe(const PosePcd &keyframe);
 

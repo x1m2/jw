@@ -187,6 +187,9 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   keyframe_cloud_pub_ =
       this->create_publisher<slam_manager_interfaces::msg::MapKeyframe>(
           "/pgo/keyframe_cloud", 100);
+  z_lock_state_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+      "/pgo/z_lock_state",
+      rclcpp::QoS(1).reliable().transient_local());
 
   loop_callback_group_ = this->create_callback_group(
       rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -234,23 +237,42 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   RCLCPP_INFO(this->get_logger(), "Main class, starting node...");
   RCLCPP_INFO(this->get_logger(), "Z constraint: locked=%d, threshold=%.3f m",
               z_axis_locked_, add_height_factor_threshold_);
+  publishZLockState(z_axis_locked_);
 }
 
 PgoSc::~PgoSc() {}
 
 void PgoSc::zLockCmdCallback(const std_msgs::msg::Bool::ConstSharedPtr msg) {
-  std::lock_guard<std::mutex> lock(z_constraint_mutex_);
-  z_axis_locked_ = msg->data;
-  if (z_axis_locked_) {
-    if (locked_height_) {
-      RCLCPP_WARN(this->get_logger(), "Z LOCKED at %.3f m", *locked_height_);
+  bool state_changed = false;
+  {
+    std::lock_guard<std::mutex> lock(z_constraint_mutex_);
+    state_changed = z_axis_locked_ != msg->data;
+    z_axis_locked_ = msg->data;
+
+    if (!state_changed) {
+      RCLCPP_INFO(this->get_logger(), "Z constraint already %s",
+                  z_axis_locked_ ? "LOCKED" : "RELEASED");
+    } else if (z_axis_locked_) {
+      if (locked_height_) {
+        RCLCPP_WARN(this->get_logger(), "Z LOCKED at %.3f m", *locked_height_);
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "Z LOCKED; waiting for the first valid height");
+      }
     } else {
-      RCLCPP_WARN(this->get_logger(),
-                  "Z LOCKED; waiting for the first valid height");
+      RCLCPP_WARN(this->get_logger(), "Z RELEASED; height follows odometry");
     }
-  } else {
-    RCLCPP_WARN(this->get_logger(), "Z RELEASED; height follows odometry");
   }
+
+  if (state_changed) publishZLockState(msg->data);
+}
+
+void PgoSc::publishZLockState(bool locked) {
+  std_msgs::msg::Bool state;
+  state.data = locked;
+  z_lock_state_pub_->publish(state);
+  RCLCPP_INFO(this->get_logger(), "Published /pgo/z_lock_state: %s",
+              locked ? "LOCKED" : "RELEASED");
 }
 
 // ====================== odom + pcd callback ======================
