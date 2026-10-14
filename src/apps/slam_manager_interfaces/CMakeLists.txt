@@ -11,6 +11,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MapKeyframe.msg"
   "msg/LocalizationPose.msg"
+  "msg/NavigationObstacleState.msg"
   "msg/NavigationNode.msg"
   "msg/TaskTarget.msg"
   "msg/RobotPose.msg"

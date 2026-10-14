@@ -211,6 +211,9 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。
   runtime_state_pub_ = create_publisher<RuntimeState>(
       "/robot/runtime_state", rclcpp::QoS(1).reliable().transient_local());
+  navigation_obstacle_state_pub_ = create_publisher<NavigationObstacleState>(
+      "/robot/navigation_obstacle_state",
+      rclcpp::QoS(1).reliable().transient_local());
   keyframe_cloud_pub_ =
       create_publisher<MapKeyframe>("/robot/keyframe_cloud", 100);
   current_pose_pub_ = create_publisher<RobotPose>("/robot/current_pose", 20);
@@ -330,6 +333,11 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local(),
       std::bind(&SlamManagerNode::obstacleStopCallback, this,
+                std::placeholders::_1));
+  avoidance_state_sub_ = create_subscription<AvoidanceState>(
+      "/local_avoidance/state",
+      rclcpp::QoS(1).reliable().transient_local(),
+      std::bind(&SlamManagerNode::avoidanceStateCallback, this,
                 std::placeholders::_1));
 
   state_machine_.initialize();
@@ -2019,6 +2027,55 @@ void SlamManagerNode::navigationStateCallback(
 void SlamManagerNode::obstacleStopCallback(
     const std_msgs::msg::Bool::SharedPtr message) {
   navigation_task_executor_->setObstacleStopped(message->data);
+  {
+    std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
+    obstacle_stopped_ = message->data;
+  }
+  publishNavigationObstacleState();
+}
+
+void SlamManagerNode::avoidanceStateCallback(
+    const AvoidanceState::ConstSharedPtr message) {
+  if (message->state > AvoidanceState::FAILED) {
+    RCLCPP_WARN(get_logger(), "Ignoring unknown avoidance state: %u",
+                static_cast<unsigned int>(message->state));
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
+    avoidance_state_ = message->state;
+  }
+  publishNavigationObstacleState();
+}
+
+void SlamManagerNode::publishNavigationObstacleState() {
+  const auto mode = state_machine_.mode();
+  const bool navigation_active = mode == SlamMode::kNavigating ||
+                                 mode == SlamMode::kNavigationPaused;
+  uint8_t next_state = NavigationObstacleState::UNBLOCKED;
+  {
+    std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
+    if (!navigation_active) {
+      // 新导航任务不继承上一次Worker留下的瞬时状态。
+      obstacle_stopped_ = false;
+      avoidance_state_ = AvoidanceState::IDLE;
+    } else if (obstacle_stopped_ ||
+               avoidance_state_ == AvoidanceState::BLOCKED ||
+               avoidance_state_ == AvoidanceState::FAILED) {
+      next_state = NavigationObstacleState::OBSTACLE_STOPPED;
+    } else if (avoidance_state_ == AvoidanceState::AVOIDING ||
+               avoidance_state_ == AvoidanceState::WAITING_DYNAMIC_PATH) {
+      next_state = NavigationObstacleState::AVOIDING;
+    }
+
+    if (published_navigation_obstacle_state_ == next_state) return;
+
+    // 发布也放在同一临界区，保证并发的停障/绕障回调不会乱序覆盖新状态。
+    NavigationObstacleState message;
+    message.state = next_state;
+    navigation_obstacle_state_pub_->publish(message);
+    published_navigation_obstacle_state_ = next_state;
+  }
 }
 
 void SlamManagerNode::currentPoseCallback(
@@ -2207,8 +2264,15 @@ void SlamManagerNode::publishMode() {
       protocol_state = RuntimeState::NAVIGATION_PAUSED;
       break;
     case SlamMode::kError: {
-      std::lock_guard<std::mutex> lock(runtime_state_mutex_);
-      publishRuntimeState(RuntimeState::ERROR, error_code_, error_message_);
+      int32_t error_code = RuntimeState::NO_ERROR;
+      std::string error_message;
+      {
+        std::lock_guard<std::mutex> lock(runtime_state_mutex_);
+        error_code = error_code_;
+        error_message = error_message_;
+      }
+      publishRuntimeState(RuntimeState::ERROR, error_code, error_message);
+      publishNavigationObstacleState();
       return;
     }
     case SlamMode::kBoot:
@@ -2222,15 +2286,29 @@ void SlamManagerNode::publishMode() {
     error_message_.clear();
   }
   publishRuntimeState(protocol_state);
+  publishNavigationObstacleState();
 }
 
 void SlamManagerNode::publishRuntimeState(uint8_t state, int32_t error_code,
                                           const std::string &error_message) {
+  std::lock_guard<std::mutex> lock(runtime_state_mutex_);
+  if (runtime_state_published_ && published_runtime_state_ == state &&
+      published_runtime_error_code_ == error_code &&
+      published_runtime_error_message_ == error_message) {
+    return;
+  }
+
   RuntimeState message;
   message.state = state;
   message.error_code = error_code;
   message.error_msg = error_message;
+
+  // 发布和缓存更新在同一临界区，防止并发回调将旧状态晚于新状态发布。
   runtime_state_pub_->publish(message);
+  runtime_state_published_ = true;
+  published_runtime_state_ = state;
+  published_runtime_error_code_ = error_code;
+  published_runtime_error_message_ = error_message;
 }
 
 void SlamManagerNode::enterError(int32_t error_code,

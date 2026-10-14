@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
@@ -35,6 +36,7 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
 )
 ament_target_dependencies(${PROJECT_NAME}_core
   geometry_msgs
+  navigation_interfaces
   rclcpp
   rclcpp_action
   slam_manager_interfaces
@@ -77,7 +79,8 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_libraries(${PROJECT_NAME}_core)
 ament_export_include_directories(include)
 ament_export_dependencies(
-  geometry_msgs rclcpp rclcpp_action slam_manager_interfaces sensor_msgs std_msgs
-  std_srvs tf2 tf2_geometry_msgs woodox_ros2_interface nlohmann_json)
+  geometry_msgs navigation_interfaces rclcpp rclcpp_action
+  slam_manager_interfaces sensor_msgs std_msgs std_srvs tf2 tf2_geometry_msgs
+  woodox_ros2_interface nlohmann_json)
 
 ament_package()

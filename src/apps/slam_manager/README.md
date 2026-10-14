@@ -155,6 +155,19 @@ A -> B为map_connection时：
 - 停障固定启用，不再作为边策略字段保存。
 - `obstacle_avoidance_enabled`：是否启用绕障。
 
+### 导航障碍状态
+
+`slam_manager`将内部停障和局部绕障状态汇总后，通过可靠、持久化的
+`/robot/navigation_obstacle_state`发布给APP，消息类型为
+`slam_manager_interfaces/msg/NavigationObstacleState`：
+
+- `UNBLOCKED=0`：当前没有停障或绕障。
+- `OBSTACLE_STOPPED=1`：近距离停障，或局部绕障已阻塞/失败并停车。
+- `AVOIDING=2`：正在生成、等待或跟踪局部绕障路径。
+
+停障状态优先于绕障状态；绕障完成后发布`UNBLOCKED`。导航未运行、导航完成、
+取消或失败时同样发布`UNBLOCKED`，新导航任务不会继承上一次任务的障碍状态。
+
 ### 导航区域
 
 任务JSON可选包含`regions[]`。未提供时保持原导航行为；第一版不允许两个
@@ -208,6 +221,10 @@ ros2 action send_goal /robot/navigate_to_pose slam_manager_interfaces/action/Nav
 
 ## 运行控制
 
+- `/robot/runtime_state`在节点启动时发布初始状态，此后仅当`state`、
+  `error_code`或`error_msg`发生变化时发布。该话题与
+  `/robot/navigation_obstacle_state`均使用Reliable、Transient Local、Depth 1；
+  APP订阅端应使用相同QoS，以便后启动时收到最新状态。
 - 同一时刻只执行一个导航Action。
 - 暂停只停止Pure Pursuit速度输出，不销毁导航Worker。
 - 取消任务会中断到点等待或`map_connection`重定位，停止相关Worker并返回

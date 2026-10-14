@@ -12,6 +12,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
 #include <mutex>
+#include <navigation_interfaces/msg/avoidance_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -31,6 +32,7 @@
 #include "slam_manager_interfaces/action/start_navigation.hpp"
 #include "slam_manager_interfaces/msg/localization_pose.hpp"
 #include "slam_manager_interfaces/msg/map_keyframe.hpp"
+#include "slam_manager_interfaces/msg/navigation_obstacle_state.hpp"
 #include "slam_manager_interfaces/msg/navigation_node.hpp"
 #include "slam_manager_interfaces/msg/robot_pose.hpp"
 #include "slam_manager_interfaces/msg/runtime_state.hpp"
@@ -57,6 +59,9 @@ class SlamManagerNode : public rclcpp::Node {
   using LocalizationPose = slam_manager_interfaces::msg::LocalizationPose;
   using MapKeyframe = slam_manager_interfaces::msg::MapKeyframe;
   using NavigateToPose = slam_manager_interfaces::action::NavigateToPose;
+  using NavigationObstacleState =
+      slam_manager_interfaces::msg::NavigationObstacleState;
+  using AvoidanceState = navigation_interfaces::msg::AvoidanceState;
   using RobotPose = slam_manager_interfaces::msg::RobotPose;
   using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
   using StartLocalization =
@@ -166,6 +171,8 @@ class SlamManagerNode : public rclcpp::Node {
   void handlePostureState(bool stopped);
   void setPostureStop(bool stopped);
   void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr message);
+  void avoidanceStateCallback(const AvoidanceState::ConstSharedPtr message);
+  void publishNavigationObstacleState();
   bool setRobotMode(int32_t mode, std::string &message);
 
   // 算法内部结果及协议2.10～2.12数据Topic的转发回调。
@@ -252,6 +259,15 @@ class SlamManagerNode : public rclcpp::Node {
   std::mutex runtime_state_mutex_;
   int32_t error_code_{RuntimeState::NO_ERROR};
   std::string error_message_;
+  bool runtime_state_published_{false};
+  uint8_t published_runtime_state_{RuntimeState::IDLE};
+  int32_t published_runtime_error_code_{RuntimeState::NO_ERROR};
+  std::string published_runtime_error_message_;
+
+  std::mutex navigation_obstacle_state_mutex_;
+  bool obstacle_stopped_{false};
+  uint8_t avoidance_state_{AvoidanceState::IDLE};
+  int published_navigation_obstacle_state_{-1};
 
   rclcpp::CallbackGroup::SharedPtr worker_callback_group_;
   rclcpp::CallbackGroup::SharedPtr lifecycle_control_callback_group_;
@@ -284,6 +300,8 @@ class SlamManagerNode : public rclcpp::Node {
       start_localization_action_;
 
   rclcpp::Publisher<RuntimeState>::SharedPtr runtime_state_pub_;
+  rclcpp::Publisher<NavigationObstacleState>::SharedPtr
+      navigation_obstacle_state_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr posture_stop_pub_;
   rclcpp::Publisher<MapKeyframe>::SharedPtr keyframe_cloud_pub_;
   rclcpp::Publisher<RobotPose>::SharedPtr current_pose_pub_;
@@ -301,6 +319,7 @@ class SlamManagerNode : public rclcpp::Node {
       relocalization_result_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr navigation_state_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
+  rclcpp::Subscription<AvoidanceState>::SharedPtr avoidance_state_sub_;
 };
 
 }  // namespace slam_manager
