@@ -81,7 +81,7 @@ def generate_launch_description():
 
     fastlio_localization = Node(
         package="fastlio_localization",
-        executable="fastlio_localization_ros2",
+        executable="fastlio_localization_node",
         prefix=['stdbuf -o L'],
         output='screen',
         parameters=[

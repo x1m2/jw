@@ -105,7 +105,7 @@ endif()
 
 ament_package()
 
-add_executable(fastlio_localization_ros2
+add_executable(fastlio_localization_node
   src/main.cpp
   src/ros2_main.cpp
   include/ikd-Tree/ikd_Tree.cpp
@@ -114,17 +114,17 @@ add_executable(fastlio_localization_ros2
   include/system/frontend/ImuProcessor.cpp
   include/system/frontend/use-ikfom.cpp
   include/system/System.hpp)
-target_link_libraries(fastlio_localization_ros2 stdc++fs ${PCL_LIBRARIES})
+target_link_libraries(fastlio_localization_node stdc++fs ${PCL_LIBRARIES})
 if(BUILD_CUDA)
-  target_link_libraries(fastlio_localization_ros2 ${gpu_bbs3d_LIBRARY})
+  target_link_libraries(fastlio_localization_node ${gpu_bbs3d_LIBRARY})
 else()
-  target_link_libraries(fastlio_localization_ros2 ${cpu_bbs3d_LIBRARY})
+  target_link_libraries(fastlio_localization_node ${cpu_bbs3d_LIBRARY})
 endif()
-ament_target_dependencies(fastlio_localization_ros2
+ament_target_dependencies(fastlio_localization_node
   rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 slam_manager_interfaces
   slam_manager)
 
-install(TARGETS fastlio_localization_ros2
+install(TARGETS fastlio_localization_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch config rviz_cfg

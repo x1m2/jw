@@ -193,7 +193,7 @@ kill_node_executables() {
     kill_by_pattern "pgo_sc" "pgo_sc executable"
     kill_by_pattern "topology_map_generator" "topology_map_generator executable"
     kill_by_pattern "rviz_topology_editor_node" "rviz_topology_editor executable"
-    kill_by_pattern "fastlio_localization_ros2" "fastlio_localization executable"
+    kill_by_pattern "fastlio_localization_node" "fastlio_localization executable"
     kill_by_pattern "obstacle_stop_node" "obstacle_stop executable"
     kill_by_pattern "costmap_2d" "costmap_2d executable"
     kill_by_pattern "global_path_planner" "global_path_planner executable"
