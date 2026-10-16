@@ -131,8 +131,7 @@ void LaserMappingNode::readParameters() {
   this->get_parameter_or<vector<double>>("lidar_to_base_R", lidar_to_base_R,
                                          vector<double>(3, 0.0));
 
-  RCLCPP_INFO(this->get_logger(),
-              "lidar_to_base_R: [%.6f, %.6f, %.6f]",
+  RCLCPP_INFO(this->get_logger(), "lidar_to_base_R: [%.6f, %.6f, %.6f]",
               lidar_to_base_R[0], lidar_to_base_R[1], lidar_to_base_R[2]);
 
   RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
@@ -208,7 +207,9 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
       imu_topic, 200000,
       std::bind(&LaserMappingNode::imu_cbk, this, std::placeholders::_1));
-
+  sub_rebuild_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+      "/fastlio/reconstruct_ikdtree", rclcpp::QoS(1).reliable(),
+      std::bind(&LaserMappingNode::rebuild_cbk, this, std::placeholders::_1));
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
   pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 20);
@@ -386,37 +387,31 @@ void LaserMappingNode::imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
 
   double timestamp = get_time_sec(msg->header.stamp);
 
-  // 1. 检查 IMU 原始 stamp / 修正后 stamp / wall time 是否异常
   {
-    static double last_raw_stamp_check = -1.0;
-    static double last_stamp_check = -1.0;
-    static double last_wall_check = -1.0;
+    using SteadyClock = std::chrono::steady_clock;
+    static auto last_callback_time = SteadyClock::time_point{};
+    static auto last_warning_time = SteadyClock::time_point{};
+    static double last_raw_stamp = -1.0;
 
-    double wall_now = this->now().seconds();
-
-    if (last_raw_stamp_check > 0.0 && last_stamp_check > 0.0 &&
-        last_wall_check > 0.0) {
-      double raw_dt = raw_timestamp - last_raw_stamp_check;
-      double stamp_dt = timestamp - last_stamp_check;
-      double wall_dt = wall_now - last_wall_check;
-
-      if (std::abs(raw_dt) > 0.02 || std::abs(stamp_dt) > 0.02 ||
-          wall_dt > 0.08) {
-        RCLCPP_ERROR(
-            this->get_logger(),
-            "[IMU_GAP_CHECK] imu gap abnormal. "
-            "raw_dt=%.6f, stamp_dt=%.6f, wall_dt=%.6f, "
-            "raw_stamp=%.6f, stamp=%.6f, wall=%.6f, "
-            "time_diff_lidar_to_imu=%.6f, timediff_lidar_wrt_imu=%.6f, "
-            "time_sync_en=%d",
-            raw_dt, stamp_dt, wall_dt, raw_timestamp, timestamp, wall_now,
-            time_diff_lidar_to_imu, timediff_lidar_wrt_imu, time_sync_en);
+    const auto callback_now = SteadyClock::now();
+    if (last_callback_time != SteadyClock::time_point{}) {
+      const double callback_dt =
+          std::chrono::duration<double>(callback_now - last_callback_time)
+              .count();
+      const bool warning_due =
+          last_warning_time == SteadyClock::time_point{} ||
+          callback_now - last_warning_time >= std::chrono::seconds(1);
+      if (callback_dt > 0.08 && warning_due) {
+        const double imu_dt = raw_timestamp - last_raw_stamp;
+        RCLCPP_WARN(this->get_logger(),
+                    "[IMU_CALLBACK_DELAY] callback_dt=%.1f ms, "
+                    "imu_dt=%.1f ms",
+                    callback_dt * 1e3, imu_dt * 1e3);
+        last_warning_time = callback_now;
       }
     }
-
-    last_raw_stamp_check = raw_timestamp;
-    last_stamp_check = timestamp;
-    last_wall_check = wall_now;
+    last_callback_time = callback_now;
+    last_raw_stamp = raw_timestamp;
   }
   mtx_buffer.lock();
 
@@ -444,8 +439,85 @@ void LaserMappingNode::imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in) {
   // sig_buffer.notify_all();
 }
 
+void LaserMappingNode::rebuild_cbk(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+  if (msg->header.frame_id != "odom") {
+    RCLCPP_ERROR(this->get_logger(),
+                 "Reject ikd-tree rebuild in frame '%s'; expected odom",
+                 msg->header.frame_id.c_str());
+    return;
+  }
+
+  PointCloudXYZI::Ptr cloud(new PointCloudXYZI());
+  pcl::fromROSMsg(*msg, *cloud);
+  if (cloud->empty()) {
+    RCLCPP_WARN(this->get_logger(), "Ignore empty ikd-tree rebuild cloud");
+    return;
+  }
+
+  pending_rebuild_ = cloud;
+  RCLCPP_WARN(this->get_logger(), "Queued ikd-tree rebuild with %zu points",
+              cloud->size());
+}
+
+void LaserMappingNode::rebuild_if_pending() {
+  if (!pending_rebuild_ || pending_rebuild_->empty()) {
+    return;
+  }
+  PointCloudXYZI::Ptr rebuild_cloud;
+  rebuild_cloud.swap(pending_rebuild_);
+
+  if (!output_origin_initialized_) {
+    RCLCPP_WARN(this->get_logger(),
+                "Defer ikd-tree rebuild until output origin exists");
+    pending_rebuild_ = rebuild_cloud;
+    return;
+  }
+
+  const auto total_begin = std::chrono::steady_clock::now();
+  const Eigen::Matrix4d T_out_odom = T_output_origin_inv_.inverse();
+  PointVector rebuild_points;
+  rebuild_points.reserve(rebuild_cloud->size());
+  for (const auto &point : rebuild_cloud->points) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+        !std::isfinite(point.z)) {
+      continue;
+    }
+    const Eigen::Vector4d p_out(point.x, point.y, point.z, 1.0);
+    const Eigen::Vector4d p_odom = T_out_odom * p_out;
+    PointType converted = point;
+    converted.x = static_cast<float>(p_odom.x());
+    converted.y = static_cast<float>(p_odom.y());
+    converted.z = static_cast<float>(p_odom.z());
+    rebuild_points.push_back(converted);
+  }
+
+  if (rebuild_points.empty()) {
+    RCLCPP_ERROR(this->get_logger(),
+                 "Reject ikd-tree rebuild: no finite points");
+    return;
+  }
+
+  const int old_size = ikdtree.validnum();
+  const auto rebuild_begin = std::chrono::steady_clock::now();
+  ikdtree.reconstruct(rebuild_points);
+  const auto rebuild_end = std::chrono::steady_clock::now();
+
+  const double total_ms =
+      std::chrono::duration<double, std::milli>(rebuild_end - total_begin)
+          .count();
+  const double rebuild_ms =
+      std::chrono::duration<double, std::milli>(rebuild_end - rebuild_begin)
+          .count();
+  RCLCPP_WARN(this->get_logger(),
+              "[IKDTREE_REBUILD] points=%zu old=%d rebuild=%.1fms "
+              "total=%.1fms",
+              rebuild_points.size(), old_size, rebuild_ms, total_ms);
+}
+
 void LaserMappingNode::timer_callback() {
   // 将激光雷达点云数据和IMU数据从缓存队列中取出，进行时间对齐，并保存到Measures中
+  rebuild_if_pending();
 
   static double last_timer_begin = 0.0;
   double timer_begin = omp_get_wtime();

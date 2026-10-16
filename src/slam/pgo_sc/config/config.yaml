@@ -7,21 +7,26 @@
       package_path: "/robotfs/data/slam_data/map"
     keyframe:
       keyframe_threshold: 1.5                     # unit [meter] every this distance, generate keyframe
+      keyframe_angle_threshold: 0.2               # unit [radian], create a keyframe when roll, pitch, or yaw exceeds this value
       num_submap_keyframes: 5                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
       enable_submap_matching: false               # If it is set to be `true`, submap-level (coarse-to-)fine alignment will be performed
+      voxel_resolution: 0.1                       # downsample dense /cloud_registered before storing it as a backend keyframe
       # note: without Quatro, anyway scan-to-submap matching is performed, as that shows better performance
 
     loop:
       robust_kernel_scale: 1.0                    # Cauchy robust-kernel scale for loop factors
       history_keyframe_search_xy_radius: 5.0      # horizontal radius used to tolerate odometry drift
       history_keyframe_search_z_tolerance: 2.5    # reject candidates on another floor
-      history_keyframe_min_index_diff: 20         # exclude the latest 20 keyframes, same as ScanContext
+      history_keyframe_min_index_diff: 30         # exclude the latest 20 keyframes, same as ScanContext
 
     # Add a Z factor after the locked height differs by this distance.
     add_height_factor_threshold: 0.1
 
     quatro_nano_gicp_voxel_resolution: 0.3        # voxel resolution to use Quatro and Nano-GICP matching
     save_voxel_resolution: 0.3                    # voxel resolution to save map in .pcd format
+    ikdtree_rebuild_enable: true                  # publish a corrected map to rebuild the FAST-LIO ikd-tree after loop closure
+    ikdtree_rebuild_voxel_resolution: 0.1         # voxel resolution for rebuilding the FAST-LIO ikd-tree after loop closure
+    ikdtree_reconstruct_keyframe_num: 10          # number of latest optimized keyframes used to rebuild the FAST-LIO ikd-tree
     scancontext_max_correspondence_distance: 35.0 # inactive while ScanContext candidate detection is disabled
 
     nano_gicp:                                    # all values are from Nano-GICP official github (Direct LiDAR Odometry)

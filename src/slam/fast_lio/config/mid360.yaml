@@ -5,7 +5,7 @@
         max_iteration: 3
         filter_size_surf: 0.5           # 前帧点云的体素降采样大小
         filter_size_map: 0.3            # ikdtree 地图体素分辨率  默认值:0.5
-        cube_side_length: 1000.0        # 局部地图立方体区域的边长
+        cube_side_length: 400.0         # 局部地图立方体区域的边长；det_range=100m时需大于300m
         runtime_pos_log_enable: false
         align_gravity: true
         map_file_path: "./test.pcd"
@@ -39,9 +39,9 @@
         publish:
             path_en: true                # true: publish Path
             effect_map_en: false         # true: publish Effects
-            map_en: true                 # true: publish Map cloud
+            map_en: false                 # true: publish Map cloud
             scan_publish_en:  true       # false: close all the point cloud output
-            dense_publish_en: false      # false: low down the points number in a global-frame point clouds scan.
+            dense_publish_en: true       # true: publish feats_undistort on /cloud_registered for the PGO backend
             scan_bodyframe_pub_en: true  # true: output the point cloud scans in IMU-body-frame
 
         pcd_save:

@@ -15,12 +15,12 @@ struct PosePcd {
   int idx_;
   bool processed_ = false;
   PosePcd() = default;
-  PosePcd(const nav_msgs::msg::Odometry& odom_in,
-          const sensor_msgs::msg::PointCloud2& pcd_in, const int& idx_in);
+  PosePcd(const nav_msgs::msg::Odometry& odom_in, const int& idx_in);
+  void setPointCloud(const sensor_msgs::msg::PointCloud2& pcd_in,
+                     double voxel_resolution);
 };
 
 inline PosePcd::PosePcd(const nav_msgs::msg::Odometry& odom_in,
-                        const sensor_msgs::msg::PointCloud2& pcd_in,
                         const int& idx_in) {
   const Eigen::Quaterniond q(
       odom_in.pose.pose.orientation.w, odom_in.pose.pose.orientation.x,
@@ -31,14 +31,23 @@ inline PosePcd::PosePcd(const nav_msgs::msg::Odometry& odom_in,
   pose_eig_(1, 3) = odom_in.pose.pose.position.y;
   pose_eig_(2, 3) = odom_in.pose.pose.position.z;
   pose_corrected_eig_ = pose_eig_;
-  pcl::PointCloud<PointType> tmp_pcd;
-  pcl::fromROSMsg(pcd_in, tmp_pcd);
-  // pcd_in: /cloud_registered，odom 坐标系点云
-  // pose_eig_: odom -> base_link
-  // pcd_: base_link 局部坐标系点云
-  pcd_ = transformPcd(tmp_pcd, pose_eig_.inverse());
   timestamp_ = rclcpp::Time(odom_in.header.stamp).seconds();
   idx_ = idx_in;
+}
+
+inline void PosePcd::setPointCloud(
+    const sensor_msgs::msg::PointCloud2& pcd_in, double voxel_resolution) {
+  pcl::PointCloud<PointType> tmp_pcd;
+  pcl::fromROSMsg(pcd_in, tmp_pcd);
+  pcl::PointCloud<PointType>::Ptr local_pcd(
+      new pcl::PointCloud<PointType>(
+          transformPcd(tmp_pcd, pose_eig_.inverse())));
+
+  pcl::VoxelGrid<PointType> voxel_filter;
+  voxel_filter.setLeafSize(voxel_resolution, voxel_resolution,
+                           voxel_resolution);
+  voxel_filter.setInputCloud(local_pcd);
+  voxel_filter.filter(pcd_);
 }
 
 #endif  // PGO_SC__POSE_PCD_HPP_

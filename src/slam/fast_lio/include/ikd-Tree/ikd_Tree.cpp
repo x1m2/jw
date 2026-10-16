@@ -13,7 +13,6 @@ KD_TREE<PointType>::KD_TREE(float delete_param, float balance_param, float box_l
     balance_criterion_param = balance_param;
     downsample_size = box_length;
     Rebuild_Logger.clear();
-    termination_flag = false;
     start_thread();
 }
 
@@ -198,6 +197,7 @@ void KD_TREE<PointType>::start_thread()
     pthread_mutex_init(&points_deleted_rebuild_mutex_lock, NULL);
     pthread_mutex_init(&working_flag_mutex, NULL);
     pthread_mutex_init(&search_flag_mutex, NULL);
+    termination_flag = false;
     pthread_create(&rebuild_thread, NULL, multi_thread_ptr, (void *)this);
     printf("Multi thread started \n");
 }
@@ -408,8 +408,16 @@ void KD_TREE<PointType>::run_operation(KD_TREE_NODE **root, Operation_Logger_Typ
 template <typename PointType>
 void KD_TREE<PointType>::Build(PointVector point_cloud)
 {
-    if (Root_Node != nullptr)
+    if (STATIC_ROOT_NODE != nullptr)
     {
+        // Root_Node aliases STATIC_ROOT_NODE->left_son_ptr. Delete from the
+        // sentinel so both the tree and its sentinel are released together.
+        delete_tree_nodes(&STATIC_ROOT_NODE);
+        Root_Node = nullptr;
+    }
+    else if (Root_Node != nullptr)
+    {
+        // Keep this fallback for trees created by older/inconsistent callers.
         delete_tree_nodes(&Root_Node);
     }
     if (point_cloud.size() == 0)
@@ -420,6 +428,28 @@ void KD_TREE<PointType>::Build(PointVector point_cloud)
     Update(STATIC_ROOT_NODE);
     STATIC_ROOT_NODE->TreeSize = 0;
     Root_Node = STATIC_ROOT_NODE->left_son_ptr;
+}
+
+template <typename PointType>
+void KD_TREE<PointType>::reconstruct(PointVector &point_cloud)
+{
+    stop_thread();
+    Rebuild_Ptr = nullptr;
+    rebuild_flag = false;
+    search_mutex_counter = 0;
+    Treesize_tmp = 0;
+    Validnum_tmp = 0;
+    alpha_bal_tmp = 0.5;
+    alpha_del_tmp = 0.0;
+    PointVector().swap(PCL_Storage);
+    PointVector().swap(Rebuild_PCL_Storage);
+    PointVector().swap(Downsample_Storage);
+    PointVector().swap(Points_deleted);
+    PointVector().swap(Multithread_Points_deleted);
+    Rebuild_Logger.clear();
+
+    Build(point_cloud);
+    start_thread();
 }
 
 template <typename PointType>

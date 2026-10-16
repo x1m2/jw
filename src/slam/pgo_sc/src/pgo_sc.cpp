@@ -28,10 +28,15 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->declare_parameter<double>("basic.loop_update_hz", 1.0);
   this->declare_parameter<double>("basic.vis_hz", 0.5);
   this->declare_parameter<std::string>("basic.package_path", "");
+  this->declare_parameter<double>("keyframe.voxel_resolution", 0.1);
   this->declare_parameter<double>("save_voxel_resolution", 0.3);
+  this->declare_parameter<bool>("ikdtree_rebuild_enable", true);
+  this->declare_parameter<double>("ikdtree_rebuild_voxel_resolution", 0.3);
+  this->declare_parameter<int>("ikdtree_reconstruct_keyframe_num", 10);
   this->declare_parameter<double>("quatro_nano_gicp_voxel_resolution", 0.3);
 
   this->declare_parameter<double>("keyframe.keyframe_threshold", 1.0);
+  this->declare_parameter<double>("keyframe.keyframe_angle_threshold", 0.2);
   this->declare_parameter<int>("keyframe.num_submap_keyframes", 5);
   this->declare_parameter<bool>("keyframe.enable_submap_matching", false);
 
@@ -82,12 +87,20 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->get_parameter("basic.package_path", package_path_);
   this->get_parameter("basic.loop_update_hz", loop_update_hz);
   this->get_parameter("basic.vis_hz", vis_hz);
+  this->get_parameter("keyframe.voxel_resolution", keyframe_voxel_res_);
 
   this->get_parameter("save_voxel_resolution", voxel_res_);
+  this->get_parameter("ikdtree_rebuild_enable", ikdtree_rebuild_enable_);
+  this->get_parameter("ikdtree_rebuild_voxel_resolution",
+                      ikdtree_rebuild_voxel_res_);
+  this->get_parameter("ikdtree_reconstruct_keyframe_num",
+                      ikdtree_reconstruct_keyframe_num_);
+
   this->get_parameter("quatro_nano_gicp_voxel_resolution",
                       lc_config.voxel_res_);
 
   this->get_parameter("keyframe.keyframe_threshold", keyframe_thr_);
+  this->get_parameter("keyframe.keyframe_angle_threshold", keyframe_angle_thr_);
   this->get_parameter("keyframe.num_submap_keyframes", sub_key_num_);
   lc_config.num_submap_keyframes_ = sub_key_num_;
   this->get_parameter("keyframe.enable_submap_matching",
@@ -167,6 +180,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   corrected_pcd_map_pub_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>("/corrected_map",
                                                             qos_latched);
+  ikdtree_rebuild_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/fastlio/reconstruct_ikdtree", rclcpp::QoS(1).reliable());
   corrected_current_pcd_pub_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/corrected_current_pcd", qos_latched);
@@ -192,8 +207,8 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
           "/pgo/z_constraint_state",
           rclcpp::QoS(1).reliable().transient_local());
 
-  loop_callback_group_ = this->create_callback_group(
-      rclcpp::CallbackGroupType::MutuallyExclusive);
+  loop_callback_group_ =
+      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   /* subscribers */
   sub_odom_ =
@@ -287,8 +302,8 @@ void PgoSc::odomPcdCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &pcd_msg) {
   // 保存上一帧 odom，用于计算 delta
   Eigen::Matrix4d last_odom_tf = current_frame_.pose_eig_;
-  current_frame_ =
-      PosePcd(*odom_msg, *pcd_msg, current_keyframe_idx_);  // 构建当前帧
+  // 先只构建当前位姿。点云转换和降采样在确认关键帧后执行。
+  current_frame_ = PosePcd(*odom_msg, current_keyframe_idx_);
   // keyframes_[i].pcd_是局部点云，pose_eig_是odom坐标系下的位姿
   {
     // 提取旋转矩阵
@@ -371,17 +386,16 @@ void PgoSc::odomPcdCallback(
       publishZConstraintState(true, *locked_height_);
     }
   }
-  // 发布当前校正点云
-  corrected_current_pcd_pub_->publish(pclToPclRos(
-      transformPcd(current_frame_.pcd_, current_frame_.pose_corrected_eig_),
-      map_frame_));
-
   // ==== 初始化关键帧（只执行一次） ====
   if (!is_initialized_) {
+    current_frame_.setPointCloud(*pcd_msg, keyframe_voxel_res_);
     {
       std::lock_guard<std::mutex> lock(keyframes_mutex_);
       keyframes_.push_back(current_frame_);
     }
+    corrected_current_pcd_pub_->publish(pclToPclRos(
+        transformPcd(current_frame_.pcd_, current_frame_.pose_corrected_eig_),
+        map_frame_));
     publishKeyframe(current_frame_);
     updateOdomsAndPaths(current_frame_);
 
@@ -410,12 +424,18 @@ void PgoSc::odomPcdCallback(
     std::lock_guard<std::mutex> lock(keyframes_mutex_);
     is_keyframe = checkIfKeyframe(current_frame_, keyframes_.back());
     if (is_keyframe) {
-      pose_from =
-          poseEigToGtsamPose(keyframes_.back().pose_corrected_eig_);
-      keyframes_.push_back(current_frame_);
+      pose_from = poseEigToGtsamPose(keyframes_.back().pose_corrected_eig_);
     }
   }
   if (is_keyframe) {
+    current_frame_.setPointCloud(*pcd_msg, keyframe_voxel_res_);
+    {
+      std::lock_guard<std::mutex> lock(keyframes_mutex_);
+      keyframes_.push_back(current_frame_);
+    }
+    corrected_current_pcd_pub_->publish(pclToPclRos(
+        transformPcd(current_frame_.pcd_, current_frame_.pose_corrected_eig_),
+        map_frame_));
     publishKeyframe(current_frame_);
 
     // ==== 3. 添加到图优化 ====
@@ -841,6 +861,93 @@ void PgoSc::optimizeGraph(bool is_loop, bool is_height_constrained) {
           gtsamPoseToPoseEig(new_estimate.at<gtsam::Pose3>(i));
     }
   }
+
+  if (is_loop && ikdtree_rebuild_enable_) {
+    publishIkdtreeRebuildMap();
+  }
+}
+
+void PgoSc::publishIkdtreeRebuildMap() {
+  if (ikdtree_rebuild_pub_->get_subscription_count() == 0U) {
+    RCLCPP_WARN(this->get_logger(),
+                "Skip ikd-tree rebuild publish: FAST-LIO has no subscriber");
+    return;
+  }
+
+  const auto build_begin = std::chrono::steady_clock::now();
+  pcl::PointCloud<PointType>::Ptr corrected_map_in_odom(
+      new pcl::PointCloud<PointType>());
+  Eigen::Matrix4d odom_from_map = Eigen::Matrix4d::Identity();
+  std::size_t keyframe_count = 0U;
+
+  {
+    std::lock_guard<std::mutex> lock(keyframes_mutex_);
+    if (keyframes_.empty()) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Skip ikd-tree rebuild publish: no keyframes");
+      return;
+    }
+
+    const PosePcd &latest_keyframe = keyframes_.back();
+    const Eigen::Matrix4d map_from_odom = latest_keyframe.pose_corrected_eig_ *
+                                          latest_keyframe.pose_eig_.inverse();
+    odom_from_map = map_from_odom.inverse();
+
+    const std::size_t reconstruct_count =
+        static_cast<std::size_t>(ikdtree_reconstruct_keyframe_num_);
+    const std::size_t start_index = keyframes_.size() > reconstruct_count
+                                        ? keyframes_.size() - reconstruct_count
+                                        : 0U;
+
+    std::size_t reserve_size = 0U;
+    for (std::size_t i = start_index; i < keyframes_.size(); ++i) {
+      reserve_size += keyframes_[i].pcd_.size();
+    }
+    corrected_map_in_odom->reserve(reserve_size);
+
+    for (std::size_t i = start_index; i < keyframes_.size(); ++i) {
+      const auto &keyframe = keyframes_[i];
+      const Eigen::Matrix4d corrected_pose_in_odom =
+          odom_from_map * keyframe.pose_corrected_eig_;
+      *corrected_map_in_odom +=
+          transformPcd(keyframe.pcd_, corrected_pose_in_odom);
+    }
+    keyframe_count = keyframes_.size() - start_index;
+  }
+
+  if (corrected_map_in_odom->empty()) {
+    RCLCPP_WARN(this->get_logger(),
+                "Skip ikd-tree rebuild publish: corrected map is empty");
+    return;
+  }
+
+  const std::size_t raw_point_count = corrected_map_in_odom->size();
+  pcl::PointCloud<PointType>::Ptr voxelized_map(
+      new pcl::PointCloud<PointType>());
+  pcl::VoxelGrid<PointType> voxel_filter;
+  voxel_filter.setLeafSize(ikdtree_rebuild_voxel_res_,
+                           ikdtree_rebuild_voxel_res_,
+                           ikdtree_rebuild_voxel_res_);
+  voxel_filter.setInputCloud(corrected_map_in_odom);
+  voxel_filter.filter(*voxelized_map);
+  if (voxelized_map->empty()) {
+    RCLCPP_WARN(this->get_logger(),
+                "Skip ikd-tree rebuild publish: voxelized map is empty");
+    return;
+  }
+
+  sensor_msgs::msg::PointCloud2 message = pclToPclRos(*voxelized_map, "odom");
+  message.header.stamp = this->now();
+  ikdtree_rebuild_pub_->publish(message);
+
+  const double build_ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - build_begin)
+                              .count();
+  RCLCPP_WARN(this->get_logger(),
+              "[IKDTREE_REBUILD_PUBLISH] keyframes=%zu raw_points=%zu "
+              "voxel_points=%zu voxel=%.3f m build=%.3f ms",
+              keyframe_count, raw_point_count, voxelized_map->size(),
+              ikdtree_rebuild_voxel_res_, build_ms);
 }
 
 void PgoSc::publishKeyframe(const PosePcd &keyframe) {
@@ -1147,8 +1254,20 @@ visualization_msgs::msg::Marker PgoSc::getLoopMarkers(
 
 bool PgoSc::checkIfKeyframe(const PosePcd &pose_pcd_in,
                             const PosePcd &latest_pose_pcd) {
-  return keyframe_thr_ <
-         (latest_pose_pcd.pose_corrected_eig_.block<3, 1>(0, 3) -
-          pose_pcd_in.pose_corrected_eig_.block<3, 1>(0, 3))
-             .norm();
+  const Eigen::Matrix4d relative_pose =
+      latest_pose_pcd.pose_corrected_eig_.inverse() *
+      pose_pcd_in.pose_corrected_eig_;
+  const double translation = relative_pose.block<3, 1>(0, 3).norm();
+
+  const Eigen::Quaterniond q(relative_pose.block<3, 3>(0, 0));
+  tf2::Quaternion tf_q(q.x(), q.y(), q.z(), q.w());
+  double roll = 0.0;
+  double pitch = 0.0;
+  double yaw = 0.0;
+  tf2::Matrix3x3(tf_q).getRPY(roll, pitch, yaw);
+
+  return translation >= keyframe_thr_ ||
+         std::abs(roll) >= keyframe_angle_thr_ ||
+         std::abs(pitch) >= keyframe_angle_thr_ ||
+         std::abs(yaw) >= keyframe_angle_thr_;
 }

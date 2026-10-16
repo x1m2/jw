@@ -322,6 +322,7 @@ public:
     }
     void InitializeKDTree(float delete_param = 0.5, float balance_param = 0.7, float box_length = 0.2);
     int size();
+    void reconstruct(PointVector &point_cloud);
     int validnum();
     void root_alpha(float &alpha_bal, float &alpha_del);
     void Build(PointVector point_cloud);

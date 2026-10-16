@@ -50,6 +50,9 @@ class LaserMappingNode : public rclcpp::Node {
   void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg);
   void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg);
   void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in);
+  void rebuild_cbk(
+      const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
+  void rebuild_if_pending();
   void timer_callback();
   void map_publish_callback();
   void map_save_callback(std_srvs::srv::Trigger::Request::ConstSharedPtr req,
@@ -144,6 +147,8 @@ class LaserMappingNode : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
       sub_pcl_livox_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
+      sub_rebuild_;
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -215,6 +220,7 @@ class LaserMappingNode : public rclcpp::Node {
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   deque<double> time_buffer;
   deque<PointCloudXYZI::Ptr> lidar_buffer;
+  PointCloudXYZI::Ptr pending_rebuild_;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
 
   PointCloudXYZI::Ptr pcl_wait_pub;

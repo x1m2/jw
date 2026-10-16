@@ -107,8 +107,13 @@ class PgoSc : public rclcpp::Node {
   gtsam::Values init_esti_;
   gtsam::Values corrected_esti_;
   double keyframe_thr_;
+  double keyframe_angle_thr_;
   double loop_robust_kernel_scale_;
   double voxel_res_;
+  double keyframe_voxel_res_;
+  bool ikdtree_rebuild_enable_;
+  double ikdtree_rebuild_voxel_res_;
+  int ikdtree_reconstruct_keyframe_num_;
   int sub_key_num_;
   int last_loop_src_idx_ = -1;
   std::deque<LoopConstraint> pending_loop_constraints_;
@@ -138,6 +143,8 @@ class PgoSc : public rclcpp::Node {
       corrected_current_pcd_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       corrected_pcd_map_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
+      ikdtree_rebuild_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
       loop_detection_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
@@ -179,6 +186,7 @@ class PgoSc : public rclcpp::Node {
   visualization_msgs::msg::Marker getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
   bool addHeightFactor(const gtsam::Pose3 &pose, size_t index);
+  void publishIkdtreeRebuildMap();
   void publishZConstraintState(bool locked, double height);
   void optimizeGraph(bool is_loop, bool is_height_constrained = false);
   void publishKeyframe(const PosePcd &keyframe);
