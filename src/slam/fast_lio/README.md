@@ -112,10 +112,10 @@ Connect to your PC to Livox LiDAR by following  [Livox-ros-driver2 installation]
 ```bash
 cd <ros2_ws>
 . install/setup.bash # use setup.zsh if use zsh
-ros2 launch fast_lio mapping.launch.py config_file:=mid360.yaml
+ros2 launch fast_lio mapping.launch.py config_file:=mapping_mid360s.yaml
 ```
 
-Use `mid360.yaml` for MID360 or `robosense_airy.yaml` for RoboSense Airy.
+Use `mapping_mid360s.yaml` for MID360 or `mapping_airy96.yaml` for RoboSense Airy.
 
 Launch livox ros driver. Use MID360 as an example.
 
@@ -174,7 +174,7 @@ rosbag play YOUR_DOWNLOADED.bag
 ### 4.3 RoboSense Airy (ROS 2)
 
 ```bash
-ros2 launch fast_lio mapping.launch.py config_file:=robosense_airy.yaml
+ros2 launch fast_lio mapping.launch.py config_file:=mapping_airy96.yaml
 ```
 
 This profile uses `preprocess.lidar_type: 5` and subscribes to `/rslidar_points`
@@ -184,7 +184,7 @@ seconds). The handler converts each point timestamp to milliseconds relative
 to the first point in its scan for IMU motion compensation. A plain XYZI cloud
 cannot provide that timing. Configure the driver to publish XYZIRT and check
 its `ts_first_point` setting. Confirm the IMU topic and LiDAR-to-IMU extrinsics
-in `config/robosense_airy.yaml` against the connected sensor before mapping.
+in `config/mapping_airy96.yaml` against the connected sensor before mapping.
 
 
 ## 5.Implementation on UAV

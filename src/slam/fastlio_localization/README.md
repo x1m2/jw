@@ -26,7 +26,7 @@ The ROS 2 build depends on `livox_ros_driver2`.
 
 ### ROS 2 RoboSense Airy offline localization
 
-`config/airy96_relocalization.yaml` subscribes to `/rslidar_points` and
+`config/reloc_airy96.yaml` subscribes to `/rslidar_points` and
 `/rslidar_imu_data`. Its `lidar_type: 5` selects the Airy `PointCloud2` input
 (`x/y/z/intensity`: float32, `ring`: uint16, `timestamp`: float64 seconds).
 The same node performs initial BBS3D relocalization and then continuous
@@ -39,7 +39,7 @@ contains the P2 robot calibration.
 
 ```bash
 ros2 launch fastlio_localization run_launch.py \
-  config_file:=airy96_relocalization.yaml \
+  config_file:=reloc_airy96.yaml \
   map_path:=/path/to/map \
   robot_param_file:=/path/to/airy_robot_param.yaml
 ros2 bag play /path/to/airy96_fastlio_20250604_222402 --rate 0.5

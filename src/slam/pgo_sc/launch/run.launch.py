@@ -17,7 +17,7 @@ def generate_launch_description():
     config_file_path = os.path.join(
         get_package_share_directory('pgo_sc'),
         'config',
-        'config.yaml'
+        'pgo_sc.yaml'
     )
 
     pgo_use_rviz_arg = DeclareLaunchArgument(

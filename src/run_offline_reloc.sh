@@ -57,13 +57,13 @@ done
 
 case "${LIDAR_TYPE}" in
     airy)
-        CONFIG_FILE=airy96_relocalization.yaml
+        CONFIG_FILE=reloc_airy96.yaml
         LIDAR_TOPIC=/rslidar_points
         IMU_TOPIC=/rslidar_imu_data
         CLOUD_MSG_TYPE=sensor_msgs/msg/PointCloud2
         ;;
     mid360)
-        CONFIG_FILE=ros2_param.yaml
+        CONFIG_FILE=reloc_mid360s.yaml
         LIDAR_TOPIC=/livox/lidar
         IMU_TOPIC=/livox/imu
         CLOUD_MSG_TYPE=livox_ros_driver2/msg/CustomMsg

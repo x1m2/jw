@@ -54,7 +54,7 @@ def generate_launch_description():
         description='Yaml config file path'
     )
     declare_config_file_cmd = DeclareLaunchArgument(
-        'config_file', default_value='mid360.yaml',
+        'config_file', default_value='mapping_mid360s.yaml',
         description='Config file'
     )
     declare_robot_param_file_cmd = DeclareLaunchArgument(
