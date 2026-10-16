@@ -220,7 +220,7 @@ NodeManager管理Source实例，包括创建、初始化、启动、停止Source
 ### 3.1 NodeManager::init()
 
 init()初始化NodeManger实例。
-+ 从config.yaml文件得到用户配置参数
++ 从airy96_driver.yaml文件得到用户配置参数
   + 本地变量`msg_source`，数据源类型
   + 本地变量`send_point_cloud_ros`， 是否在ROS话题发送点云。
   + 本地变量`send_packet_ros`，是否在ROS话题发送MSOP/DIFOP packet，

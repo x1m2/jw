@@ -28,7 +28,7 @@ RoboSense雷达可以工作在如下的场景。
 + 雷达发送Packet到 `255.255.255.255` : `6699`, rslidar_sdk绑定到主机的端口 `6699`.
 ![](./img/07_01_broadcast.png)
 
-如下是配置`config.yaml`的方式。
+如下是配置`airy96_driver.yaml`的方式。
 
 ```yaml
 common:
@@ -54,7 +54,7 @@ lidar:
 + 雷达发送Packet到 `192.168.1.102` : `6699`, rslidar_sdk绑定端口 `6699`。
 ![](./img/07_02_unicast.png)
 
-如下是配置`config.yaml`的方式。这实际上与广播的方式一样。
+如下是配置`airy96_driver.yaml`的方式。这实际上与广播的方式一样。
 
 ```yaml
 lidar:
@@ -72,7 +72,7 @@ lidar:
 + rslidar_sdk绑定到端口 `6699`。同时它将IP地址为`192.168.1.102`的本地网络接口加入组播组`224.1.1.1`。
 ![](./img/07_03_multicast.png)
 
-如下是配置`config.yaml`的方式。
+如下是配置`airy96_driver.yaml`的方式。
 
 ```yaml
 lidar:
@@ -96,7 +96,7 @@ lidar:
 + 第二个雷达发送Packet到 `192.168.1.102`:`5599`, 给rslidar_sdk配置的第二个driver节点绑定到`5599`。
 ![](./img/07_04_multi_lidars_port.png)
 
-如下是配置`config.yaml`的方式。
+如下是配置`airy96_driver.yaml`的方式。
 
 ```yaml
 lidar:
@@ -120,7 +120,7 @@ lidar:
 + 第二个雷达发送Packet到 `192.168.1.103`:`6699`, 给rslidar_sdk配置的第二个driver节点绑定到`192.168.1.103:6699`。
 ![](./img/07_05_multi_lidars_ip.png)
 
-如下是配置`config.yaml`的方式。
+如下是配置`airy96_driver.yaml`的方式。
 
 ```yaml
 lidar:

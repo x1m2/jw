@@ -55,7 +55,7 @@ Suppose you have recorded a rosbag, which contains MSOP/DIFOP packets with the t
 
 ### 11.3.1 Set Packet Source
 
-In `config.yaml`, set the `common` part.
+In `airy96_driver.yaml`, set the `common` part.
 
 ```yaml
 common:
@@ -70,7 +70,7 @@ To send point cloud to ROS, set ```send_point_cloud_ros = true```.
 
 ### 11.3.2 Set parameters of Lidar
 
-In `config.yaml`, set the `lidar-driver` part.
+In `airy96_driver.yaml`, set the `lidar-driver` part.
 
 ```yaml
 lidar:
@@ -90,7 +90,7 @@ Set the ```lidar_type```  to your LiDAR type.
 
 ### 11.3.3 Set Topic of packet.
 
-In `config.yaml`, set the `lidar-ros` part.
+In `airy96_driver.yaml`, set the `lidar-ros` part.
 
 ```yaml
 ros:

@@ -1,10 +1,10 @@
 # 2 参数介绍
 
-rslidar_sdk读取配置文件 ```config.yaml```，得到所有的参数。```config.yaml```在```rslidar_sdk/config```文件夹中。 
+rslidar_sdk读取配置文件 ```airy96_driver.yaml```，得到所有的参数。```airy96_driver.yaml```在```rslidar_sdk/config```文件夹中。
 
-**config.yaml遵循YAML格式。该格式对缩进有严格要求。修改config.yaml之后，请确保每行开头的缩进仍保持一致！**
+**airy96_driver.yaml遵循YAML格式。该格式对缩进有严格要求。修改airy96_driver.yaml之后，请确保每行开头的缩进仍保持一致！**
 
-config.yaml包括两部分：common部分 和 lidar部分。 
+airy96_driver.yaml包括两部分：common部分 和 lidar部分。
 
 rslidar_sdk支持多个雷达。common部分为所有雷达共享。lidar部分，每一个子节点对应一个雷达，针对这个雷达的实际情况分别设置。
 

@@ -6,7 +6,7 @@
 
 rslidar_sdk can transform the coordinate of point cloud. This document illustrate how to do so.
 
-Please check the  [Intro to hiding parameters](../intro/03_hiding_parameters_intro.md) for more details. Here is an example of the config.yaml.
+Please check the  [Intro to hiding parameters](../intro/03_hiding_parameters_intro.md) for more details. Here is an example of the airy96_driver.yaml.
 
 
 
@@ -46,7 +46,7 @@ To enable transformation, set the CMake option ```ENABLE_TRANSFORM```to be ```ON
 
 ## 10.4 Set LiDAR parameters
 
-In the `lidar-driver` part of `config.yaml`, set the hiding parameter`x`, `y`, `z`, `roll`, `pitch` ,`yaw`. 
+In the `lidar-driver` part of `airy96_driver.yaml`, set the hiding parameter`x`, `y`, `z`, `roll`, `pitch` ,`yaw`.
 
 ```yaml
 common:

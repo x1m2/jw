@@ -18,7 +18,7 @@ Please check the LiDAR user-guide, or use the 3rd-party tool(such as WireShark),
 
 ### 8.2.2 Set up the configuration file
 
-Set up the configuration file `config.yaml`.
+Set up the configuration file `airy96_driver.yaml`.
 
 #### 8.2.2.1 common part
 

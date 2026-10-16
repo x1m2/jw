@@ -86,7 +86,7 @@ int main(int argc, char** argv)
    config_path = (std::string)PROJECT_PATH;
 #endif
 
-   config_path += "/config/config.yaml";
+   config_path += "/config/airy96_driver.yaml";
 
 #ifdef ROS_FOUND
   ros::NodeHandle priv_hh("~");

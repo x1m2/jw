@@ -54,7 +54,7 @@ rosbag record /rslidar_packets -O bag
 
 ### 11.3.1 设置Packet源
 
-配置`config.yaml`的`common`部分。
+配置`airy96_driver.yaml`的`common`部分。
 
 ```yaml
 common:
@@ -69,7 +69,7 @@ MSOP/DIFOP Packet来自ROS rosbag，因此设置 ```msg_source = 2``` 。
 
 ### 11.3.2 设置雷达参数
 
-配置`config.yaml`的`lidar-driver`部分。
+配置`airy96_driver.yaml`的`lidar-driver`部分。
 
 ```yaml
 lidar:
@@ -89,7 +89,7 @@ lidar:
 
 ### 11.3.3 设置接收Packet的主题
 
-设置`config.yaml`的`lidar-ros`部分。
+设置`airy96_driver.yaml`的`lidar-ros`部分。
 
 ```yaml
 ros:

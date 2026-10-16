@@ -1,12 +1,12 @@
 # 2 Introduction to Parameters 
 
-rslidar_sdk reads parameters from the configuration file ```config.yaml```, which is stored in ```rslidar_sdk/config```.  
+rslidar_sdk reads parameters from the configuration file ```airy96_driver.yaml```, which is stored in ```rslidar_sdk/config```.
 
-`config.yaml` contains two parts, the `common` part and the `lidar` part. 
+`airy96_driver.yaml` contains two parts, the `common` part and the `lidar` part.
 
 rslidar_sdk supports multi-LiDARs case. The `common` part is shared by all LiDARs, while in the `lidar` part, each child node is for an individual Lidar.
 
-**config.yaml is indentation sensitive! Please make sure the indentation is not changed after adjusting the parameters!**
+**airy96_driver.yaml is indentation sensitive! Please make sure the indentation is not changed after adjusting the parameters!**
 
 
 

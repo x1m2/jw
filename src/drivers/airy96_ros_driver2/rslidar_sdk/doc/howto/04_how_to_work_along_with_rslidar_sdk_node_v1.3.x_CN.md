@@ -33,7 +33,7 @@
 
 使用`v1.3.x` `rslidar_sdk_node`录制pacekt rosbag。
 
-按照默认的`config.yaml`的配置，消息发布到主题`/rslidar_packets`和`/rslidar_packets_difop`下。
+按照默认的`airy96_driver.yaml`的配置，消息发布到主题`/rslidar_packets`和`/rslidar_packets_difop`下。
 
 ```
 common:
@@ -90,7 +90,7 @@ lidar:
 option(ENABLE_SOURCE_PACKET_LEGACY "Enable ROS Source of MSOP/DIFOP Packet v1.3.x" ON)
 ```
 
-+ 在`config.yaml`中，增加一个配置项`ros_recv_packet_legacy_topic`: `/rslidar_packets`。这样`rslidar_sdk_node`将同时订阅两个主题。
++ 在`airy96_driver.yaml`中，增加一个配置项`ros_recv_packet_legacy_topic`: `/rslidar_packets`。这样`rslidar_sdk_node`将同时订阅两个主题。
   + 订阅`/rslidar_packets`和`/rslidar_packets_difop`，读入`v1.3.x`的消息
   + 订阅`/rslidar_packets_v2`，读入`v1.5.x`的消息
 

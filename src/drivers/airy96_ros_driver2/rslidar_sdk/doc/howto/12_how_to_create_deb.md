@@ -19,7 +19,7 @@ The deb file will be generated in the parent directory of `rslidar_sdk`.
 
 ## 12.3 Use the deb
 
-Install the deb and set the right config_path. If leave the config_path empty, it will use the `config.yaml` in the ros package path.     
+Install the deb and set the right config_path. If leave the config_path empty, it will use the `airy96_driver.yaml` in the ros package path.
 
 ```
 <launch>

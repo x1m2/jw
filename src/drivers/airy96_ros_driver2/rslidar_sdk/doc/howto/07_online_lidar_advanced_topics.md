@@ -28,7 +28,7 @@ The Lidar sends MSOP/DIFOP packets to the host machine (rslidar_sdk runs on it).
 + The Lidar sends to `255.255.255.255` : `6699`, and the host binds to port `6699`.
 ![](./img/07_01_broadcast.png)
 
-Below is how to configure `config.yaml`.
+Below is how to configure `airy96_driver.yaml`.
 
 ```yaml
 common:
@@ -54,7 +54,7 @@ To reduce the network load, the Lidar is suggested to work in unicast mode.
 + The Lidar sends to `192.168.1.102` : `6699`, and the host binds to port `6699`.
 ![](./img/07_02_unicast.png)
 
-Below is how to configure `config.yaml`. In fact, it same with the broadcast mode.
+Below is how to configure `airy96_driver.yaml`. In fact, it same with the broadcast mode.
 
 ```yaml
 lidar:
@@ -72,7 +72,7 @@ The Lidar may also works in multicast mode.
 + The host binds to port `6699`. And it makes local NIC (Network Interface Card) join the multicast group `224.1.1.1`. The local NIC's IP is `192.168.1.102`.
 ![](./img/07_03_multicast.png)
 
-Below is how to configure `config.yaml`.
+Below is how to configure `airy96_driver.yaml`.
 
 ```yaml
 lidar:
@@ -96,7 +96,7 @@ If you have two or more Lidars, it is suggested to set different remote ports.
 + Second Lidar sends to `192.168.1.102`:`5599`, and the second driver instance binds to `5599`.
 ![](./img/07_04_multi_lidars_port.png)
 
-Below is how to configure `config.yaml`.
+Below is how to configure `airy96_driver.yaml`.
 
 ```yaml
 lidar:
@@ -120,7 +120,7 @@ An alternate way is to set different remote IPs.
 + Second Lidar sends to `192.168.1.103`:`6699`, and the second driver instance binds to `192.168.1.103:6699`.
 ![](./img/07_05_multi_lidars_ip.png)
 
-Below is how to configure `config.yaml`.
+Below is how to configure `airy96_driver.yaml`.
 
 ```yaml
 lidar:

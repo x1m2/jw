@@ -46,7 +46,7 @@ sudo apt-get install libeigen3-dev
 
 ## 10.4 设置雷达参数
 
-在`config.yaml`中，设置`lidar-lidar`部分的参数`x`、, `y`、 `z`、 `roll`、 `pitch` 、`yaw`。
+在`airy96_driver.yaml`中，设置`lidar-lidar`部分的参数`x`、, `y`、 `z`、 `roll`、 `pitch` 、`yaw`。
 
 ```yaml
 common:
