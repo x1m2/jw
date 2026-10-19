@@ -188,6 +188,8 @@ void PurePursuitController::applyVelocityLimits(
   // 即使控制时钟尚未推进或发生回拨，也不能让横移分量绕过限速出口。
   cmd_vel.linear.y = 0.0;
   if (dt <= 0.0) return;
+  const double target_linear_velocity = cmd_vel.linear.x;
+  const double target_angular_velocity = cmd_vel.angular.z;
   const double effective_linear_velocity =
       std::clamp(linear_velocity_limit, 0.0, config_.max_linear_velocity);
   const double effective_angular_velocity =
@@ -215,6 +217,16 @@ void PurePursuitController::applyVelocityLimits(
   cmd_vel.linear.x = std::clamp(cmd_vel.linear.x, -effective_linear_velocity,
                                 effective_linear_velocity);
   cmd_vel.linear.y = 0.0;
+  // 起步/加速限幅时沿候选曲线降低速度，避免只降低线速度导致急转弯。
+  // 纯旋转、减速以及换向过零前保留原有处理。
+  if (std::abs(target_linear_velocity) > 1e-6 &&
+      cmd_vel.linear.x * target_linear_velocity >= 0.0 &&
+      std::abs(cmd_vel.linear.x) < std::abs(target_linear_velocity)) {
+    const double scale = cmd_vel.linear.x / target_linear_velocity;
+    cmd_vel.angular.z = std::clamp(
+        target_angular_velocity * scale,
+        -effective_angular_velocity, effective_angular_velocity);
+  }
 }
 
 bool PurePursuitController::isTargetOrientationReached(

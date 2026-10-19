@@ -195,6 +195,22 @@ Visualization Manager:
       Value: true
     - Class: rviz/Marker
       Enabled: true
+      Marker Topic: /pure_pursuit/collision_point
+      Name: PP Collision Point
+      Namespaces:
+        {}
+      Queue Size: 10
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /pure_pursuit/collision_geometry
+      Name: PP Collision Geometry
+      Namespaces:
+        {}
+      Queue Size: 10
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
       Marker Topic: /pure_pursuit/path_markers
       Name: Path Markers
       Namespaces:

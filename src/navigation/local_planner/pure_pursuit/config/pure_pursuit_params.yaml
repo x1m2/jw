@@ -11,6 +11,11 @@
     lookahead_distance_max: 0.7   # 高速最大前瞻距离（m）；越大行驶越平稳
     use_smoothed_path: false      # 是否使用外部发布的平滑局部路径
     resume_replan_distance: 0.25 # 暂停后移动超过此距离时，等待新全局路径再恢复输出（米）
+    costmap_stop_prediction_distance: 0.7 # 停障平移预测参考距离（米），除以当前边有效最大线速度得到预测时长，非车头净空
+    costmap_motion_prediction_time: 1.0 # 纯旋转及静止候选的footprint预测时长（秒）；平移使用距离/有效最大线速度
+    costmap_motion_recovery_margin: 0.0 # 恢复检查仅前后各额外扩大该距离，宽度不变（米）
+    costmap_motion_recovery_time: 0.5 # 恢复要求连续安全时长，且至少3张新Costmap（秒）
+    costmap_motion_prediction_step: 0.05 # 运动预测最大步长，按栅格分辨率自动缩小（秒）
 
     # ==================== 目标到达与最终朝向 ====================
     goal_tolerance: 0.10                  # 目标位置容差（m）

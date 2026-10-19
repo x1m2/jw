@@ -341,6 +341,19 @@ void PurePursuitLocalPlanner::loadParameters() {
   config_.goal_tolerance = declareOrGetParameter(node_, "goal_tolerance", 0.2);
   config_.resume_replan_distance = std::max(
       0.0, declareOrGetParameter(node_, "resume_replan_distance", 0.25));
+  config_.costmap_stop_prediction_distance = std::max(
+      0.01,
+      declareOrGetParameter(node_, "costmap_stop_prediction_distance", 0.7));
+  config_.costmap_motion_prediction_time = std::max(
+      0.1,
+      declareOrGetParameter(node_, "costmap_motion_prediction_time", 1.0));
+  config_.costmap_motion_prediction_step = std::max(
+      0.01,
+      declareOrGetParameter(node_, "costmap_motion_prediction_step", 0.05));
+  config_.costmap_motion_recovery_margin = std::max(
+      0.0, declareOrGetParameter(node_, "costmap_motion_recovery_margin", 0.1));
+  config_.costmap_motion_recovery_time = std::max(
+      0.0, declareOrGetParameter(node_, "costmap_motion_recovery_time", 0.5));
 
   // Speed parameters
   config_.max_linear_velocity =
@@ -415,6 +428,13 @@ bool PurePursuitLocalPlanner::setGlobalPath(
   }
 
   global_path_ = global_path;
+  last_tracking_lookahead_ = 0.0;
+  costmap_fixed_lookahead_ = 0.0;
+  costmap_lookahead_blending_ = false;
+  costmap_lookahead_stable_since_ = {};
+  costmap_motion_safe_count_ = 0;
+  costmap_motion_last_safe_version_ = 0;
+  costmap_motion_safe_since_ = {};
   dynamic_path_ = dynamic_path;
   path_received_ = true;
   goal_reached_ = false;
@@ -509,12 +529,156 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
                                            ? edge_policy.angular_velocity
                                            : config_.max_angular_velocity;
   const int motion_direction = edge_policy.motion_direction;
+  // 绕障边与PP轨迹预测停障互斥；独立obstacle_stop持续提供安全兜底。
+  const bool avoidance_enabled = edge_policy.obstacle_avoidance_enabled;
+  const bool pp_stop_enabled =
+      edge_policy.obstacle_stop_enabled && !avoidance_enabled;
   if (front_obstacle_detector_) {
     // 边策略优先于YAML的 front_obstacle_detector.avoid_max_distance。
     front_obstacle_detector_->setAvoidMaxDistance(
         edge_policy.obstacle_avoidance_distance_m);
   }
-  const bool avoidance_enabled = isObstacleAvoidanceEnabled();
+  AvoidanceObservation obstacle_observation;
+  if (avoidance_enabled && front_obstacle_detector_) {
+    obstacle_observation =
+        front_obstacle_detector_->analyzeAvoidance(robot_pose);
+  }
+  if (!pp_stop_enabled) {
+    costmap_fixed_lookahead_ = 0.0;
+    costmap_lookahead_blending_ = false;
+    costmap_lookahead_stable_since_ = {};
+    costmap_motion_blocked_ = false;
+    costmap_motion_safe_count_ = 0;
+    costmap_motion_last_safe_version_ = 0;
+    costmap_motion_safe_since_ = {};
+  }
+  auto apply_costmap_stop = [&](geometry_msgs::msg::Twist &command,
+                                const geometry_msgs::msg::Twist &target_command) {
+    if (!pp_stop_enabled) return;
+    // 分母使用边策略与全局限速的有效上限，不能使用停车后的起步小速度。
+    const double prediction_max_speed =
+        std::min(edge_linear_velocity, config_.max_linear_velocity);
+    if (!std::isfinite(edge_linear_velocity) ||
+        !std::isfinite(config_.max_linear_velocity) ||
+        prediction_max_speed <= 0.0) {
+      command = geometry_msgs::msg::Twist();
+      last_cmd_vel_ = command;
+      costmap_motion_blocked_ = true;
+      costmap_motion_safe_count_ = 0;
+      costmap_motion_last_safe_version_ = 0;
+      costmap_motion_safe_since_ = {};
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[PP_COSTMAP_STOP] invalid_prediction_max_speed=%.3f; hold zero command",
+          prediction_max_speed);
+      return;
+    }
+    const double translation_prediction_time =
+        config_.costmap_stop_prediction_distance / prediction_max_speed;
+    const auto prediction_time_for = [&](const geometry_msgs::msg::Twist &candidate) {
+      return std::hypot(candidate.linear.x, candidate.linear.y) > 1e-6
+                 ? translation_prediction_time
+                 : config_.costmap_motion_prediction_time;
+    };
+    const double target_prediction_time = prediction_time_for(target_command);
+    const double output_prediction_time = prediction_time_for(command);
+    // 仅全局目标跟踪使用到点停车边界，局部绕障临时路径不套用全局终点。
+    const geometry_msgs::msg::Point *prediction_goal =
+        !local_tracking && !global_path_.poses.empty()
+            ? &global_path_.poses.back().pose.position : nullptr;
+
+    // 用限幅前的目标速度判断能否恢复，不能用停车后从零爬升的小速度。
+    // 同时检查真正输出的限幅速度，覆盖限幅改变曲率的情况。
+    const bool target_safe =
+        front_obstacle_detector_ &&
+        front_obstacle_detector_->isMotionCollisionFree(
+            robot_pose, target_command,
+            target_prediction_time,
+            config_.costmap_motion_prediction_step, 0.0, nullptr,
+            prediction_goal, config_.goal_tolerance);
+    const bool output_safe =
+        front_obstacle_detector_ &&
+        front_obstacle_detector_->isMotionCollisionFree(
+            robot_pose, command,
+            output_prediction_time,
+            config_.costmap_motion_prediction_step, 0.0, nullptr,
+            prediction_goal, config_.goal_tolerance, "output");
+    const bool motion_safe = target_safe && output_safe;
+    bool recovery_safe = false;
+    double clear_duration = 0.0;
+    if (!motion_safe) {
+      // 记录本次候选轨迹实际使用的前瞻长度，停车后不能随零速度缩短。
+      if (costmap_fixed_lookahead_ <= 0.0 || costmap_lookahead_blending_) {
+        costmap_fixed_lookahead_ = last_tracking_lookahead_ > 0.0
+                                     ? last_tracking_lookahead_
+                                     : config_.lookahead_distance_min;
+      }
+      costmap_lookahead_blending_ = false;
+      costmap_lookahead_stable_since_ = {};
+      costmap_motion_blocked_ = true;
+      costmap_motion_safe_count_ = 0;
+      costmap_motion_last_safe_version_ = 0;
+      costmap_motion_safe_since_ = {};
+    } else if (costmap_motion_blocked_) {
+      std::uint64_t checked_version = 0;
+      recovery_safe = front_obstacle_detector_->isMotionCollisionFree(
+          robot_pose, target_command, target_prediction_time,
+          config_.costmap_motion_prediction_step,
+          config_.costmap_motion_recovery_margin, &checked_version,
+          prediction_goal, config_.goal_tolerance, "recovery");
+      if (!recovery_safe) {
+        costmap_motion_safe_count_ = 0;
+        costmap_motion_last_safe_version_ = 0;
+        costmap_motion_safe_since_ = {};
+      } else {
+        const auto now = std::chrono::steady_clock::now();
+        if (costmap_motion_safe_count_ == 0) {
+          costmap_motion_safe_since_ = now;
+        }
+        // 同一张地图可复核，但不能重复计作多张安全地图。
+        if (checked_version != costmap_motion_last_safe_version_) {
+          costmap_motion_last_safe_version_ = checked_version;
+          ++costmap_motion_safe_count_;
+        }
+        clear_duration = std::chrono::duration<double>(
+            now - costmap_motion_safe_since_).count();
+        if (costmap_motion_safe_count_ >= 3 &&
+            clear_duration >= config_.costmap_motion_recovery_time) {
+          costmap_motion_blocked_ = false;
+          RCLCPP_INFO(node_->get_logger(),
+                      "[PP_COSTMAP_MOTION_CLEAR] recovery_safe=1 "
+                      "clear_duration=%.3f new_map_count=%d",
+                      clear_duration, costmap_motion_safe_count_);
+          costmap_motion_safe_count_ = 0;
+          costmap_motion_last_safe_version_ = 0;
+          costmap_motion_safe_since_ = {};
+        }
+      }
+    }
+    if (motion_safe && !costmap_motion_blocked_) {
+      RCLCPP_INFO_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 1000,
+          "[PP_COSTMAP_MOTION_ALLOWED] vx=%.3f vy=%.3f wz=%.3f, horizon=%.2f s "
+          "target_horizon=%.2f s distance=%.2f m prediction_max_speed=%.3f "
+          "target_safe=%d output_safe=%d",
+          command.linear.x, command.linear.y, command.angular.z,
+          output_prediction_time, target_prediction_time,
+          config_.costmap_stop_prediction_distance, prediction_max_speed,
+          target_safe ? 1 : 0, output_safe ? 1 : 0);
+    } else {
+      command = geometry_msgs::msg::Twist();
+      RCLCPP_WARN_THROTTLE(
+          node_->get_logger(), *node_->get_clock(), 500,
+          "[PP_COSTMAP_STOP] "
+          "motion_safe=%d target_safe=%d output_safe=%d recovery_safe=%d "
+          "clear_duration=%.3f new_map_count=%d "
+          "target_horizon=%.2f s output_horizon=%.2f s",
+          motion_safe ? 1 : 0, target_safe ? 1 : 0, output_safe ? 1 : 0,
+          recovery_safe ? 1 : 0, clear_duration, costmap_motion_safe_count_,
+          target_prediction_time, output_prediction_time);
+    }
+    last_cmd_vel_ = command;
+  };
   LocalAvoidanceOutput avoidance_output;
   bool avoidance_updated = false;
 
@@ -597,6 +761,8 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
         !controller_->isTargetOrientationReached(robot_pose, target_pose_)) {
       if (controller_->computeOrientationAdjustmentCommand(
               robot_pose, target_pose_, edge_angular_velocity, cmd_vel)) {
+        const auto target_command = cmd_vel;
+        apply_costmap_stop(cmd_vel, target_command);
         return true;
       } else {
         cmd_vel = geometry_msgs::msg::Twist();
@@ -619,8 +785,8 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
 
   if (local_avoidance_manager_ && !avoidance_updated) {
     AvoidanceObservation observation;
-    if (avoidance_enabled && front_obstacle_detector_) {
-      observation = front_obstacle_detector_->analyzeAvoidance(robot_pose);
+    if (avoidance_enabled) {
+      observation = obstacle_observation;
     }
     const bool planned_motion =
         std::abs(last_cmd_vel_.linear.x) > 0.02 ||
@@ -728,10 +894,15 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     last_cmd_vel_.linear.x = 0.0;
     last_cmd_vel_.linear.y = 0.0;
   }
+  const auto target_command = cmd_vel;
   // 应用速度限制
   controller_->applyVelocityLimits(
       last_cmd_vel_, (node_->now() - last_control_time_).seconds(),
       edge_linear_velocity, edge_angular_velocity, cmd_vel);
+
+  // 停障边每周期验证目标与实际输出轨迹；碰撞清零位于限速后，
+  // 确保加减速限制不会残留上一周期速度。
+  apply_costmap_stop(cmd_vel, target_command);
 
   if (avoidance_timing_enabled_ && local_tracking &&
       timing_path_seen_time_ != std::chrono::steady_clock::time_point{}) {
@@ -1025,7 +1196,9 @@ PurePursuitLocalPlanner::currentEdgePolicy() const {
 }
 
 void PurePursuitLocalPlanner::publishCurrentObstacleStopPolicy() {
-  const bool enabled = currentEdgePolicy().obstacle_stop_enabled;
+  // 独立obstacle_stop始终运行，作为绕障边和停障边共同的最终安全兜底。
+  // 边策略只决定PP执行绕障或Costmap轨迹预测停障，不能关闭安全层。
+  constexpr bool enabled = true;
   if (has_published_obstacle_stop_policy_ &&
       enabled == published_obstacle_stop_enabled_) {
     return;
@@ -1129,13 +1302,61 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
     return false;
   const double current_velocity =
       std::hypot(last_cmd_vel_.linear.x, last_cmd_vel_.linear.y);
+  const double velocity_factor = config_.max_linear_velocity > 0.0
+      ? std::clamp(current_velocity / config_.max_linear_velocity, 0.0, 1.0)
+      : 0.0;
+  const double dynamic_lookahead = config_.lookahead_distance_min +
+      velocity_factor *
+          (config_.lookahead_distance_max - config_.lookahead_distance_min);
+  double lookahead_override =
+      local_tracking ? config_.local_avoidance_lookahead_distance : 0.0;
+  if (!local_tracking && costmap_fixed_lookahead_ > 0.0) {
+    const auto policy = currentEdgePolicy();
+    const double cruise_velocity = policy.velocity_limit_enabled
+        ? std::min(policy.linear_velocity, config_.max_linear_velocity)
+        : config_.max_linear_velocity;
+    const auto now = std::chrono::steady_clock::now();
+    if (costmap_motion_blocked_ || cruise_velocity <= 1e-6 ||
+        current_velocity < 0.8 * cruise_velocity) {
+      costmap_lookahead_stable_since_ = {};
+    } else {
+      if (costmap_lookahead_stable_since_ ==
+          std::chrono::steady_clock::time_point{}) {
+        costmap_lookahead_stable_since_ = now;
+      }
+      if (std::chrono::duration<double>(
+              now - costmap_lookahead_stable_since_).count() >= 0.5) {
+        costmap_lookahead_blending_ = true;
+      }
+    }
+    if (costmap_lookahead_blending_ && !costmap_motion_blocked_) {
+      // 每周期只向动态长度靠近5%，避免恢复时前瞻点跳变。
+      costmap_fixed_lookahead_ +=
+          0.05 * (dynamic_lookahead - costmap_fixed_lookahead_);
+      if (std::abs(dynamic_lookahead - costmap_fixed_lookahead_) < 0.001) {
+        costmap_fixed_lookahead_ = 0.0;
+        costmap_lookahead_blending_ = false;
+        costmap_lookahead_stable_since_ = {};
+      }
+    }
+    lookahead_override = costmap_fixed_lookahead_;
+    RCLCPP_INFO_THROTTLE(
+        node_->get_logger(), *node_->get_clock(), 1000,
+        "[PP_STOP_LOOKAHEAD] fixed=%d blending=%d distance=%.3f dynamic=%.3f",
+        costmap_fixed_lookahead_ > 0.0 ? 1 : 0,
+        costmap_lookahead_blending_ ? 1 : 0,
+        lookahead_override > 0.0 ? lookahead_override : dynamic_lookahead,
+        dynamic_lookahead);
+  }
+  last_tracking_lookahead_ =
+      lookahead_override > 0.0 ? lookahead_override : dynamic_lookahead;
   const TrackingContext tracking_context{
       path_type,
       path_type == TrackingPathType::kGlobal
           ? path_progress_index_
           : static_cast<std::size_t>(std::max(0, current_path_index_)),
       current_velocity,
-      local_tracking ? config_.local_avoidance_lookahead_distance : 0.0,
+      lookahead_override,
   };
   const auto tracking_result = path_tracker_->computeTrackingLookahead(
       robot_pose, *path_to_use, tracking_context);

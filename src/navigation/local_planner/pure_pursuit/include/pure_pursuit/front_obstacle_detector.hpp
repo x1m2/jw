@@ -15,6 +15,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <vector>
 #include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include "pure_pursuit/costmap_types.hpp"
 #include "pure_pursuit/avoidance_types.hpp"
@@ -63,6 +64,16 @@ class FrontObstacleDetector {
    */
   AvoidanceInfo analyzeAvoidance(
       const geometry_msgs::msg::PoseStamped& robot_pose);
+
+  // extra_margin仅用于车体前后方向；左右方向只使用正常安全边距。
+  bool isMotionCollisionFree(
+      const geometry_msgs::msg::PoseStamped& robot_pose,
+      const geometry_msgs::msg::Twist& velocity, double prediction_time,
+      double prediction_step, double extra_margin = 0.0,
+      std::uint64_t* checked_version = nullptr,
+      const geometry_msgs::msg::Point* goal_position = nullptr,
+      double goal_tolerance = 0.0,
+      const std::string& check_name = "target") const;
 
   /**
    * @brief 以当前全局路径方向为局部纵轴检测连续中央通道。
@@ -117,10 +128,20 @@ class FrontObstacleDetector {
       const geometry_msgs::msg::PoseStamped& robot_pose,
       std::vector<std::pair<double, double>>& sector_points);
 
+  void publishCollisionPoint(
+      const geometry_msgs::msg::PoseStamped& robot_pose,
+      const std::string& check_name, const geometry_msgs::msg::Point* point,
+      const std::string& reason, int cost, double prediction_time,
+      const geometry_msgs::msg::Pose* collision_pose = nullptr,
+      double half_length = 0.0, double half_width = 0.0) const;
+
   // ROS相关
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
       detection_area_pub_;  // 检测区域可视化发布器
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr collision_point_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+      collision_geometry_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr
       narrow_passage_center_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
@@ -128,6 +149,7 @@ class FrontObstacleDetector {
 
   // 代价地图
   CostmapConstPtr costmap_;
+  std::uint64_t costmap_version_{0};
   bool has_costmap_;
   mutable std::mutex costmap_mutex_;
   nav_msgs::msg::Path global_path_;

@@ -51,6 +51,11 @@ struct PlannerConfig {
   double lookahead_distance_max; // 最大前瞻距离
   double goal_tolerance;         // 目标点容忍距离
   double resume_replan_distance{0.25};
+  double costmap_stop_prediction_distance{0.7};
+  double costmap_motion_prediction_time{1.0};
+  double costmap_motion_prediction_step{0.05};
+  double costmap_motion_recovery_margin{0.1};
+  double costmap_motion_recovery_time{0.5};
 
   // Speed parameters
   double max_linear_velocity;   // 最大线速度 (X方向)
@@ -211,6 +216,14 @@ private:
   bool pause_pose_valid_{false};
   std::atomic_bool reset_velocity_on_next_control_{false};
   std::atomic_bool obstacle_stop_active_{false};
+  bool costmap_motion_blocked_{false};
+  int costmap_motion_safe_count_{0};
+  std::uint64_t costmap_motion_last_safe_version_{0};
+  std::chrono::steady_clock::time_point costmap_motion_safe_since_{};
+  double last_tracking_lookahead_{0.0};
+  double costmap_fixed_lookahead_{0.0};
+  bool costmap_lookahead_blending_{false};
+  std::chrono::steady_clock::time_point costmap_lookahead_stable_since_{};
   bool avoidance_timing_enabled_{true};
   std::uint64_t timing_path_generation_{
       std::numeric_limits<std::uint64_t>::max()};

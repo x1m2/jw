@@ -194,6 +194,12 @@ bool FrontObstacleDetector::initialize(rclcpp::Node::SharedPtr node) {
     detection_area_pub_ =
         node_->create_publisher<visualization_msgs::msg::Marker>(
             "front_detection_area", 1);
+    collision_point_pub_ =
+        node_->create_publisher<visualization_msgs::msg::Marker>(
+            "/pure_pursuit/collision_point", 10);
+    collision_geometry_pub_ =
+        node_->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/pure_pursuit/collision_geometry", rclcpp::QoS(10).reliable());
   }
   if (narrow_passage_enabled_) {
     narrow_passage_center_path_pub_ =
@@ -237,6 +243,7 @@ void FrontObstacleDetector::updateCostmap(
     CostmapConstPtr costmap) {
   std::lock_guard<std::mutex> lock(costmap_mutex_);
   costmap_ = std::move(costmap);
+  ++costmap_version_;
   has_costmap_ = static_cast<bool>(costmap_);
 }
 
@@ -378,6 +385,276 @@ FrontObstacleDetector::AvoidanceInfo FrontObstacleDetector::analyzeAvoidance(
   }
 
   return info;
+}
+
+bool FrontObstacleDetector::isMotionCollisionFree(
+    const geometry_msgs::msg::PoseStamped &robot_pose,
+    const geometry_msgs::msg::Twist &velocity, double prediction_time,
+    double prediction_step, double extra_margin,
+    std::uint64_t *checked_version,
+    const geometry_msgs::msg::Point *goal_position,
+    double goal_tolerance, const std::string &check_name) const {
+  std::lock_guard<std::mutex> costmap_lock(costmap_mutex_);
+  if (checked_version) *checked_version = costmap_version_;
+  if (!has_costmap_ || !costmap_ || costmap_->info.resolution <= 0.0 ||
+      costmap_->info.width == 0 || costmap_->info.height == 0 ||
+      costmap_->data.size() != static_cast<std::size_t>(costmap_->info.width) *
+                                   costmap_->info.height ||
+      !std::isfinite(velocity.linear.x) ||
+      !std::isfinite(velocity.linear.y) ||
+      !std::isfinite(velocity.angular.z) ||
+      !std::isfinite(prediction_time) || prediction_time < 0.0 ||
+      !std::isfinite(prediction_step) || prediction_step <= 0.0 ||
+      !std::isfinite(extra_margin) || extra_margin < 0.0) {
+    publishCollisionPoint(robot_pose, check_name, &robot_pose.pose.position,
+                          "invalid_map_or_input", -1, 0.0);
+    return false;
+  }
+  if (goal_position &&
+      (!std::isfinite(goal_position->x) || !std::isfinite(goal_position->y) ||
+       !std::isfinite(goal_tolerance) || goal_tolerance <= 0.0)) {
+    publishCollisionPoint(robot_pose, check_name, &robot_pose.pose.position,
+                          "invalid_goal", -1, 0.0);
+    return false;
+  }
+  // 只有平移预测使用到点停车约束，最终纯旋转仍检查完整预测时域。
+  const bool stop_at_goal = goal_position &&
+      std::hypot(velocity.linear.x, velocity.linear.y) > 1e-6;
+
+  const auto &map = *costmap_;
+  const double resolution = map.info.resolution;
+  const int width = static_cast<int>(map.info.width);
+  const int height = static_cast<int>(map.info.height);
+  const double half_length = robot_length_ * 0.5 + safety_margin_ + extra_margin;
+  // 恢复净空仅增加前后长度，左右保留正常安全边距，避免窄通道无法恢复。
+  const double half_width = robot_width_ * 0.5 + safety_margin_;
+  const double radius = std::hypot(half_length, half_width);
+  double robot_x = robot_pose.pose.position.x;
+  double robot_y = robot_pose.pose.position.y;
+  const double initial_yaw = tf2::getYaw(robot_pose.pose.orientation);
+  // 限制相邻姿态的最大扫掠距离，防止高速运动跨过障碍栅格。
+  const double swept_speed = std::hypot(velocity.linear.x, velocity.linear.y) +
+                             radius * std::abs(velocity.angular.z);
+  const double step = swept_speed > 1e-6
+                          ? std::min(prediction_step,
+                                     resolution * 0.5 / swept_speed)
+                          : prediction_step;
+  const int sample_count = std::max(
+      1, static_cast<int>(std::ceil(prediction_time / step)));
+  double previous_time = 0.0;
+
+  auto world_to_grid = [&](double wx, double wy, int &gx, int &gy) {
+    gx = static_cast<int>(
+        std::floor((wx - map.info.origin.position.x) / resolution));
+    gy = static_cast<int>(
+        std::floor((wy - map.info.origin.position.y) / resolution));
+    return gx >= 0 && gx < width && gy >= 0 && gy < height;
+  };
+
+  for (int sample = 0; sample <= sample_count; ++sample) {
+    const double previous_x = robot_x;
+    const double previous_y = robot_y;
+    const double time = std::min(
+        prediction_time, static_cast<double>(sample) * step);
+    // 恒定车体速度的精确平面运动积分，同时支持前进、横移和曲线运动。
+    const double previous_yaw =
+        initial_yaw + velocity.angular.z * previous_time;
+    double yaw = initial_yaw + velocity.angular.z * time;
+    if (std::abs(velocity.angular.z) > 1e-6) {
+      robot_x += (velocity.linear.x * (std::sin(yaw) - std::sin(previous_yaw)) +
+                  velocity.linear.y * (std::cos(yaw) - std::cos(previous_yaw))) /
+                 velocity.angular.z;
+      robot_y += (velocity.linear.x * (std::cos(previous_yaw) - std::cos(yaw)) +
+                  velocity.linear.y * (std::sin(yaw) - std::sin(previous_yaw))) /
+                 velocity.angular.z;
+    } else {
+      const double dt = time - previous_time;
+      robot_x += (velocity.linear.x * std::cos(previous_yaw) -
+                  velocity.linear.y * std::sin(previous_yaw)) * dt;
+      robot_y += (velocity.linear.x * std::sin(previous_yaw) +
+                  velocity.linear.y * std::cos(previous_yaw)) * dt;
+    }
+    bool goal_reached = false;
+    if (stop_at_goal) {
+      const double gx = previous_x - goal_position->x;
+      const double gy = previous_y - goal_position->y;
+      const double dx = robot_x - previous_x;
+      const double dy = robot_y - previous_y;
+      const double a = dx * dx + dy * dy;
+      const double b = 2.0 * (gx * dx + gy * dy);
+      const double c_goal = gx * gx + gy * gy -
+                            goal_tolerance * goal_tolerance;
+      double fraction = 1.0;
+      if (c_goal <= 0.0) {
+        goal_reached = true;
+        fraction = 0.0;
+      } else if (a > 1e-12) {
+        const double discriminant = b * b - 4.0 * a * c_goal;
+        if (discriminant >= 0.0) {
+          const double entry = (-b - std::sqrt(discriminant)) / (2.0 * a);
+          if (entry >= 0.0 && entry <= 1.0) {
+            goal_reached = true;
+            fraction = entry;
+          }
+        }
+      }
+      if (goal_reached) {
+        // 截断在首次进入目标容差的位置，不跳到目标，也不忽略停车车体。
+        robot_x = previous_x + fraction * dx;
+        robot_y = previous_y + fraction * dy;
+        yaw = previous_yaw +
+              velocity.angular.z * (time - previous_time) * fraction;
+      }
+    }
+    previous_time = time;
+    const double c = std::cos(yaw);
+    const double s = std::sin(yaw);
+
+    // Costmap边界外没有可验证的安全空间，按碰撞处理。
+    geometry_msgs::msg::Pose collision_pose;
+    collision_pose.position.x = robot_x;
+    collision_pose.position.y = robot_y;
+    collision_pose.position.z = robot_pose.pose.position.z;
+    collision_pose.orientation.z = std::sin(yaw * 0.5);
+    collision_pose.orientation.w = std::cos(yaw * 0.5);
+    for (const double local_x : {-half_length, half_length}) {
+      for (const double local_y : {-half_width, half_width}) {
+        const double wx = robot_x + local_x * c - local_y * s;
+        const double wy = robot_y + local_x * s + local_y * c;
+        int gx = 0;
+        int gy = 0;
+        if (!world_to_grid(wx, wy, gx, gy)) {
+          geometry_msgs::msg::Point point;
+          point.x = wx;
+          point.y = wy;
+          point.z = robot_pose.pose.position.z;
+          publishCollisionPoint(robot_pose, check_name, &point,
+                                "out_of_map", -1, time, &collision_pose,
+                                half_length, half_width);
+          return false;
+        }
+      }
+    }
+
+    int min_gx = 0;
+    int min_gy = 0;
+    int max_gx = 0;
+    int max_gy = 0;
+    world_to_grid(robot_x - radius, robot_y - radius, min_gx, min_gy);
+    world_to_grid(robot_x + radius, robot_y + radius, max_gx, max_gy);
+    min_gx = std::clamp(min_gx, 0, width - 1);
+    min_gy = std::clamp(min_gy, 0, height - 1);
+    max_gx = std::clamp(max_gx, 0, width - 1);
+    max_gy = std::clamp(max_gy, 0, height - 1);
+
+    for (int gy = min_gy; gy <= max_gy; ++gy) {
+      for (int gx = min_gx; gx <= max_gx; ++gx) {
+        const double wx = map.info.origin.position.x +
+                          (static_cast<double>(gx) + 0.5) * resolution;
+        const double wy = map.info.origin.position.y +
+                          (static_cast<double>(gy) + 0.5) * resolution;
+        const double dx = wx - robot_x;
+        const double dy = wy - robot_y;
+        const double local_x = dx * c + dy * s;
+        const double local_y = -dx * s + dy * c;
+        // 将栅格半对角线纳入检查，覆盖与 footprint 边界相交的栅格。
+        const double cell_padding = resolution * std::sqrt(0.5);
+        if (std::abs(local_x) > half_length + cell_padding ||
+            std::abs(local_y) > half_width + cell_padding) {
+          continue;
+        }
+        const int cost = map.data[static_cast<std::size_t>(gy) *
+                                      map.info.width +
+                                  static_cast<std::size_t>(gx)];
+        if (cost < 0 || cost >= obstacle_threshold_) {
+          geometry_msgs::msg::Point point;
+          point.x = wx;
+          point.y = wy;
+          point.z = robot_pose.pose.position.z;
+          publishCollisionPoint(robot_pose, check_name, &point,
+                                cost < 0 ? "unknown" : "obstacle", cost, time,
+                                &collision_pose, half_length, half_width);
+          return false;
+        }
+      }
+    }
+    // 上面的完整footprint检查已覆盖停车姿态；之后保持静止，不再向墙延伸。
+    if (goal_reached) {
+      publishCollisionPoint(robot_pose, check_name, nullptr, "", 0, time);
+      return true;
+    }
+  }
+  publishCollisionPoint(robot_pose, check_name, nullptr, "", 0, prediction_time);
+  return true;
+}
+
+void FrontObstacleDetector::publishCollisionPoint(
+    const geometry_msgs::msg::PoseStamped &robot_pose,
+    const std::string &check_name, const geometry_msgs::msg::Point *point,
+    const std::string &reason, int cost, double prediction_time,
+    const geometry_msgs::msg::Pose *collision_pose,
+    double half_length, double half_width) const {
+  if (!collision_point_pub_) return;
+  visualization_msgs::msg::Marker marker;
+  marker.header = robot_pose.header;
+  marker.header.stamp = node_->now();
+  marker.ns = "collision_" + check_name;
+  marker.id = 0;
+  marker.pose.orientation.w = 1.0;
+  marker.action = point ? visualization_msgs::msg::Marker::ADD
+                        : visualization_msgs::msg::Marker::DELETE;
+  marker.type = visualization_msgs::msg::Marker::SPHERE;
+  marker.scale.x = marker.scale.y = marker.scale.z = 0.18;
+  marker.color = check_name == "output" ? color(1.0F, 0.6F, 0.0F)
+                 : check_name == "recovery" ? color(1.0F, 0.0F, 1.0F)
+                                           : color(1.0F, 0.0F, 0.0F);
+  marker.lifetime = rclcpp::Duration::from_seconds(1.0);
+  if (point) {
+    marker.pose.position = *point;
+    marker.pose.position.z += 0.30;
+  }
+  visualization_msgs::msg::MarkerArray geometry;
+  geometry.markers.push_back(marker);
+  // 保持原Marker话题兼容，同时用MarkerArray原子发布点和轮廓。
+  collision_point_pub_->publish(marker);
+  marker.id = 1;
+  marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+  marker.scale.z = 0.14;
+  marker.pose.position.z += 0.22;
+  marker.text = check_name + ": " + reason + " cost=" + std::to_string(cost) +
+                " t=" + std::to_string(prediction_time) + "s";
+  collision_point_pub_->publish(marker);
+
+  // 独立构建轮廓，避免复用文字Marker的位姿、缩放等状态。
+  visualization_msgs::msg::Marker outline;
+  outline.header = marker.header;
+  outline.ns = marker.ns;
+  outline.id = 2;
+  outline.type = visualization_msgs::msg::Marker::LINE_STRIP;
+  outline.action = point && collision_pose
+                      ? visualization_msgs::msg::Marker::ADD
+                      : visualization_msgs::msg::Marker::DELETE;
+  outline.scale.x = 0.05;
+  outline.color = marker.color;
+  outline.color.a = 1.0;
+  outline.lifetime = rclcpp::Duration::from_seconds(1.0);
+  outline.pose.orientation.w = 1.0;
+  if (collision_pose) {
+    outline.pose = *collision_pose;
+    // 提高到机器人参考高度上方，减少被Costmap、地面点云遮挡。
+    outline.pose.position.z += 0.30;
+    for (int corner = 0; corner < 5; ++corner) {
+      geometry_msgs::msg::Point vertex;
+      vertex.x = (corner == 0 || corner == 3 || corner == 4)
+                     ? half_length : -half_length;
+      vertex.y = (corner == 0 || corner == 1 || corner == 4)
+                     ? half_width : -half_width;
+      outline.points.push_back(vertex);
+    }
+  }
+  collision_point_pub_->publish(outline);
+  geometry.markers.push_back(outline);
+  if (collision_geometry_pub_) collision_geometry_pub_->publish(geometry);
 }
 
 NarrowPassageResult FrontObstacleDetector::detectNarrowPassage(
@@ -1034,6 +1311,7 @@ bool FrontObstacleDetector::findObstacleInSectorLocal(
   double weighted_x = 0.0;
   double weighted_y = 0.0;
   double weight_sum = 0.0;
+  double nearest_obstacle_distance = std::numeric_limits<double>::max();
   double min_sector_obstacle_path_dist = std::numeric_limits<double>::max();
   double min_corridor_obstacle_path_dist = std::numeric_limits<double>::max();
 
@@ -1135,6 +1413,8 @@ bool FrontObstacleDetector::findObstacleInSectorLocal(
       ++total_cells;
       if (cost >= obstacle_threshold_) {
         ++obstacle_cells;
+        nearest_obstacle_distance = std::min(
+            nearest_obstacle_distance, std::hypot(dx, dy));
         min_corridor_obstacle_path_dist =
             std::min(min_corridor_obstacle_path_dist, path_dist);
         const double weight = std::max(1.0, static_cast<double>(cost));
@@ -1185,8 +1465,7 @@ bool FrontObstacleDetector::findObstacleInSectorLocal(
   info.obstacle_center.x = weighted_x / weight_sum;
   info.obstacle_center.y = weighted_y / weight_sum;
   info.obstacle_center.z = robot_pose.pose.position.z;
-  info.obstacle_distance = std::hypot(info.obstacle_center.x - robot_x,
-                                      info.obstacle_center.y - robot_y);
+  info.obstacle_distance = nearest_obstacle_distance;
   return true;
 }
 
