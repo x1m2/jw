@@ -9,6 +9,67 @@ info() { echo "[INFO] $*"; }
 warn() { echo "[WARN] $*"; }
 err()  { echo "[ERROR] $*"; }
 
+usage() {
+    cat <<EOF
+用法: $(basename "$0") [--lidar mid360|airy]
+      $(basename "$0") [mid360|airy]
+
+可通过命令行参数或 LIDAR_TYPE 环境变量选择雷达，默认使用 mid360。
+示例:
+  $(basename "$0") --lidar airy
+  $(basename "$0") mid360
+EOF
+}
+
+LIDAR_TYPE="${LIDAR_TYPE:-mid360}"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --lidar)
+            if [ "$#" -lt 2 ]; then
+                err "--lidar 后需要填写 airy 或 mid360"
+                usage >&2
+                exit 1
+            fi
+            LIDAR_TYPE="$2"
+            shift 2
+            ;;
+        airy|mid360)
+            LIDAR_TYPE="$1"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            err "未知参数: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+readonly LIDAR_TYPE
+readonly AIRY_SDK_DIR="${SCRIPT_DIR}/drivers/airy96_ros_driver2/rslidar_sdk"
+readonly AIRY_DRIVER_CONFIG="${AIRY_SDK_DIR}/config/airy96_driver.yaml"
+readonly AIRY_FASTDDS_PROFILE="${AIRY_SDK_DIR}/config/fastshm.xml"
+
+case "${LIDAR_TYPE}" in
+    mid360)
+        readonly FASTLIO_CONFIG="mapping_mid360s.yaml"
+        readonly LIDAR_DRIVER_NAME="Livox ROS Driver2"
+        ;;
+    airy)
+        readonly FASTLIO_CONFIG="mapping_airy96.yaml"
+        readonly LIDAR_DRIVER_NAME="Airy96 ROS Driver"
+        ;;
+    *)
+        err "不支持的雷达类型: ${LIDAR_TYPE}，请选择 airy 或 mid360"
+        usage >&2
+        exit 1
+        ;;
+esac
+
 readonly SLAM_DATA_ROOT="/robotfs/data/slam_data"
 readonly MAP_ID_INPUT="${MAP_ID:-0}"
 if ! [[ "${MAP_ID_INPUT}" =~ ^[0-9]+$ ]] ||
@@ -41,6 +102,22 @@ source "${WORKSPACE_DIR}/install/setup.bash"
 
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
+
+if [ "${LIDAR_TYPE}" = "airy" ]; then
+    if [ ! -f "${AIRY_DRIVER_CONFIG}" ]; then
+        err "找不到 Airy96 驱动配置: ${AIRY_DRIVER_CONFIG}"
+        exit 1
+    fi
+    if [ ! -f "${AIRY_FASTDDS_PROFILE}" ]; then
+        err "找不到 Airy96 FastDDS 配置: ${AIRY_FASTDDS_PROFILE}"
+        exit 1
+    fi
+
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${AIRY_FASTDDS_PROFILE}"
+    export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+fi
+
 # 每张地图的数据均收敛到 map_<id>，并预先建立统一的子目录。
 mkdir -p "${MAP_DIR}" "${DATA_DIR}/log" "${DATA_DIR}/task"
 
@@ -58,11 +135,14 @@ log_time() {
 }
 
 FASTLIO_LOG_FILE="${SLAM_LOG_DIR}/fast_lio_$(log_time).log"
+LIDAR_DRIVER_LOG_FILE="${SLAM_LOG_DIR}/${LIDAR_TYPE}_driver_$(log_time).log"
 PGO_LOG_FILE="${SLAM_LOG_DIR}/pgo_sc_$(log_time).log"
 TOPOLOGY_LOG_FILE="${SLAM_LOG_DIR}/topology_map_generator_$(log_time).log"
 
 
 info "开始建图流程"
+info "雷达类型: ${LIDAR_TYPE}"
+info "FAST-LIO 配置: ${FASTLIO_CONFIG}"
 info "数据目录: ${DATA_DIR}"
 
 # ==================================================
@@ -70,7 +150,7 @@ info "数据目录: ${DATA_DIR}"
 # ==================================================
 declare -a PIDS=()
 
-LIVOX_PID=""
+LIDAR_DRIVER_PID=""
 FASTLIO_PID=""
 PGO_PID=""
 TOPOLOGY_PID=""
@@ -340,11 +420,19 @@ start_bg() {
 # ==================================================
 # 启动流程
 # ==================================================
-start_bg LIVOX_PID "Livox ROS Driver2" "/dev/null" 4 \
-    ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+if [ "${LIDAR_TYPE}" = "airy" ]; then
+    info "Airy96 FastDDS 配置: ${FASTRTPS_DEFAULT_PROFILES_FILE}"
+    start_bg LIDAR_DRIVER_PID "${LIDAR_DRIVER_NAME}" "${LIDAR_DRIVER_LOG_FILE}" 4 \
+        ros2 run rslidar_sdk rslidar_sdk_node --ros-args \
+        -p "config_path:=${AIRY_DRIVER_CONFIG}"
+else
+    start_bg LIDAR_DRIVER_PID "${LIDAR_DRIVER_NAME}" "${LIDAR_DRIVER_LOG_FILE}" 4 \
+        ros2 launch livox_ros_driver2 msg_MID360s_launch.py
+fi
 
 start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
-    ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false
+    ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false \
+    config_file:="${FASTLIO_CONFIG}"
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
     ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}"
