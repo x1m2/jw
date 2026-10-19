@@ -213,10 +213,6 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
   // 发布当前正在扫描的点云，topic名字为/cloud_registered
   pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
       "/cloud_registered", 20);
-  // 发布经过运动畸变校正到IMU坐标系的点云，
-  pubLaserCloudFull_body_ =
-      this->create_publisher<sensor_msgs::msg::PointCloud2>(
-          "/cloud_registered_body", 20);
   pubLaserCloudBodyDownsampled_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/cloud_body_downsampled", 20);
@@ -653,8 +649,7 @@ void LaserMappingNode::timer_callback() {
     /******* Publish points *******/
     if (path_en) publish_path(pubPath_);
     if (scan_pub_en) publish_frame_world(pubLaserCloudFull_);
-    if (scan_pub_en && scan_body_pub_en)
-      publish_frame_body(pubLaserCloudFull_body_);
+    if (scan_pub_en && scan_body_pub_en) publish_frame_body();
     if (effect_pub_en) publish_effect_world(pubLaserCloudEffect_);
     // if (map_pub_en) publish_map(pubLaserCloudMap_);
 
@@ -1323,37 +1318,28 @@ void LaserMappingNode::publish_frame_world(
   */
 }
 
-void LaserMappingNode::publish_frame_body(
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
-        pubLaserCloudFull_body) {
-  int size = feats_undistort->points.size();
-  PointCloudXYZI::Ptr laserCloudBase(new PointCloudXYZI(size, 1));
-  const Eigen::Matrix4d T_base_imu = get_imu_to_base_transform();
-
-  for (int i = 0; i < size; i++) {
-    PointType point_imu;
-    RGBpointBodyLidarToIMU(&feats_undistort->points[i], &point_imu);
-    RGBpointBodyIMUToBaseLink(&point_imu, &laserCloudBase->points[i],
-                              T_base_imu);
-  }
-
-  sensor_msgs::msg::PointCloud2 laserCloudmsg;
-  pcl::toROSMsg(*laserCloudBase, laserCloudmsg);
-  laserCloudmsg.header.stamp = get_ros_time(lidar_end_time);
-  laserCloudmsg.header.frame_id = "base_link";
-  pubLaserCloudFull_body->publish(laserCloudmsg);
-
-  // 每帧发布1m叶素降采样点云。
+void LaserMappingNode::publish_frame_body() {
   constexpr float voxel_leaf_size = 0.7F;
   pcl::VoxelGrid<PointType> voxel_filter;
   voxel_filter.setLeafSize(voxel_leaf_size, voxel_leaf_size, voxel_leaf_size);
-  voxel_filter.setInputCloud(laserCloudBase);
-  PointCloudXYZI downsampled_cloud;
-  voxel_filter.filter(downsampled_cloud);
+  voxel_filter.setInputCloud(feats_undistort);
+  PointCloudXYZI downsampled_lidar;
+  voxel_filter.filter(downsampled_lidar);
+
+  const std::size_t size = downsampled_lidar.points.size();
+  PointCloudXYZI downsampled_base(size, 1);
+  const Eigen::Matrix4d T_base_imu = get_imu_to_base_transform();
+  for (std::size_t i = 0; i < size; ++i) {
+    PointType point_imu;
+    RGBpointBodyLidarToIMU(&downsampled_lidar.points[i], &point_imu);
+    RGBpointBodyIMUToBaseLink(&point_imu, &downsampled_base.points[i],
+                              T_base_imu);
+  }
 
   sensor_msgs::msg::PointCloud2 downsampled_message;
-  pcl::toROSMsg(downsampled_cloud, downsampled_message);
-  downsampled_message.header = laserCloudmsg.header;
+  pcl::toROSMsg(downsampled_base, downsampled_message);
+  downsampled_message.header.stamp = get_ros_time(lidar_end_time);
+  downsampled_message.header.frame_id = "base_link";
   pubLaserCloudBodyDownsampled_->publish(downsampled_message);
   publish_count -= PUBFRAME_PERIOD;
 }

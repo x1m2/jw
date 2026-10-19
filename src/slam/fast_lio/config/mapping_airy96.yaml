@@ -48,7 +48,7 @@
       scan_bodyframe_pub_en: true
 
     pcd_save:
-      pcd_save_en: true
+      pcd_save_en: false
       interval: -1
       # export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       # export FASTRTPS_DEFAULT_PROFILES_FILE=/home/jw/airy_ws/src/rslidar_sdk/config/fastshm.xml

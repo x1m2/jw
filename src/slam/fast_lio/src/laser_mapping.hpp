@@ -83,9 +83,7 @@ class LaserMappingNode : public rclcpp::Node {
   void publish_frame_world(
       rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
           pubLaserCloudFull);
-  void publish_frame_body(
-      rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
-          pubLaserCloudFull_body);
+  void publish_frame_body();
   void publish_effect_world(
       rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
           pubLaserCloudEffect);
@@ -134,8 +132,6 @@ class LaserMappingNode : public rclcpp::Node {
  private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudFull_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
-      pubLaserCloudFull_body_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       pubLaserCloudBodyDownsampled_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
