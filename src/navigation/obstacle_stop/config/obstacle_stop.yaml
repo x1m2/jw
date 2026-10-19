@@ -23,10 +23,10 @@
 
     safety_margin: 0.05
     # 近矩形：从车体前缘开始，检测到障碍后强制停车。
-    hard_stop_distance: 0.25
+    hard_stop_distance: 0.2
     # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
-    slowdown_distance: 0.4
-    obstacle_ratio_threshold: 0.10
+    slowdown_distance: 0.25
+    obstacle_ratio_threshold: 0.02
 
     linear_velocity_factor: 0.40
     angular_velocity_factor: 1.0
@@ -36,7 +36,7 @@
 
     # 将检测矩形分成左/中/右三区。单侧障碍且规划速度明确向相反侧运动时，
     # 只释放该侧停障；中央障碍、两侧夹障和转向不足仍然停车。
-    directional_release_enabled: true
+    directional_release_enabled: false
     directional_center_half_width: 0.20
     # 检测区域中心横向速度 |vy + wz*x| 至少达到该值才认为正在脱离（m/s）。
     directional_escape_velocity_threshold: 0.05
