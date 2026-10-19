@@ -95,6 +95,7 @@ class TerrainFilter {
 
   bool use_stair_region_growing_;
   bool use_stair_riser_detection_;
+  bool use_stair_tread_fallback_;
   double stair_grid_resolution_;
   double stair_max_step_height_;
   double stair_max_cell_height_span_;
@@ -113,6 +114,23 @@ class TerrainFilter {
   int stair_model_max_extrapolated_steps_;
   double stair_direction_tolerance_deg_;
   double stair_min_width_;
+  int stair_confirmation_frames_{2};
+  double stair_confirmation_max_gap_{1.0};
+  double stair_model_observation_timeout_{3.0};
+  // 候选结构用固定坐标系追踪；同一帧的全局/局部重试不累计确认次数，
+  // 并允许稀疏点云短时漏检后继续累计实际观测次数。
+  struct StairConfirmation {
+    Eigen::Vector3d anchor{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d direction{Eigen::Vector3d::UnitX()};
+    Eigen::Vector3d up{Eigen::Vector3d::UnitZ()};
+    double step_height{0.0};
+    double tread_depth{0.0};
+    int frames{1};
+    double last_seen_stamp{0.0};
+  };
+  std::vector<StairConfirmation> stair_confirmation_tracks_;
+  std::string stair_confirmation_frame_;
+  double stair_confirmation_stamp_{0.0};
   int stair_ground_seed_min_points_;
   double stair_ground_seed_max_span_;
   double stair_ground_reference_max_abs_height_;
@@ -121,6 +139,7 @@ class TerrainFilter {
   std::unordered_map<std::uint64_t, double> stair_cell_height_spans_;
   bool stair_model_valid_{false};
   int stair_model_hold_frames_remaining_{0};
+  double stair_model_observation_expires_at_{0.0};
   Eigen::Vector2d stair_model_direction_{Eigen::Vector2d::UnitX()};
   Eigen::Vector2d stair_model_width_direction_{Eigen::Vector2d::UnitY()};
   double stair_model_start_forward_{0.0};

@@ -113,6 +113,8 @@ void TerrainFilter::loadParameters() {
 
   use_stair_region_growing_ =
       node_->declare_parameter<bool>("use_stair_region_growing", true);
+  use_stair_tread_fallback_ =
+      node_->declare_parameter<bool>("use_stair_tread_fallback", false);
   use_stair_riser_detection_ =
       node_->declare_parameter<bool>("use_stair_riser_detection", true);
   stair_grid_resolution_ =
@@ -155,6 +157,12 @@ void TerrainFilter::loadParameters() {
       node_->declare_parameter<double>("stair_direction_tolerance_deg", 15.0);
   stair_min_width_ =
       node_->declare_parameter<double>("stair_min_width", 0.50);
+  stair_confirmation_frames_ =
+      node_->declare_parameter<int>("stair_confirmation_frames", 2);
+  stair_confirmation_max_gap_ =
+      node_->declare_parameter<double>("stair_confirmation_max_gap", 1.0);
+  stair_model_observation_timeout_ = node_->declare_parameter<double>(
+      "stair_model_observation_timeout", 3.0);
   stair_ground_seed_min_points_ =
       node_->declare_parameter<int>("stair_ground_seed_min_points", 3);
   stair_ground_seed_max_span_ =
@@ -266,6 +274,7 @@ void TerrainFilter::processData() {
   // 处理时间来自传感器消息而非系统时钟，bag 回绕或重复时间戳时清理旧状态，
   // 避免上一段数据的楼梯模型被应用到另一段观测。
   if (lidar_time <= current_cloud_stamp_) {
+    stair_confirmation_tracks_.clear();
     stair_model_valid_ = false;
     stair_model_hold_frames_remaining_ = 0;
     stair_cell_hold_frames_.clear();
@@ -569,6 +578,48 @@ bool TerrainFilter::segmentGround(
                                  ? TerrainLabel::Ground
                                  : TerrainLabel::Obstacle;
         }
+        // PatchWork++ 可能将低矮物体的平顶拟合为局部地面。以机器人附近
+        // 零高度地面锚点为基准，恢复明显抬高的点；高度沿输入固定坐标系
+        // 的竖直方向测量，避免 base_link 俯仰把前方高度压低。
+        Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
+        if (current_cloud_to_base_valid_) {
+          up = current_cloud_to_base_.block<3, 3>(0, 0) * up;
+          up.normalize();
+        }
+        std::vector<double> ground_heights;
+        for (std::size_t index = 0; index < input_cloud->size(); ++index) {
+          if ((*labels)[index] != TerrainLabel::Ground) continue;
+          const auto& p = input_cloud->points[index];
+          const double height = up.dot(Eigen::Vector3d(p.x, p.y, p.z));
+          if (std::hypot(p.x, p.y) <= 2.0 &&
+              std::fabs(height) <= stair_ground_reference_max_abs_height_) {
+            ground_heights.push_back(height);
+          }
+        }
+        if (ground_heights.size() >= 6U && refined_height_threshold_ > 0.0) {
+          auto middle = ground_heights.begin() + ground_heights.size() / 2U;
+          std::nth_element(ground_heights.begin(), middle, ground_heights.end());
+          const double upper_ground = *middle + refined_height_threshold_;
+          std::size_t restored_obstacles = 0U;
+          ground_cloud->clear();
+          obstacle_cloud->clear();
+          for (std::size_t index = 0; index < input_cloud->size(); ++index) {
+            const auto& p = input_cloud->points[index];
+            if ((*labels)[index] == TerrainLabel::Ground &&
+                up.dot(Eigen::Vector3d(p.x, p.y, p.z)) > upper_ground) {
+              (*labels)[index] = TerrainLabel::Obstacle;
+              ++restored_obstacles;
+            }
+            if ((*labels)[index] == TerrainLabel::Ground) ground_cloud->push_back(p);
+            else obstacle_cloud->push_back(p);
+          }
+          RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+              "低矮障碍复核: 地面锚点=%zu, 地面高度=%.3f, 恢复障碍点=%zu",
+              ground_heights.size(), *middle, restored_obstacles);
+        } else {
+          RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+              "低矮障碍复核跳过: 零高度地面锚点=%zu", ground_heights.size());
+        }
       }
 
       ground_cloud->width =
@@ -730,6 +781,7 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
     std::vector<TerrainLabel>& labels) {
   pcl::PointCloud<PointType>::Ptr stair_cloud(new pcl::PointCloud<PointType>);
   if (input_cloud->empty() || labels.size() != input_cloud->size()) {
+    stair_confirmation_tracks_.clear();
     stair_surface_history_.clear();
     stair_cell_hold_frames_.clear();
     stair_cell_surface_heights_.clear();
@@ -752,6 +804,11 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
       stair_model_max_extrapolated_steps_ < 0 ||
       stair_direction_tolerance_deg_ <= 0.0 ||
       stair_direction_tolerance_deg_ >= 90.0 || stair_min_width_ <= 0.0 ||
+      stair_confirmation_frames_ < 1 ||
+      !std::isfinite(stair_confirmation_max_gap_) ||
+      stair_confirmation_max_gap_ <= 0.0 ||
+      !std::isfinite(stair_model_observation_timeout_) ||
+      stair_model_observation_timeout_ <= 0.0 ||
       stair_ground_seed_min_points_ < 1 ||
       stair_ground_reference_max_abs_height_ <= 0.0) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
@@ -882,6 +939,103 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
   std::size_t point_model_fill = 0U;
   const int connection_radius = 1 + std::min(stair_max_gap_cells_, 2);
 
+  std::size_t pending_confirmation = 0U;
+  std::size_t confirmed_sequences = 0U;
+  std::size_t observed_riser_levels = 0U;
+  std::size_t riser_candidate_count = 0U;
+  bool renewed_by_observation = false;
+  // 所有检测路径共用确认门。三级立面在稀疏点云中可能间歇消失，因此确认轨迹
+  // 会在短时间内保留；计数仍只由实际重新检测到的完整结构增加，模型保持和
+  // 表面记忆都不能续确认。短时漏检不立即清零，单帧候选不会直接启用过滤。
+  const std::string confirmation_frame = current_cloud_to_base_valid_
+      ? current_cloud_frame_ : base_frame_;
+  if (confirmation_frame != stair_confirmation_frame_ ||
+      current_cloud_stamp_ <= stair_confirmation_stamp_ ||
+      current_cloud_stamp_ - stair_confirmation_stamp_ >
+          stair_confirmation_max_gap_) {
+    stair_confirmation_tracks_.clear();
+  }
+  stair_confirmation_tracks_.erase(
+      std::remove_if(stair_confirmation_tracks_.begin(),
+                     stair_confirmation_tracks_.end(),
+          [&](const StairConfirmation& track) {
+            return current_cloud_stamp_ - track.last_seen_stamp >
+                stair_confirmation_max_gap_;
+          }),
+      stair_confirmation_tracks_.end());
+  const auto previous_confirmations = stair_confirmation_tracks_;
+  stair_confirmation_frame_ = confirmation_frame;
+  stair_confirmation_stamp_ = current_cloud_stamp_;
+  const auto confirm_structure = [&](const Eigen::Vector2d& anchor,
+                                     double height,
+                                     const Eigen::Vector2d& direction,
+                                     double step, double depth) {
+    StairConfirmation proposal;
+    proposal.anchor = Eigen::Vector3d(anchor.x(), anchor.y(), height);
+    proposal.direction = Eigen::Vector3d(direction.x(), direction.y(), 0.0);
+    if (current_cloud_to_base_valid_) {
+      const Eigen::Matrix4d base_to_source = current_cloud_to_base_.inverse();
+      proposal.anchor = (base_to_source *
+          Eigen::Vector4d(anchor.x(), anchor.y(), height, 1.0)).head<3>();
+      proposal.direction =
+          (base_to_source.block<3, 3>(0, 0) * proposal.direction).normalized();
+      proposal.up = base_to_source.block<3, 3>(0, 0) * proposal.up;
+    }
+    proposal.step_height = step;
+    proposal.tread_depth = depth;
+    proposal.last_seen_stamp = current_cloud_stamp_;
+    std::size_t matched_track = previous_confirmations.size();
+    double best_position_error = std::numeric_limits<double>::max();
+    for (std::size_t track_index = 0;
+         track_index < previous_confirmations.size(); ++track_index) {
+      const auto& previous = previous_confirmations[track_index];
+      // 靠近时最低可见级可能上下切换一级，必须同时符合进深和级高位移，
+      // 不能仅因高度相近就续认其他物体。补偿使用建模时固定坐标系中的方向。
+      bool same_position = false;
+      double position_error = std::numeric_limits<double>::max();
+      for (int shift = -1; shift <= 1; ++shift) {
+        const Eigen::Vector3d expected_shift = shift *
+            (previous.direction * previous.tread_depth +
+             previous.up * previous.step_height);
+        const double error =
+            (proposal.anchor - previous.anchor - expected_shift).norm();
+        position_error = std::min(position_error, error);
+        if (error <= 0.15) {
+          same_position = true;
+        }
+      }
+      if (same_position &&
+          proposal.direction.dot(previous.direction) >=
+              std::cos(20.0 * 3.14159265358979323846 / 180.0) &&
+          std::fabs(step - previous.step_height) <=
+              stair_step_height_tolerance_ &&
+          std::fabs(depth - previous.tread_depth) <= 0.06 &&
+          position_error < best_position_error) {
+        best_position_error = position_error;
+        matched_track = track_index;
+      }
+    }
+    if (matched_track < previous_confirmations.size()) {
+      proposal.frames = std::min(stair_confirmation_frames_,
+          previous_confirmations[matched_track].frames + 1);
+      stair_confirmation_tracks_[matched_track] = proposal;
+    } else {
+      stair_confirmation_tracks_.push_back(proposal);
+    }
+    if (proposal.frames < stair_confirmation_frames_) {
+      ++pending_confirmation;
+      return false;
+    }
+    ++confirmed_sequences;
+    RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+        "[STAIR_CONFIRMED] frame=%s anchor=(%.3f,%.3f,%.3f) "
+        "direction=(%.3f,%.3f,%.3f) rise=%.3f depth=%.3f frames=%d",
+        confirmation_frame.c_str(), proposal.anchor.x(), proposal.anchor.y(),
+        proposal.anchor.z(), proposal.direction.x(), proposal.direction.y(),
+        proposal.direction.z(), step, depth, proposal.frames);
+    return true;
+  };
+
   // 阶段 2：立面检测主路径。这里的“立面”是同格高度有跨度、空间连续的
   // 点集，不是通过三维平面拟合得到的严格平面。搜索的是近似平行、级间
   // 高差一致、进深在允许范围内的序列；成功后也会更新成员中的楼梯模型。
@@ -993,6 +1147,7 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
                   [](const RiserLevel& lhs, const RiserLevel& rhs) {
                     return lhs.top_z < rhs.top_z;
                   });
+        riser_candidate_count = std::max(riser_candidate_count, risers.size());
         if (risers.size() < static_cast<std::size_t>(stair_min_step_count_)) {
           return stair_keys;
         }
@@ -1154,6 +1309,18 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
         const double model_start_forward =
             selected.front().centroid.dot(stair_direction);
         const double model_start_height = selected.front().top_z;
+        // 新候选只在跨帧确认后启用；已确认结构沿用原版完整补全范围。
+        // 首级的可见片段可能左右跳动，使用整个序列的横向覆盖中心追踪，
+        // 避免把同一立面的不同片段误当作新楼梯；前后位置仍取首级测量。
+        const Eigen::Vector2d confirmation_anchor =
+            stair_direction * model_start_forward +
+            width_direction * (0.5 * (min_width + max_width));
+        if (!confirm_structure(confirmation_anchor, model_start_height,
+                               stair_direction, model_step_height,
+                               model_tread_depth)) {
+          stair_keys.clear();
+          return stair_keys;
+        }
         const int model_last_level =
             static_cast<int>(selected.size()) - 1 +
             stair_model_max_extrapolated_steps_;
@@ -1164,6 +1331,8 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
         // 参数平滑。机器人靠近后最低可见级变化，模型起点也可能随之变化。
         stair_model_valid_ = true;
         stair_model_hold_frames_remaining_ = stair_hysteresis_frames_;
+        stair_model_observation_expires_at_ =
+            current_cloud_stamp_ + stair_model_observation_timeout_;
         stair_model_direction_ = stair_direction;
         stair_model_width_direction_ = width_direction;
         stair_model_start_forward_ = model_start_forward;
@@ -1289,6 +1458,103 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
         stair_model_start_forward_ +
         static_cast<double>(stair_model_last_level_ + 1) *
             stair_model_tread_depth_;
+    // 已确认模型只由本帧实际竖直单元续期，不读取楼梯标签/历史缓存。
+    // 按旧模型分级，要求每级有多个点、横向连续支持且前后位置接近；
+    // 再验证相邻两级的实测级高、进深和共同横向覆盖。单级或单点不续期。
+    struct RiserSupport {
+      std::size_t cells{0U};
+      std::size_t points{0U};
+      double forward_sum{0.0};
+      double height_sum{0.0};
+      Eigen::Vector2d position_sum{Eigen::Vector2d::Zero()};
+      Eigen::Matrix2d position_moments{Eigen::Matrix2d::Zero()};
+      double lateral_low{std::numeric_limits<double>::max()};
+      double lateral_high{std::numeric_limits<double>::lowest()};
+    };
+    std::vector<RiserSupport> support(
+        static_cast<std::size_t>(stair_model_last_level_ + 1));
+    for (const auto& entry : cells) {
+      const auto& cell = entry.second;
+      if (cell.point_indices.size() < 2U ||
+          cell.height_span < stair_min_step_height_ * 0.70 ||
+          cell.height_span > stair_max_cell_height_span_) continue;
+      const Eigen::Vector2d position((cell.x + 0.5) * stair_grid_resolution_,
+                                     (cell.y + 0.5) * stair_grid_resolution_);
+      const double forward = position.dot(stair_model_direction_);
+      const double lateral = position.dot(stair_model_width_direction_);
+      if (lateral < stair_model_min_width_ - stair_grid_resolution_ ||
+          lateral > stair_model_max_width_ + stair_grid_resolution_) continue;
+      const int level = static_cast<int>(std::llround(
+          (forward - stair_model_start_forward_) / stair_model_tread_depth_));
+      if (level < 0 || level > stair_model_last_level_) continue;
+      const double expected_forward = stair_model_start_forward_ +
+          level * stair_model_tread_depth_;
+      const double expected_height = stair_model_start_height_ +
+          level * stair_model_step_height_;
+      if (std::fabs(forward - expected_forward) >
+              stair_model_riser_position_tolerance_ ||
+          std::fabs(cell.high_z - expected_height) >
+              stair_model_tread_height_tolerance_ ||
+          cell.low_z < expected_height - stair_model_step_height_ -
+                           stair_model_tread_height_tolerance_) continue;
+      auto& measured = support[static_cast<std::size_t>(level)];
+      ++measured.cells;
+      measured.points += cell.point_indices.size();
+      measured.forward_sum += forward;
+      measured.height_sum += cell.high_z;
+      const Eigen::Vector2d measured_position(forward, lateral);
+      measured.position_sum += measured_position;
+      measured.position_moments += measured_position * measured_position.transpose();
+      measured.lateral_low = std::min(measured.lateral_low, lateral);
+      measured.lateral_high = std::max(measured.lateral_high, lateral);
+    }
+    const auto valid_support = [&](const RiserSupport& measured) {
+      if (measured.cells < 2U || measured.points < 4U ||
+          measured.lateral_high - measured.lateral_low +
+              stair_grid_resolution_ < 0.10) return false;
+      const Eigen::Matrix2d covariance = measured.position_moments -
+          measured.position_sum * measured.position_sum.transpose() /
+              static_cast<double>(measured.cells);
+      const Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> solver(covariance);
+      // 在(进深, 横向)坐标中，立面长轴应近似沿横向，排除点状和厚块支持。
+      return solver.info() == Eigen::Success &&
+          solver.eigenvalues().maxCoeff() > 1e-8 &&
+          solver.eigenvalues().minCoeff() <=
+              0.5 * solver.eigenvalues().maxCoeff() &&
+          std::fabs(solver.eigenvectors()(1, 1)) >= std::cos(
+              stair_direction_tolerance_deg_ * 3.14159265358979323846 / 180.0);
+    };
+    for (const auto& measured : support) {
+      if (valid_support(measured)) ++observed_riser_levels;
+    }
+    for (std::size_t level = 1U; level < support.size(); ++level) {
+      const auto& low = support[level - 1U];
+      const auto& high = support[level];
+      if (!valid_support(low) || !valid_support(high)) continue;
+      const double measured_step = high.height_sum / high.cells -
+                                   low.height_sum / low.cells;
+      const double measured_depth = high.forward_sum / high.cells -
+                                    low.forward_sum / low.cells;
+      const double overlap = std::min(low.lateral_high, high.lateral_high) -
+          std::max(low.lateral_low, high.lateral_low) + stair_grid_resolution_;
+      if (overlap >= stair_grid_resolution_ &&
+          std::fabs(measured_step - stair_model_step_height_) <=
+              stair_step_height_tolerance_ &&
+          std::fabs(measured_depth - stair_model_tread_depth_) <= 0.06) {
+        renewed_by_observation = true;
+        break;
+      }
+    }
+    // 输入坐标系变化或观测已超时，必须重新完整确认，不能让两级续期复活旧模型。
+    renewed_by_observation = renewed_by_observation &&
+        current_cloud_stamp_ < stair_model_observation_expires_at_ &&
+        (!current_cloud_to_base_valid_ ||
+         stair_model_cloud_frame_ == current_cloud_frame_);
+    if (renewed_by_observation) {
+      stair_model_hold_frames_remaining_ = stair_hysteresis_frames_;
+      stair_model_observation_expires_at_ =
+          current_cloud_stamp_ + stair_model_observation_timeout_;
+    }
     for (const auto& cell_entry : cells) {
       const auto key = cell_entry.first;
       const auto& cell = cell_entry.second;
@@ -1326,10 +1592,11 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
         global_riser_stair_keys.insert(key);
       }
     }
-    // 该模型寿命按处理帧递减，重新检测成功才重置。与表面记忆的“秒”不同，
-    // 输入帧率改变会影响这里对应的实际保持时间。
+    // 完整序列或两级实际观测可重置寿命。没有观测时帧数和传感器时间都到期
+    // 检查，避免输入长时间中断后仍沿用旧模型；预测命中不参与续期。
     --stair_model_hold_frames_remaining_;
-    if (stair_model_hold_frames_remaining_ <= 0) {
+    if (stair_model_hold_frames_remaining_ <= 0 ||
+        current_cloud_stamp_ >= stair_model_observation_expires_at_) {
       stair_model_valid_ = false;
       stair_cell_hold_frames_.clear();
       stair_cell_surface_heights_.clear();
@@ -1542,6 +1809,9 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
       continue;
     }
 
+    // 踏面高度簇会将稳定杂物误判为楼梯，默认只使用立面主路径。
+    if (!use_stair_tread_fallback_) continue;
+
     // 踏面层与 RiserLevel 不同：这里只聚合跨度较小、代表高度接近的格。
     // z 是这一层各格 surface_z 的均值，centroid/width 用于后续几何验证。
     struct Level {
@@ -1728,6 +1998,13 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
       continue;
     }
 
+    const double step = (levels.back().z - levels.front().z) /
+        static_cast<double>(levels.size() - 1U);
+    const double depth = (levels.back().centroid - levels.front().centroid)
+        .dot(stair_direction) / static_cast<double>(levels.size() - 1U);
+    if (!confirm_structure(levels.front().centroid, levels.front().z,
+                           stair_direction, step, depth)) continue;
+
     // 只移动被已验证高度序列支持的踏面。与这些踏面直接相邻的低跨度
     // 立面一并移动，组件中相连的人、墙和其他高度簇继续保留为障碍。
     const double max_surface_span =
@@ -1872,18 +2149,28 @@ pcl::PointCloud<PointType>::Ptr TerrainFilter::detectTraversableStairs(
   stair_cloud->width = static_cast<std::uint32_t>(stair_cloud->size());
   stair_cloud->height = 1;
   stair_cloud->is_dense = true;
+  RCLCPP_DEBUG(node_->get_logger(),
+      "[STAIR_TRACK] stamp=%.3f risers=%zu pending=%zu confirmed=%zu "
+      "supported_levels=%zu renewed=%d valid=%d hold=%d remaining_sec=%.3f points=%zu",
+      current_cloud_stamp_, riser_candidate_count, pending_confirmation,
+      confirmed_sequences, observed_riser_levels, renewed_by_observation,
+      stair_model_valid_, stair_model_hold_frames_remaining_,
+      stair_model_valid_ ? std::max(0.0, stair_model_observation_expires_at_ -
+                                           current_cloud_stamp_) : 0.0,
+      stair_cloud->size());
 
   // 诊断计数并非统一的分类漏斗：候选/拒绝按连通组件统计，全局立面模型
   // 也会单独增加“通过”。“逐点补全”“表面记忆”分别表示对应路径新增点数，
   // “点”是最终楼梯总数；不能据此把“通过/候选”直接当作识别准确率。
   RCLCPP_INFO_THROTTLE(
       node_->get_logger(), *node_->get_clock(), 2000,
-      "楼梯结构识别: 地面基准=%.3f, 候选=%zu, 通过=%zu(立面=%zu), 点=%zu, 逐点补全=%zu, 表面记忆=%zu, 保持[格=%zu, 点=%zu], 拒绝[未接地=%zu, 层数=%zu, 总高=%zu, 级高=%zu, 几何=%zu]",
+      "楼梯结构识别: 地面基准=%.3f, 候选=%zu, 通过=%zu(立面=%zu), 点=%zu, 逐点补全=%zu, 表面记忆=%zu, 保持[格=%zu, 点=%zu], 拒绝[未接地=%zu, 层数=%zu, 总高=%zu, 级高=%zu, 几何=%zu], 确认[等待=%zu, 通过=%zu]",
       reference_ground_z, candidate_components, accepted_components,
       accepted_riser_components, stair_cloud->size(), point_model_fill,
       surface_history_points, hysteresis_cells, hysteresis_points,
       rejected_no_ground, rejected_few_levels, rejected_total_rise,
-      rejected_step_height, rejected_geometry);
+      rejected_step_height, rejected_geometry,
+      pending_confirmation, confirmed_sequences);
   return stair_cloud;
 }
 
