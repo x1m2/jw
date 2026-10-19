@@ -1,0 +1,11 @@
+woodox_imu_bridge:
+  ros__parameters:
+    use_sim_time: false
+    input_topic: /imu
+    output_topic: /imu/data
+    frame_id: woodox_imu
+    gyro_unit: rad_s
+    acc_unit: m_s2
+    orientation_format: wxyz
+    input_reliability: reliable
+    input_timeout_s: 5.0
