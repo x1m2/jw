@@ -81,6 +81,9 @@ struct PlannerConfig {
   std::string robot_frame;  // 机器人坐标系
 
   double final_yaw_min_angular_velocity = 0.28;
+  double reverse_terminal_distance{0.8};
+  double reverse_terminal_max_velocity{0.20};
+  double reverse_terminal_progress_timeout{8.0};
   double local_avoidance_align_enter_angle = 0.524;
   double local_avoidance_align_exit_angle = 0.105;
   double local_avoidance_min_align_angular_velocity = 0.35;

@@ -148,9 +148,13 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   controller_config.acceleration_limit = config_.acceleration_limit;
   controller_config.deceleration_limit = config_.deceleration_limit;
   controller_config.yaw_tolerance = config_.yaw_tolerance;
+  controller_config.goal_tolerance = config_.goal_tolerance;
   controller_config.yaw_adjustment_gain = config_.yaw_adjustment_gain;
   controller_config.final_yaw_min_angular_velocity =
       config_.final_yaw_min_angular_velocity;
+  controller_config.reverse_terminal_distance = config_.reverse_terminal_distance;
+  controller_config.reverse_terminal_max_velocity = config_.reverse_terminal_max_velocity;
+  controller_config.reverse_terminal_progress_timeout = config_.reverse_terminal_progress_timeout;
   controller_config.local_avoidance_align_enter_angle =
       config_.local_avoidance_align_enter_angle;
   controller_config.local_avoidance_align_exit_angle =
@@ -378,6 +382,14 @@ void PurePursuitLocalPlanner::loadParameters() {
       declareOrGetParameter(node_, "yaw_adjustment_gain", 1.0);
   config_.final_yaw_min_angular_velocity =
       declareOrGetParameter(node_, "final_yaw_min_angular_velocity", 0.28);
+  config_.reverse_terminal_distance = std::max(
+      config_.goal_tolerance,
+      declareOrGetParameter(node_, "reverse_terminal_distance", 0.8));
+  config_.reverse_terminal_max_velocity = std::clamp(
+      declareOrGetParameter(node_, "reverse_terminal_max_velocity", 0.20),
+      0.0, config_.max_linear_velocity);
+  config_.reverse_terminal_progress_timeout = std::max(
+      1.0, declareOrGetParameter(node_, "reverse_terminal_progress_timeout", 8.0));
   config_.local_avoidance_align_enter_angle =
       declareOrGetParameter(node_, "local_avoidance_align_enter_angle", 30.0) *
       M_PI / 180.0;
@@ -874,11 +886,44 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     target_velocity = path_tracker_->computeTargetVelocity(
         robot_pose, lookahead_point, target_velocity, motion_direction);
   }
+  ReverseTerminalContext reverse_terminal;
+  const ReverseTerminalContext *reverse_terminal_context = nullptr;
+  if (!local_tracking && motion_direction == -1 && global_path_.poses.size() >= 2) {
+    reverse_terminal.goal = global_path_.poses.back().pose.position;
+    // 从末尾跳过重复点，使用最后一条有效线段的切线，不追逐近终点的点方位角。
+    for (std::size_t i = global_path_.poses.size() - 1; i > 0; --i) {
+      const auto &previous = global_path_.poses[i - 1].pose.position;
+      const double dx = reverse_terminal.goal.x - previous.x;
+      const double dy = reverse_terminal.goal.y - previous.y;
+      if (std::hypot(dx, dy) > 1e-4) {
+        reverse_terminal.path_yaw = std::atan2(dy, dx);
+        reverse_terminal_context = &reverse_terminal;
+        break;
+      }
+    }
+    // 距离近但路径尚有折返时不启用；从当前投影进度累计剩余路径弧长。
+    for (std::size_t i = path_progress_index_; i + 1 < global_path_.poses.size(); ++i) {
+      const auto &a = global_path_.poses[i].pose.position;
+      const auto &b = global_path_.poses[i + 1].pose.position;
+      const double segment_length = std::hypot(b.x - a.x, b.y - a.y);
+      reverse_terminal.remaining_path_length += segment_length;
+      // 仅接管末端近似直线段，不能用终点切线跨过前方尚未走完的急弯。
+      if (segment_length > 1e-4 &&
+          ((b.x - a.x) * std::cos(reverse_terminal.path_yaw) +
+           (b.y - a.y) * std::sin(reverse_terminal.path_yaw)) <
+              segment_length * std::cos(20.0 * M_PI / 180.0)) {
+        reverse_terminal_context = nullptr;
+        break;
+      }
+    }
+    reverse_terminal.motion_blocked = costmap_motion_blocked_ || obstacle_stop_active_.load();
+  }
   if (!controller_ ||
       !controller_->computeCommand(
           robot_pose, lookahead_point, target_velocity, edge_angular_velocity,
           motion_direction,
-          local_tracking, path_progress_index_, current_path_index_, cmd_vel)) {
+          local_tracking, path_progress_index_, current_path_index_, cmd_vel,
+          reverse_terminal_context)) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "Failed to compute pure pursuit command");
     cmd_vel = geometry_msgs::msg::Twist();
@@ -895,6 +940,10 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     last_cmd_vel_.linear.y = 0.0;
   }
   const auto target_command = cmd_vel;
+  // 全局后退不能因上一模式残留的正向速度而在限加速度后继续前进。
+  if (!local_tracking && motion_direction == -1 && last_cmd_vel_.linear.x > 0.0) {
+    last_cmd_vel_.linear.x = 0.0;
+  }
   // 应用速度限制
   controller_->applyVelocityLimits(
       last_cmd_vel_, (node_->now() - last_control_time_).seconds(),
