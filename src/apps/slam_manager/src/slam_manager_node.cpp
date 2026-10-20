@@ -88,6 +88,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       "map_storage.finish_mapping_timeout_sec", 300.0);
   relocalization_timeout_sec_ = declare_parameter<double>(
       "localization.relocalization_timeout_sec", 60.0);
+  localization_tracking_pose_timeout_sec_ =
+      declare_parameter<double>("localization.tracking_pose_timeout_sec", 2.0);
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
   imu_calibration_topic_ =
@@ -335,8 +337,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::obstacleStopCallback, this,
                 std::placeholders::_1));
   avoidance_state_sub_ = create_subscription<AvoidanceState>(
-      "/local_avoidance/state",
-      rclcpp::QoS(1).reliable().transient_local(),
+      "/local_avoidance/state", rclcpp::QoS(1).reliable().transient_local(),
       std::bind(&SlamManagerNode::avoidanceStateCallback, this,
                 std::placeholders::_1));
 
@@ -607,8 +608,10 @@ bool SlamManagerNode::clearRuntimeAfterTeardown(std::string &message) {
     localization_attempt_session_id_ = 0U;
     localization_attempt_active_ = false;
     localization_result_armed_ = false;
+    localization_match_succeeded_ = false;
     localization_result_ready_ = false;
     localization_result_success_ = false;
+    localization_match_pose_sequence_ = localization_pose_sequence_;
     localization_result_message_.clear();
   }
   localization_result_cv_.notify_all();
@@ -1321,8 +1324,10 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     localization_attempt_session_id_ = localization_session_id;
     localization_attempt_active_ = true;
     localization_result_armed_ = false;
+    localization_match_succeeded_ = false;
     localization_result_ready_ = false;
     localization_result_success_ = false;
+    localization_match_pose_sequence_ = localization_pose_sequence_;
     localization_result_message_.clear();
   }
 
@@ -1422,6 +1427,9 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
   const auto deadline =
       std::chrono::steady_clock::now() +
       std::chrono::duration<double>(relocalization_timeout_sec_);
+  auto tracking_pose_deadline = deadline;
+  bool tracking_pose_deadline_active = false;
+  bool tracking_pose_timed_out = false;
   auto next_feedback =
       std::chrono::steady_clock::now() + std::chrono::seconds(1);
   {
@@ -1430,20 +1438,35 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
            !localization_result_ready_) {
       was_superseded = superseded();
       was_cancelled = cancelled();
-      if (was_superseded || was_cancelled ||
-          std::chrono::steady_clock::now() >= deadline) {
+      const auto current_time = std::chrono::steady_clock::now();
+      if (localization_match_succeeded_ && !tracking_pose_deadline_active) {
+        tracking_pose_deadline =
+            current_time +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(
+                    localization_tracking_pose_timeout_sec_));
+        tracking_pose_deadline_active = true;
+      }
+      if (tracking_pose_deadline_active &&
+          current_time >= tracking_pose_deadline) {
+        tracking_pose_timed_out = true;
+        break;
+      }
+      if (was_superseded || was_cancelled || current_time >= deadline) {
         break;
       }
       localization_result_cv_.wait_for(lock, std::chrono::milliseconds(100));
-      const auto current_time = std::chrono::steady_clock::now();
-      if (options.publish_feedback && current_time >= next_feedback) {
-        const std::string feedback_message = localization_result_armed_
-                                                 ? "relocalizing"
-                                                 : "starting localization";
+      const auto feedback_time = std::chrono::steady_clock::now();
+      if (options.publish_feedback && feedback_time >= next_feedback) {
+        const std::string feedback_message =
+            localization_match_succeeded_
+                ? "relocalization matched; waiting for tracking pose"
+                : (localization_result_armed_ ? "relocalizing"
+                                              : "starting localization");
         lock.unlock();
         options.publish_feedback(feedback_message);
         lock.lock();
-        next_feedback = current_time + std::chrono::seconds(1);
+        next_feedback = feedback_time + std::chrono::seconds(1);
       }
     }
     if (localization_attempt_session_id_ != localization_session_id) {
@@ -1454,6 +1477,7 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
       result_message = localization_result_message_;
       localization_attempt_active_ = false;
       localization_result_armed_ = false;
+      localization_match_succeeded_ = false;
     }
   }
 
@@ -1498,6 +1522,13 @@ SlamManagerNode::RelocalizationResult SlamManagerNode::runRelocalizationAttempt(
     result.message = result_message.empty()
                          ? "relocalization failed without a result message"
                          : result_message;
+  } else if (tracking_pose_timed_out) {
+    result.status = RelocalizationStatus::kTimedOut;
+    result.message =
+        "relocalization matched, but no new localization tracking pose was "
+        "received within " +
+        std::to_string(localization_tracking_pose_timeout_sec_) +
+        " seconds, map_id=" + options.map_id;
   } else {
     result.status = RelocalizationStatus::kTimedOut;
     result.message = "relocalization timed out after " +
@@ -1602,8 +1633,8 @@ bool SlamManagerNode::relocalizeForMapConnection(
 
 void SlamManagerNode::relocalizationResultCallback(
     const std_msgs::msg::Bool::SharedPtr message) {
-  // 协议2.5：只有true表示最终定位成功；false表示算法仍在搜索。
-  // false表示算法仍在尝试，不作为最终失败；最终失败由超时统一判定。
+  // 算法匹配成功只是第一阶段；必须再收到一帧新的连续定位位姿，才能向
+  // APP返回重定位成功，保证APP随后立即下发导航时已有可靠的map位姿。
   if (!message->data) return;
 
   {
@@ -1612,10 +1643,14 @@ void SlamManagerNode::relocalizationResultCallback(
         localization_result_ready_) {
       return;
     }
-    localization_result_ready_ = true;
-    localization_result_success_ = true;
-    localization_result_message_ = "relocalization succeeded";
+    if (localization_match_succeeded_) return;
+    localization_match_succeeded_ = true;
+    localization_match_pose_sequence_ = localization_pose_sequence_;
+    localization_result_message_ =
+        "relocalization matched; waiting for tracking pose";
   }
+  RCLCPP_INFO(get_logger(),
+              "Relocalization matched; waiting for a new localization pose");
   localization_result_cv_.notify_all();
 }
 
@@ -2050,8 +2085,8 @@ void SlamManagerNode::avoidanceStateCallback(
 
 void SlamManagerNode::publishNavigationObstacleState() {
   const auto mode = state_machine_.mode();
-  const bool navigation_active = mode == SlamMode::kNavigating ||
-                                 mode == SlamMode::kNavigationPaused;
+  const bool navigation_active =
+      mode == SlamMode::kNavigating || mode == SlamMode::kNavigationPaused;
   uint8_t next_state = NavigationObstacleState::UNBLOCKED;
   {
     std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
@@ -2086,8 +2121,37 @@ void SlamManagerNode::currentPoseCallback(
 
 void SlamManagerNode::localizationPoseCallback(
     const LocalizationPose::SharedPtr message) {
+  uint64_t pose_sequence = 0U;
+  {
+    // Sequence is sampled before publishing/storing the pose. If the
+    // relocalization result arrives concurrently after this point, this pose
+    // is considered pre-match and the following pose will confirm tracking.
+    std::lock_guard<std::mutex> lock(localization_result_mutex_);
+    pose_sequence = ++localization_pose_sequence_;
+  }
   publishCurrentPose(message->pose,
                      std::clamp(message->match_score, 0.0F, 1.0F));
+
+  bool tracking_confirmed = false;
+  {
+    std::lock_guard<std::mutex> lock(localization_result_mutex_);
+    if (localization_attempt_active_ && localization_result_armed_ &&
+        localization_match_succeeded_ && !localization_result_ready_ &&
+        pose_sequence > localization_match_pose_sequence_) {
+      localization_result_ready_ = true;
+      localization_result_success_ = true;
+      localization_result_message_ =
+          "relocalization succeeded with a new tracking pose";
+      tracking_confirmed = true;
+    }
+  }
+  if (tracking_confirmed) {
+    RCLCPP_INFO(get_logger(),
+                "Relocalization tracking confirmed by localization pose "
+                "sequence=%llu",
+                static_cast<unsigned long long>(pose_sequence));
+    localization_result_cv_.notify_all();
+  }
 }
 
 void SlamManagerNode::publishCurrentPose(

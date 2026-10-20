@@ -221,6 +221,7 @@ class SlamManagerNode : public rclcpp::Node {
   double start_mapping_timeout_sec_{30.0};
   double finish_mapping_timeout_sec_{300.0};
   double relocalization_timeout_sec_{60.0};
+  double localization_tracking_pose_timeout_sec_{2.0};
   double localization_stop_timeout_sec_{10.0};
   std::string imu_calibration_topic_{"/livox/imu"};
   std::size_t imu_calibration_sample_count_{200U};
@@ -240,8 +241,11 @@ class SlamManagerNode : public rclcpp::Node {
   uint64_t localization_attempt_session_id_{0U};
   bool localization_attempt_active_{false};
   bool localization_result_armed_{false};
+  bool localization_match_succeeded_{false};
   bool localization_result_ready_{false};
   bool localization_result_success_{false};
+  uint64_t localization_pose_sequence_{0U};
+  uint64_t localization_match_pose_sequence_{0U};
   std::string localization_result_message_;
   std::atomic_bool relocalization_succeeded_{false};
   std::atomic_bool localization_action_active_{false};

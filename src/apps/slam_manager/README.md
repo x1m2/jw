@@ -35,7 +35,9 @@ APP /robot/start_localization
   -> 使用最近一次load_map成功的地图启动定位
   -> use_initial_pose=true时使用APP给出的x/y/z/theta
   -> Action执行期间每秒反馈elapsed_time和当前阶段message
-  -> 60秒内成功则返回SUCCEEDED，定位算法继续运行
+  -> 收到/reloc_success=true后等待下一帧/app/localization_pose
+  -> 新定位位姿到达并写入current_pose后才返回SUCCEEDED，定位算法继续运行
+  -> 匹配成功后2秒仍无新定位位姿则返回ABORTED
   -> 失败或超时返回ABORTED并停止定位
   -> APP取消则返回CANCELED、停止定位并回到IDLE
 ```
@@ -89,7 +91,7 @@ slam_manager逐个发布 /navigation/task_target
 A -> B为map_connection时：
   -> 到达A后保持导航Workers运行，不向B发布运动目标
   -> 以B节点x/y/z/theta重启当前地图的定位Worker
-  -> 发布B位姿到/initialpose并等待/reloc_success=true
+  -> 发布B位姿到/initialpose，等待/reloc_success=true及后一帧定位位姿
   -> 逻辑完成B
   -> 发布B之后的下一个普通节点
 ```
