@@ -189,6 +189,23 @@ void Lds::PushLidarData(PointPacket* lidar_data, const uint8_t index, const uint
       }
     }
   } else {
+    ++lidar_drop_counts_[index];
+    const auto now = std::chrono::steady_clock::now();
+    const auto &last_warning_time = last_drop_warning_times_[index];
+    if (last_warning_time.time_since_epoch().count() == 0 ||
+        now - last_warning_time >= std::chrono::seconds(5)) {
+      fprintf(stderr,
+              "[MID360_QUEUE_DROP] queue=lidar index=%u used=%u "
+              "capacity=%u dropped_total=%llu suppressed=%llu\n",
+              index, QueueUsedSize(queue), queue->size,
+              static_cast<unsigned long long>(lidar_drop_counts_[index]),
+              static_cast<unsigned long long>(
+                  suppressed_drop_warnings_[index]));
+      last_drop_warning_times_[index] = now;
+      suppressed_drop_warnings_[index] = 0;
+    } else {
+      ++suppressed_drop_warnings_[index];
+    }
     if (pcd_semaphore_.GetCount() <= 0) {
         pcd_semaphore_.Signal();
     }

@@ -26,10 +26,18 @@
 #include "livox_lidar_api.h"
 #include <cstdlib>
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 #include <limits>
 
 namespace livox_ros {
+
+namespace {
+constexpr uint64_t kReceiveGapWarningNs = 50ULL * 1000ULL * 1000ULL;
+constexpr uint64_t kRawQueueBacklogWarningNs = 250ULL * 1000ULL * 1000ULL;
+constexpr std::size_t kRawQueueBacklogWarningSize = 256;
+constexpr auto kWarningThrottle = std::chrono::seconds(5);
+}  // namespace
 
 std::atomic<bool> PubHandler::is_timestamp_sync_;
 
@@ -77,6 +85,87 @@ void PubHandler::SetImuDataCallback(ImuDataCallback cb, void* client_data) {
   imu_callback_ = cb;
 }
 
+void PubHandler::CheckReceiveGap(
+    const char* stream, uint32_t handle, uint64_t sensor_time_ns,
+    std::map<uint32_t, ReceiveTiming>& timings) {
+  const auto now = std::chrono::steady_clock::now();
+  auto& timing = timings[handle];
+  if (!timing.initialized) {
+    timing.sensor_time_ns = sensor_time_ns;
+    timing.wall_time = now;
+    timing.initialized = true;
+    return;
+  }
+
+  const bool timestamp_regressed = sensor_time_ns < timing.sensor_time_ns;
+  const uint64_t sensor_delta_ns = timestamp_regressed
+                                       ? timing.sensor_time_ns - sensor_time_ns
+                                       : sensor_time_ns - timing.sensor_time_ns;
+  const auto wall_delta_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                 now - timing.wall_time)
+                                 .count();
+  const bool receive_gap = sensor_delta_ns > kReceiveGapWarningNs ||
+                           wall_delta_ns >
+                               static_cast<int64_t>(kReceiveGapWarningNs);
+
+  if (timestamp_regressed || receive_gap) {
+    const bool can_print =
+        timing.last_warning_time.time_since_epoch().count() == 0 ||
+        now - timing.last_warning_time >= kWarningThrottle;
+    if (can_print) {
+      const double signed_sensor_delta_sec =
+          (timestamp_regressed ? -1.0 : 1.0) * sensor_delta_ns * 1.0e-9;
+      std::fprintf(
+          stderr,
+          "[MID360_RX_GAP] stream=%s handle=%u sensor_dt=%.3fs "
+          "wall_dt=%.3fs timestamp_regressed=%d suppressed=%llu\n",
+          stream, handle, signed_sensor_delta_sec, wall_delta_ns * 1.0e-9,
+          timestamp_regressed ? 1 : 0,
+          static_cast<unsigned long long>(timing.suppressed_warnings));
+      timing.last_warning_time = now;
+      timing.suppressed_warnings = 0;
+    } else {
+      ++timing.suppressed_warnings;
+    }
+  }
+
+  timing.sensor_time_ns = sensor_time_ns;
+  timing.wall_time = now;
+}
+
+void PubHandler::CheckRawQueueBacklog() {
+  if (raw_packet_queue_.empty()) {
+    return;
+  }
+
+  const uint64_t newest_time_ns = raw_packet_queue_.back().time_stamp;
+  const uint64_t oldest_time_ns = raw_packet_queue_.front().time_stamp;
+  const uint64_t queue_span_ns = newest_time_ns >= oldest_time_ns
+                                     ? newest_time_ns - oldest_time_ns
+                                     : 0;
+  if (raw_packet_queue_.size() < kRawQueueBacklogWarningSize &&
+      queue_span_ns < kRawQueueBacklogWarningNs) {
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  const bool can_print =
+      last_backlog_warning_time_.time_since_epoch().count() == 0 ||
+      now - last_backlog_warning_time_ >= kWarningThrottle;
+  if (can_print) {
+    std::fprintf(stderr,
+                 "[MID360_QUEUE_BACKLOG] queue=raw size=%zu "
+                 "sensor_span=%.3fs suppressed=%llu\n",
+                 raw_packet_queue_.size(), queue_span_ns * 1.0e-9,
+                 static_cast<unsigned long long>(
+                     suppressed_backlog_warnings_));
+    last_backlog_warning_time_ = now;
+    suppressed_backlog_warnings_ = 0;
+  } else {
+    ++suppressed_backlog_warnings_;
+  }
+}
+
 void PubHandler::AddLidarsExtParam(LidarExtParameter& lidar_param) {
   std::unique_lock<std::mutex> lock(packet_mutex_);
   uint32_t id = 0;
@@ -108,14 +197,21 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
     is_timestamp_sync_.store(false);
   }
 
+  const uint64_t packet_timestamp = GetEthPacketTimestamp(
+      data->time_type, data->timestamp, sizeof(data->timestamp));
+
   if (data->data_type == kLivoxLidarImuData) {
+    {
+      std::unique_lock<std::mutex> lock(self->packet_mutex_);
+      self->CheckReceiveGap("imu", handle, packet_timestamp,
+                            self->imu_receive_timings_);
+    }
     if (self->imu_callback_) {
       RawImuPoint* imu = (RawImuPoint*) data->data;
       ImuData imu_data;
       imu_data.lidar_type = static_cast<uint8_t>(LidarProtoType::kLivoxLidarType);
       imu_data.handle = handle;
-      imu_data.time_stamp = GetEthPacketTimestamp(data->time_type,
-                                                  data->timestamp, sizeof(data->timestamp));
+      imu_data.time_stamp = packet_timestamp;
       imu_data.gyro_x = imu->gyro_x;
       imu_data.gyro_y = imu->gyro_y;
       imu_data.gyro_z = imu->gyro_z;
@@ -140,13 +236,15 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
   packet.data_type = data->data_type;
   packet.point_num = data->dot_num;
   packet.point_interval = data->time_interval * 100 / data->dot_num;  //ns
-  packet.time_stamp = GetEthPacketTimestamp(data->time_type,
-                                            data->timestamp, sizeof(data->timestamp));
+  packet.time_stamp = packet_timestamp;
   uint32_t length = data->length - sizeof(LivoxLidarEthernetPacket) + 1;
   packet.raw_data.insert(packet.raw_data.end(), data->data, data->data + length);
   {
     std::unique_lock<std::mutex> lock(self->packet_mutex_);
+    self->CheckReceiveGap("lidar", handle, packet_timestamp,
+                          self->lidar_receive_timings_);
     self->raw_packet_queue_.push_back(packet);
+    self->CheckRawQueueBacklog();
   }
     self->packet_condition_.notify_one();
 

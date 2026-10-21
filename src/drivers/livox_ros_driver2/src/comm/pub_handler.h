@@ -26,6 +26,7 @@
 #define LIVOX_DRIVER_PUB_HANDLER_H_
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <condition_variable> // std::condition_variable
 #include <deque>
@@ -91,8 +92,20 @@ class PubHandler {
   void SetImuDataCallback(ImuDataCallback cb, void* client_data);
 
  private:
+  struct ReceiveTiming {
+    uint64_t sensor_time_ns = 0;
+    std::chrono::steady_clock::time_point wall_time;
+    std::chrono::steady_clock::time_point last_warning_time;
+    uint64_t suppressed_warnings = 0;
+    bool initialized = false;
+  };
+
   //thread to process raw data
   void RawDataProcess();
+  void CheckReceiveGap(const char* stream, uint32_t handle,
+                       uint64_t sensor_time_ns,
+                       std::map<uint32_t, ReceiveTiming>& timings);
+  void CheckRawQueueBacklog();
   std::atomic<bool> is_quit_{false};
   std::shared_ptr<std::thread> point_process_thread_;
   std::mutex packet_mutex_;
@@ -116,6 +129,10 @@ class PubHandler {
   PointFrame frame_;
 
   std::deque<RawPacket> raw_packet_queue_;
+  std::map<uint32_t, ReceiveTiming> imu_receive_timings_;
+  std::map<uint32_t, ReceiveTiming> lidar_receive_timings_;
+  std::chrono::steady_clock::time_point last_backlog_warning_time_;
+  uint64_t suppressed_backlog_warnings_ = 0;
 
   //pub config
   uint64_t publish_interval_ = 100000000; //100 ms

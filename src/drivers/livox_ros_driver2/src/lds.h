@@ -27,6 +27,9 @@
 #ifndef LIVOX_ROS_DRIVER_LDS_H_
 #define LIVOX_ROS_DRIVER_LDS_H_
 
+#include <array>
+#include <chrono>
+
 #include <map>
 
 #include "comm/semaphore.h"
@@ -76,6 +79,10 @@ class Lds {
   uint8_t data_src_;
  private:
   volatile bool request_exit_;
+  std::array<uint64_t, kMaxSourceLidar> lidar_drop_counts_{};
+  std::array<uint64_t, kMaxSourceLidar> suppressed_drop_warnings_{};
+  std::array<std::chrono::steady_clock::time_point, kMaxSourceLidar>
+      last_drop_warning_times_{};
 };
 
 }  // namespace livox_ros
