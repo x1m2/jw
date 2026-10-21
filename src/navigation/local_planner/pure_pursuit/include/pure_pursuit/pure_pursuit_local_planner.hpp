@@ -28,6 +28,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <tf2/LinearMath/Scalar.hpp>
 #include <tf2/utils.hpp>
@@ -81,9 +82,6 @@ struct PlannerConfig {
   std::string robot_frame;  // 机器人坐标系
 
   double final_yaw_min_angular_velocity = 0.28;
-  double reverse_terminal_distance{0.8};
-  double reverse_terminal_max_velocity{0.20};
-  double reverse_terminal_progress_timeout{8.0};
   double local_avoidance_align_enter_angle = 0.524;
   double local_avoidance_align_exit_angle = 0.105;
   double local_avoidance_min_align_angular_velocity = 0.35;
@@ -157,6 +155,7 @@ private:
       nav_state_pub_; // 导航状态发布器
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr nav_failed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr obstacle_stop_enabled_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr obstacle_state_pub_;
   rclcpp::Publisher<navigation_interfaces::msg::AvoidanceState>::SharedPtr
       avoidance_state_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr pause_service_;
@@ -176,6 +175,7 @@ private:
       smoothed_local_path_sub_; // 新增：平滑后局部路径订阅器
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
       obstacle_stop_active_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stopped_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   // TF
@@ -219,6 +219,7 @@ private:
   bool pause_pose_valid_{false};
   std::atomic_bool reset_velocity_on_next_control_{false};
   std::atomic_bool obstacle_stop_active_{false};
+  std::atomic_bool obstacle_stopped_{false};
   bool costmap_motion_blocked_{false};
   int costmap_motion_safe_count_{0};
   std::uint64_t costmap_motion_last_safe_version_{0};
@@ -241,6 +242,7 @@ private:
 
   void publishAvoidanceFailure(bool failed);
   void publishAvoidanceState(const LocalAvoidanceOutput &output);
+  void publishObstacleState();
 
   /**
    * @brief 控制回调函数

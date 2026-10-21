@@ -22,9 +22,6 @@
     yaw_tolerance: 0.26                   # 最终航向容差（rad），约 15°
     yaw_adjustment_gain: 0.9              # 最终原地调向比例增益
     final_yaw_min_angular_velocity: 0.35   # 最终调向最小角速度（rad/s）
-    reverse_terminal_distance: 0.8 # 全局后退末段减速范围（m），同时约束距终点距离与剩余路径长度
-    reverse_terminal_max_velocity: 0.20 # 后退末段候选线速度上限（m/s）；近终点按二维距离减速
-    reverse_terminal_progress_timeout: 8.0 # 无有效进展则锁停（s）；近终点对准也计入位置进展超时，停障等待不累计
     local_avoidance_align_enter_angle: 40.0 # 局部跟踪误差超过此值重新原地对齐（deg）
     local_avoidance_align_exit_angle: 15.0   # 新局部段开始/重新对齐的退出阈值（deg）
     local_avoidance_min_align_angular_velocity: 0.35 # 避障原地对齐最小角速度，高于底盘死区（rad/s）

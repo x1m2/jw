@@ -61,6 +61,7 @@ ros2 launch pure_pursuit pure_pursuit.launch.py
 ```text
 /cmd_vel_planned  geometry_msgs/msg/Twist
 /nav_state        std_msgs/msg/Bool
+/obstacle_handling_state std_msgs/msg/UInt8
 /obstacle_stop/enabled std_msgs/msg/Bool
 local_path        nav_msgs/msg/Path
 local_path_astar  nav_msgs/msg/Path
@@ -68,6 +69,19 @@ local_astar_raw_path nav_msgs/msg/Path
 local_astar_bezier_path nav_msgs/msg/Path
 local_goal_marker visualization_msgs/msg/Marker
 ```
+
+`/obstacle_handling_state` 按控制频率持续发布，使用 reliable、transient_local、
+深度 1 的 QoS，支持晚订阅读取最近状态：
+
+- `0`：未阻挡。无任务、已到点或人工暂停本身也归为 0，不代表机器人正在运动。
+- `1`：停障中。独立停车节点报告 `/obstacle_stop/stopped=true`、PP 轨迹碰撞
+  检查停车（含恢复等待），或局部绕障阻塞、失败、等待动态路径。
+- `2`：绕障中。正在规划局部绕障路径、对准或跟踪局部路径。
+
+实际停障优先于绕障状态。仅减速、急停或传感器/指令超时不会单独触发状态 1。
+此话题与现有 `/local_avoidance/state` 的数值定义不同，后者保持原有语义。
+
+查看状态：`ros2 topic echo /obstacle_handling_state`。
 
 `/obstacle_stop/enabled`采用正向语义：`true`开启停障，`false`关闭停障。
 当前路径点的`EdgePolicy.motion_direction=1`时保持正向跟踪；为`-1`时车头

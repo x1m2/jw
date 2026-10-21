@@ -152,9 +152,6 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
   controller_config.yaw_adjustment_gain = config_.yaw_adjustment_gain;
   controller_config.final_yaw_min_angular_velocity =
       config_.final_yaw_min_angular_velocity;
-  controller_config.reverse_terminal_distance = config_.reverse_terminal_distance;
-  controller_config.reverse_terminal_max_velocity = config_.reverse_terminal_max_velocity;
-  controller_config.reverse_terminal_progress_timeout = config_.reverse_terminal_progress_timeout;
   controller_config.local_avoidance_align_enter_angle =
       config_.local_avoidance_align_enter_angle;
   controller_config.local_avoidance_align_exit_angle =
@@ -212,6 +209,10 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
           rclcpp::QoS(1).reliable().transient_local());
   LocalAvoidanceOutput initial_avoidance_output;
   publishAvoidanceState(initial_avoidance_output);
+
+  obstacle_state_pub_ = node_->create_publisher<std_msgs::msg::UInt8>(
+      "/obstacle_handling_state", rclcpp::QoS(1).reliable().transient_local());
+  publishObstacleState();
 
   paused_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
       "/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local());
@@ -277,6 +278,11 @@ bool PurePursuitLocalPlanner::initialize(rclcpp::Node::SharedPtr node) {
           [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
             obstacle_stop_active_.store(msg->data);
           });
+  obstacle_stopped_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+        obstacle_stopped_.store(msg->data);
+      });
 
   // 初始化控制定时器
   control_timer_ = node_->create_wall_timer(
@@ -336,6 +342,36 @@ void PurePursuitLocalPlanner::publishAvoidanceState(
   avoidance_state_pub_->publish(message);
 }
 
+void PurePursuitLocalPlanner::publishObstacleState() {
+  if (!obstacle_state_pub_) return;
+
+  std_msgs::msg::UInt8 message;
+  message.data = 0;  // 未阻挡；不代表导航正在运动。
+  const bool tracking_active = path_received_ && !goal_reached_ &&
+      !navigation_paused_.load() && !global_replan_waiting_.load() &&
+      !resume_replan_waiting_.load();
+  // 独立节点的 active 还包含减速、急停和数据超时，不能作为障碍停车依据。
+  // 实际停障优先于绕障，包含 PP 轨迹碰撞检查后的恢复等待。
+  if (obstacle_stopped_.load() ||
+      (tracking_active && costmap_motion_blocked_)) {
+    message.data = 1;
+  } else if (tracking_active) {
+    switch (avoidance_state_.load()) {
+      case navigation_interfaces::msg::AvoidanceState::AVOIDING:
+        message.data = 2;  // 包括局部绕障路径的规划、对准及跟踪。
+        break;
+      case navigation_interfaces::msg::AvoidanceState::BLOCKED:
+      case navigation_interfaces::msg::AvoidanceState::WAITING_DYNAMIC_PATH:
+      case navigation_interfaces::msg::AvoidanceState::FAILED:
+        message.data = 1;
+        break;
+      default:
+        break;
+    }
+  }
+  obstacle_state_pub_->publish(message);
+}
+
 void PurePursuitLocalPlanner::loadParameters() {
   // Pure Pursuit parameters
   config_.lookahead_distance_min =
@@ -382,14 +418,6 @@ void PurePursuitLocalPlanner::loadParameters() {
       declareOrGetParameter(node_, "yaw_adjustment_gain", 1.0);
   config_.final_yaw_min_angular_velocity =
       declareOrGetParameter(node_, "final_yaw_min_angular_velocity", 0.28);
-  config_.reverse_terminal_distance = std::max(
-      config_.goal_tolerance,
-      declareOrGetParameter(node_, "reverse_terminal_distance", 0.8));
-  config_.reverse_terminal_max_velocity = std::clamp(
-      declareOrGetParameter(node_, "reverse_terminal_max_velocity", 0.20),
-      0.0, config_.max_linear_velocity);
-  config_.reverse_terminal_progress_timeout = std::max(
-      1.0, declareOrGetParameter(node_, "reverse_terminal_progress_timeout", 8.0));
   config_.local_avoidance_align_enter_angle =
       declareOrGetParameter(node_, "local_avoidance_align_enter_angle", 30.0) *
       M_PI / 180.0;
@@ -886,44 +914,11 @@ bool PurePursuitLocalPlanner::computeVelocityCommands(
     target_velocity = path_tracker_->computeTargetVelocity(
         robot_pose, lookahead_point, target_velocity, motion_direction);
   }
-  ReverseTerminalContext reverse_terminal;
-  const ReverseTerminalContext *reverse_terminal_context = nullptr;
-  if (!local_tracking && motion_direction == -1 && global_path_.poses.size() >= 2) {
-    reverse_terminal.goal = global_path_.poses.back().pose.position;
-    // 从末尾跳过重复点，使用最后一条有效线段的切线，不追逐近终点的点方位角。
-    for (std::size_t i = global_path_.poses.size() - 1; i > 0; --i) {
-      const auto &previous = global_path_.poses[i - 1].pose.position;
-      const double dx = reverse_terminal.goal.x - previous.x;
-      const double dy = reverse_terminal.goal.y - previous.y;
-      if (std::hypot(dx, dy) > 1e-4) {
-        reverse_terminal.path_yaw = std::atan2(dy, dx);
-        reverse_terminal_context = &reverse_terminal;
-        break;
-      }
-    }
-    // 距离近但路径尚有折返时不启用；从当前投影进度累计剩余路径弧长。
-    for (std::size_t i = path_progress_index_; i + 1 < global_path_.poses.size(); ++i) {
-      const auto &a = global_path_.poses[i].pose.position;
-      const auto &b = global_path_.poses[i + 1].pose.position;
-      const double segment_length = std::hypot(b.x - a.x, b.y - a.y);
-      reverse_terminal.remaining_path_length += segment_length;
-      // 仅接管末端近似直线段，不能用终点切线跨过前方尚未走完的急弯。
-      if (segment_length > 1e-4 &&
-          ((b.x - a.x) * std::cos(reverse_terminal.path_yaw) +
-           (b.y - a.y) * std::sin(reverse_terminal.path_yaw)) <
-              segment_length * std::cos(20.0 * M_PI / 180.0)) {
-        reverse_terminal_context = nullptr;
-        break;
-      }
-    }
-    reverse_terminal.motion_blocked = costmap_motion_blocked_ || obstacle_stop_active_.load();
-  }
   if (!controller_ ||
       !controller_->computeCommand(
           robot_pose, lookahead_point, target_velocity, edge_angular_velocity,
           motion_direction,
-          local_tracking, path_progress_index_, current_path_index_, cmd_vel,
-          reverse_terminal_context)) {
+          local_tracking, path_progress_index_, current_path_index_, cmd_vel)) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                          "Failed to compute pure pursuit command");
     cmd_vel = geometry_msgs::msg::Twist();
@@ -1050,6 +1045,7 @@ void PurePursuitLocalPlanner::controlCallback() {
                          "[PP_PAUSED] navigation paused, publishing zero "
                          "velocity");
     cmd_vel_pub_->publish(geometry_msgs::msg::Twist());
+    publishObstacleState();
     return;
   }
 
@@ -1063,6 +1059,7 @@ void PurePursuitLocalPlanner::controlCallback() {
     last_cmd_vel_ = stop_command;
     last_control_time_ = node_->now();
   }
+  publishObstacleState();
 }
 
 void PurePursuitLocalPlanner::globalPathWithPolicyCallback(
