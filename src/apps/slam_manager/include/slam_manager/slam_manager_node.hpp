@@ -12,11 +12,11 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <memory>
 #include <mutex>
-#include <navigation_interfaces/msg/avoidance_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <string>
 #include <thread>
@@ -61,7 +61,6 @@ class SlamManagerNode : public rclcpp::Node {
   using NavigateToPose = slam_manager_interfaces::action::NavigateToPose;
   using NavigationObstacleState =
       slam_manager_interfaces::msg::NavigationObstacleState;
-  using AvoidanceState = navigation_interfaces::msg::AvoidanceState;
   using RobotPose = slam_manager_interfaces::msg::RobotPose;
   using RuntimeState = slam_manager_interfaces::msg::RuntimeState;
   using StartLocalization =
@@ -170,8 +169,8 @@ class SlamManagerNode : public rclcpp::Node {
   void pollRobotState();
   void handlePostureState(bool stopped);
   void setPostureStop(bool stopped);
-  void obstacleStopCallback(const std_msgs::msg::Bool::SharedPtr message);
-  void avoidanceStateCallback(const AvoidanceState::ConstSharedPtr message);
+  void obstacleHandlingStateCallback(
+      const std_msgs::msg::UInt8::ConstSharedPtr message);
   void publishNavigationObstacleState();
   bool setRobotMode(int32_t mode, std::string &message);
 
@@ -269,8 +268,7 @@ class SlamManagerNode : public rclcpp::Node {
   std::string published_runtime_error_message_;
 
   std::mutex navigation_obstacle_state_mutex_;
-  bool obstacle_stopped_{false};
-  uint8_t avoidance_state_{AvoidanceState::IDLE};
+  uint8_t obstacle_handling_state_{NavigationObstacleState::UNBLOCKED};
   int published_navigation_obstacle_state_{-1};
 
   rclcpp::CallbackGroup::SharedPtr worker_callback_group_;
@@ -322,8 +320,8 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
       relocalization_result_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr navigation_state_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr obstacle_stop_sub_;
-  rclcpp::Subscription<AvoidanceState>::SharedPtr avoidance_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr
+      obstacle_handling_state_sub_;
 };
 
 }  // namespace slam_manager

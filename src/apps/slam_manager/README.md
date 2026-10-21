@@ -159,16 +159,25 @@ A -> B为map_connection时：
 
 ### 导航障碍状态
 
-`slam_manager`将内部停障和局部绕障状态汇总后，通过可靠、持久化的
+`slam_manager`直接订阅 Pure Pursuit 汇总的 `/obstacle_handling_state`
+（`std_msgs/msg/UInt8`），再通过可靠、持久化的
 `/robot/navigation_obstacle_state`发布给APP，消息类型为
-`slam_manager_interfaces/msg/NavigationObstacleState`：
+`slam_manager_interfaces/msg/NavigationObstacleState`。APP 接口与状态值不变：
 
 - `UNBLOCKED=0`：当前没有停障或绕障。
 - `OBSTACLE_STOPPED=1`：近距离停障，或局部绕障已阻塞/失败并停车。
 - `AVOIDING=2`：正在生成、等待或跟踪局部绕障路径。
 
-停障状态优先于绕障状态；绕障完成后发布`UNBLOCKED`。导航未运行、导航完成、
-取消或失败时同样发布`UNBLOCKED`，新导航任务不会继承上一次任务的障碍状态。
+停障状态优先于绕障状态，由 Pure Pursuit 统一判定。特别地，
+`WAITING_DYNAMIC_PATH` 归类为停障（1），与原 Slam Manager 独立汇总时
+将其归为绕障（2）的行为不同；Pure Pursuit 轨迹碰撞停车也将计入停障（1）。
+导航未运行、导航完成、取消或失败时同样发布`UNBLOCKED`，新导航任务不会
+继承上一次任务的障碍状态。
+
+收到 `OBSTACLE_STOPPED=1` 时暂停单点导航目标超时计时，收到状态 0/2 时
+恢复计时。注意此停障范围比旧版本独立 `/obstacle_stop/stopped` 更广，
+包括 Pure Pursuit 自身的阻塞、失败及等待动态路径停车。原始两个话题仍由各自
+发布者维护，其他规划和控制节点继续使用；仅 Slam Manager 改为订阅汇总话题。
 
 ### 导航区域
 

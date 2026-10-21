@@ -332,13 +332,9 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::bind(&SlamManagerNode::navigationStateCallback, this,
                 std::placeholders::_1),
       navigation_subscription_options);
-  obstacle_stop_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local(),
-      std::bind(&SlamManagerNode::obstacleStopCallback, this,
-                std::placeholders::_1));
-  avoidance_state_sub_ = create_subscription<AvoidanceState>(
-      "/local_avoidance/state", rclcpp::QoS(1).reliable().transient_local(),
-      std::bind(&SlamManagerNode::avoidanceStateCallback, this,
+  obstacle_handling_state_sub_ = create_subscription<std_msgs::msg::UInt8>(
+      "/obstacle_handling_state", rclcpp::QoS(1).reliable().transient_local(),
+      std::bind(&SlamManagerNode::obstacleHandlingStateCallback, this,
                 std::placeholders::_1));
 
   state_machine_.initialize();
@@ -2059,26 +2055,26 @@ void SlamManagerNode::navigationStateCallback(
   navigation_task_executor_->onNavigationState(message->data);
 }
 
-void SlamManagerNode::obstacleStopCallback(
-    const std_msgs::msg::Bool::SharedPtr message) {
-  navigation_task_executor_->setObstacleStopped(message->data);
-  {
-    std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
-    obstacle_stopped_ = message->data;
-  }
-  publishNavigationObstacleState();
-}
-
-void SlamManagerNode::avoidanceStateCallback(
-    const AvoidanceState::ConstSharedPtr message) {
-  if (message->state > AvoidanceState::FAILED) {
-    RCLCPP_WARN(get_logger(), "Ignoring unknown avoidance state: %u",
-                static_cast<unsigned int>(message->state));
+void SlamManagerNode::obstacleHandlingStateCallback(
+    const std_msgs::msg::UInt8::ConstSharedPtr message) {
+  if (message->data > NavigationObstacleState::AVOIDING) {
+    RCLCPP_WARN(get_logger(), "Ignoring unknown obstacle handling state: %u",
+                static_cast<unsigned int>(message->data));
     return;
   }
+
+  const auto mode = state_machine_.mode();
+  const bool navigation_active =
+      mode == SlamMode::kNavigating || mode == SlamMode::kNavigationPaused;
+
+  // The obstacle-stop hold is also used by single-goal timeout accounting.
+  // State 1 covers obstacle_stop and PP's own collision/blocking conditions.
+  navigation_task_executor_->setObstacleStopped(
+      navigation_active &&
+      message->data == NavigationObstacleState::OBSTACLE_STOPPED);
   {
     std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
-    avoidance_state_ = message->state;
+    obstacle_handling_state_ = message->data;
   }
   publishNavigationObstacleState();
 }
@@ -2091,21 +2087,15 @@ void SlamManagerNode::publishNavigationObstacleState() {
   {
     std::lock_guard<std::mutex> lock(navigation_obstacle_state_mutex_);
     if (!navigation_active) {
-      // 新导航任务不继承上一次Worker留下的瞬时状态。
-      obstacle_stopped_ = false;
-      avoidance_state_ = AvoidanceState::IDLE;
-    } else if (obstacle_stopped_ ||
-               avoidance_state_ == AvoidanceState::BLOCKED ||
-               avoidance_state_ == AvoidanceState::FAILED) {
-      next_state = NavigationObstacleState::OBSTACLE_STOPPED;
-    } else if (avoidance_state_ == AvoidanceState::AVOIDING ||
-               avoidance_state_ == AvoidanceState::WAITING_DYNAMIC_PATH) {
-      next_state = NavigationObstacleState::AVOIDING;
+      // New navigation sessions must not inherit an old worker's status.
+      obstacle_handling_state_ = NavigationObstacleState::UNBLOCKED;
+    } else {
+      next_state = obstacle_handling_state_;
     }
 
     if (published_navigation_obstacle_state_ == next_state) return;
 
-    // 发布也放在同一临界区，保证并发的停障/绕障回调不会乱序覆盖新状态。
+    // Serialize comparison and publish to avoid out-of-order callback races.
     NavigationObstacleState message;
     message.state = next_state;
     navigation_obstacle_state_pub_->publish(message);
