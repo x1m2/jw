@@ -57,10 +57,12 @@ readonly AIRY_FASTDDS_PROFILE="${AIRY_SDK_DIR}/config/fastshm.xml"
 case "${LIDAR_TYPE}" in
     mid360)
         readonly FASTLIO_CONFIG="mapping_mid360s.yaml"
+        readonly PGO_CONFIG="pgo_mid360s.yaml"
         readonly LIDAR_DRIVER_NAME="Livox ROS Driver2"
         ;;
     airy)
         readonly FASTLIO_CONFIG="mapping_airy96.yaml"
+        readonly PGO_CONFIG="pgo_airy96.yaml"
         readonly LIDAR_DRIVER_NAME="Airy96 ROS Driver"
         ;;
     *)
@@ -143,6 +145,7 @@ TOPOLOGY_LOG_FILE="${SLAM_LOG_DIR}/topology_map_generator_$(log_time).log"
 info "开始建图流程"
 info "雷达类型: ${LIDAR_TYPE}"
 info "FAST-LIO 配置: ${FASTLIO_CONFIG}"
+info "PGO 配置: ${PGO_CONFIG}"
 info "数据目录: ${DATA_DIR}"
 
 # ==================================================
@@ -435,7 +438,8 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     config_file:="${FASTLIO_CONFIG}"
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
-    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}"
+    ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}" \
+    config_file:="${PGO_CONFIG}"
 
 # 建图过程中按 K 保存拓扑点的旧流程已停用。
 # 建图完成后统一使用 rviz_topology_editor 在优化后的 PCD 地图上打点。

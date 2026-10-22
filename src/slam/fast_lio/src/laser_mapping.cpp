@@ -19,6 +19,7 @@ LaserMappingNode::LaserMappingNode(const rclcpp::NodeOptions &options)
   pcl_wait_save.reset(new PointCloudXYZI());
   featsFromMap.reset(new PointCloudXYZI());
   feats_undistort.reset(new PointCloudXYZI());
+  feats_sampled_body.reset(new PointCloudXYZI());
   feats_down_body.reset(new PointCloudXYZI());
   feats_down_world.reset(new PointCloudXYZI());
   normvec.reset(new PointCloudXYZI(100000, 1));
@@ -200,7 +201,7 @@ void LaserMappingNode::initializeSubscribersAndPublishers() {
                       std::placeholders::_1));
   } else {
     sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        lid_topic, rclcpp::SensorDataQoS(),
+        lid_topic, 1000,
         std::bind(&LaserMappingNode::standard_pcl_cbk, this,
                   std::placeholders::_1));
   }
@@ -557,12 +558,21 @@ void LaserMappingNode::timer_callback() {
 
     flg_EKF_inited =
         (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
-    /*** Segment the map in lidar FOV ***/
-    // 动态调整局部地图,在拿到eskf前馈结果后
-    lasermap_fov_segment();
 
     /*** downsample the feature points in a scan ***/
-    downSizeFilterSurf.setInputCloud(feats_undistort);
+    PointCloudXYZI::Ptr filter_input = feats_undistort;
+    if (p_pre->lidar_type == RSAIRY && p_pre->point_filter_num > 1) {
+      feats_sampled_body->clear();
+      feats_sampled_body->reserve(
+          (feats_undistort->size() + p_pre->point_filter_num - 1) /
+          p_pre->point_filter_num);
+      for (std::size_t i = 0; i < feats_undistort->size();
+           i += p_pre->point_filter_num) {
+        feats_sampled_body->push_back(feats_undistort->points[i]);
+      }
+      filter_input = feats_sampled_body;
+    }
+    downSizeFilterSurf.setInputCloud(filter_input);
     downSizeFilterSurf.filter(*feats_down_body);
     t1 = omp_get_wtime();
     feats_down_size = feats_down_body->points.size();
@@ -640,6 +650,9 @@ void LaserMappingNode::timer_callback() {
 
     /******* Publish odometry *******/
     publish_odometry(pubOdomAftMapped_, tf_broadcaster_);
+
+    /*** Segment the map using the corrected pose. ***/
+    lasermap_fov_segment();
 
     /*** add the feature points to map kdtree ***/
     t3 = omp_get_wtime();
@@ -893,18 +906,26 @@ bool LaserMappingNode::sync_packages(MeasureGroup &meas) {
                    "lidar_beg=%.6f, lidar_end=%.6f, mean_scan_time=%.6f",
                    meas.lidar->points.size(), meas.lidar_beg_time,
                    lidar_end_time, lidar_mean_scantime);
-
-    } else if (meas.lidar->points.back().curvature / double(1000) <
-               0.5 * lidar_mean_scantime) {
-      lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
     } else {
-      scan_num++;
-      lidar_end_time = meas.lidar_beg_time +
-                       meas.lidar->points.back().curvature / double(1000);
-      lidar_mean_scantime +=
-          (meas.lidar->points.back().curvature / double(1000) -
-           lidar_mean_scantime) /
-          scan_num;
+      double scan_time = 0.0;
+      if (p_pre->lidar_type == RSAIRY) {
+        const auto latest_point = std::max_element(
+            meas.lidar->points.begin(), meas.lidar->points.end(),
+            [](const PointType &lhs, const PointType &rhs) {
+              return lhs.curvature < rhs.curvature;
+            });
+        scan_time = latest_point->curvature / double(1000);
+      } else {
+        scan_time = meas.lidar->points.back().curvature / double(1000);
+      }
+
+      if (scan_time < 0.5 * lidar_mean_scantime) {
+        lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+      } else {
+        scan_num++;
+        lidar_end_time = meas.lidar_beg_time + scan_time;
+        lidar_mean_scantime += (scan_time - lidar_mean_scantime) / scan_num;
+      }
     }
 
     meas.lidar_end_time = lidar_end_time;

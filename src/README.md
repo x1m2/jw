@@ -61,10 +61,34 @@ LIBGL_ALWAYS_SOFTWARE=1 pcl_viewer globalmap.pcd --no-vbo
 ros2 service call /map_save std_srvs/srv/Trigger
 ros2 topic pub --once /save_dir std_msgs/msg/Empty "{}"
 ```
+
+## 离线建图
+
+离线建图支持两种雷达，默认使用 MID360：
+
+```bash
+# MID360：/livox/lidar (CustomMsg) 和 /livox/imu，使用 mapping_mid360s.yaml
+src/run_offline_mapping.sh --lidar mid360 --bag /path/to/mid360_bag
+
+# Airy：/rslidar_points 和 /rslidar_imu_data，使用 mapping_airy96.yaml
+src/run_offline_mapping.sh --lidar airy --bag /path/to/airy_bag
+
+```
+
+两种模式都支持 `--rate` 设置 bag 回放倍速，例如：
+
+```bash
+src/run_offline_mapping.sh --lidar airy --bag /path/to/airy_bag --rate 0.5
+```
+
+## 离线重定位
+
+```bash
 src/run_offline_reloc.sh \
   --bag /home/jw-zkl/robotics_platform/robot_ws/airy96_fastlio_20250604_222402 \
   --rate 1.0 \
   --scan-index 250
+```
 
 离线重定位支持两种雷达，默认使用 Airy：
 
@@ -75,5 +99,3 @@ src/run_offline_reloc.sh --lidar mid360 --bag /path/to/mid360_bag
 # Airy：/rslidar_points 和 /rslidar_imu_data
 src/run_offline_reloc.sh --lidar airy --bag /path/to/airy_bag
 ```
-
-两种模式都支持 `--rate`、`--scan-index` 和 `--prepare-only`。

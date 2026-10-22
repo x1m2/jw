@@ -592,7 +592,6 @@ void Preprocess::robosense_handler(
     }
   } else {
     for (std::size_t i = 0; i < input.size(); ++i) {
-      if (i % point_filter_num != 0) continue;
       const auto& source = input.points[i];
       if (!std::isfinite(source.timestamp)) continue;
       const double range_sq = source.x * source.x + source.y * source.y +

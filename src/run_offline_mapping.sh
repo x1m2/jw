@@ -100,6 +100,7 @@ fi
 case "${LIDAR_TYPE}" in
     airy)
         FASTLIO_CONFIG="mapping_airy96.yaml"
+        PGO_CONFIG="pgo_airy96.yaml"
         # Packet 解码为点云；Airy 的 IMU 已作为独立话题录入 bag，
         # rslidar_sdk 从 packet 回放时不会重新发布这一路 IMU。
         BAG_TOPICS=(/rslidar_packets /rslidar_imu_data /imu/data)
@@ -124,6 +125,7 @@ PY
         ;;
     mid360)
         FASTLIO_CONFIG="mapping_mid360s.yaml"
+        PGO_CONFIG="pgo_mid360s.yaml"
         BAG_TOPICS=(/livox/lidar /livox/imu)
         ;;
     *)
@@ -220,7 +222,9 @@ kill_all_related_processes() {
         "imu_filter_madgwick_node"
         "pgo_sc_node"
         "rosbag2_player"
+        "ros2 bag play"
         "rslidar_sdk_node"
+        "rviz2"
     )
 
     local pattern
@@ -375,6 +379,7 @@ kill_all_related_processes
 info "开始启动离线建图"
 info "雷达类型: ${LIDAR_TYPE}"
 info "FAST-LIO 配置: ${FASTLIO_CONFIG}"
+info "PGO 配置: ${PGO_CONFIG}"
 info "数据包: ${BAG_DIR}"
 info "回放倍速: ${PLAY_RATE}"
 info "数据目录: ${DATA_DIR}"
@@ -396,7 +401,7 @@ start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 2 \
     ros2 launch pgo_sc run.launch.py "pgo_use_rviz:=${PGO_USE_RVIZ}" use_sim_time:=true \
-    "data_dir:=${DATA_DIR}"
+    "data_dir:=${DATA_DIR}" "config_file:=${PGO_CONFIG}"
 
 start_bg BAG_PID "ROS 2 bag 回放" "${BAG_LOG_FILE}" 1 \
     ros2 bag play "${BAG_DIR}" --rate "${PLAY_RATE}" --clock \
@@ -421,8 +426,12 @@ while true; do
         set -e
         BAG_PID=""
         if [[ "${bag_status}" -eq 0 ]]; then
-            info "bag 回放完成，开始保存建图结果"
-            save_mapping_result
+            if [[ -n "${PGO_PID}" ]]; then
+                info "bag 回放完成，开始保存建图结果"
+                save_mapping_result
+            else
+                info "bag 回放完成；PGO SC 已关闭，跳过 PGO 地图保存"
+            fi
             info "bag 回放已结束，建图节点和 RViz 继续运行；按 Ctrl+C 退出"
             continue
         fi

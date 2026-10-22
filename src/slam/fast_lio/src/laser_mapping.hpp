@@ -223,6 +223,7 @@ class LaserMappingNode : public rclcpp::Node {
   PointCloudXYZI::Ptr pcl_wait_save;
   PointCloudXYZI::Ptr featsFromMap;
   PointCloudXYZI::Ptr feats_undistort;
+  PointCloudXYZI::Ptr feats_sampled_body;
   PointCloudXYZI::Ptr feats_down_body;
   PointCloudXYZI::Ptr feats_down_world;
   PointCloudXYZI::Ptr normvec;
