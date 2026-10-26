@@ -36,9 +36,38 @@ lidar:
       pcap_path: /home/robosense/lidar.pcap #The path of pcap file
 
     ros:
-      ros_frame_id: rslidar                           #Frame id of packet message and point cloud message
-      ros_recv_packet_topic: /rslidar_packets          #Topic used to receive lidar packets from ROS
-      ros_send_packet_topic: /rslidar_packets          #Topic used to send lidar packets through ROS
-      ros_send_imu_data_topic: /rslidar_imu_data         #Topic used to send imu data through ROS
-      ros_send_point_cloud_topic: /rslidar_points      #Topic used to send point cloud through ROS
-      ros_queue_length: 100                            #Topic QoS history depth
+      ros_frame_id: rslidar_front
+      ros_recv_packet_topic: /rslidar_front/packets
+      ros_send_packet_topic: /rslidar_front/packets
+      ros_send_imu_data_topic: /rslidar_front/imu
+      ros_send_point_cloud_topic: /rslidar_front/points
+      ros_queue_length: 100
+
+  - driver:
+      lidar_type: RSAIRY
+      msop_port: 6698
+      difop_port: 7789
+      imu_port: 6689
+      user_layer_bytes: 0
+      tail_layer_bytes: 0
+
+      min_distance: 0.2
+      max_distance: 200
+      use_lidar_clock: true
+      dense_points: false
+
+      ts_first_point: true
+      start_angle: 0
+      end_angle: 360
+
+      pcap_repeat: true
+      pcap_rate: 1.0
+      pcap_path: /home/robosense/lidar.pcap
+
+    ros:
+      ros_frame_id: rslidar_rear
+      ros_recv_packet_topic: /rslidar_rear/packets
+      ros_send_packet_topic: /rslidar_rear/packets
+      ros_send_imu_data_topic: /rslidar_rear/imu
+      ros_send_point_cloud_topic: /rslidar_rear/points
+      ros_queue_length: 100
