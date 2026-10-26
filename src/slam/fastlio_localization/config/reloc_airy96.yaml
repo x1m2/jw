@@ -1,10 +1,10 @@
 fastlio_localization:
     ros__parameters:
-        lidar_topic:  "/rslidar_points"
-        imu_topic:  "/rslidar_imu_data"
+        lidar_topic:  "/rslidar_front/points"
+        imu_topic:  "/rslidar_front/imu"
         use_gnss: false
         map_frame:  "map"
-        lidar_frame:  "rslidar"
+        lidar_frame:  "rslidar_front"
         baselink_frame:  "base_link"
         timedelay_lidar2imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
 

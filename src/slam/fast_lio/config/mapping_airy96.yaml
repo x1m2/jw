@@ -10,8 +10,8 @@
     align_gravity: true
 
     common:
-      lid_topic: "/rslidar_points"
-      imu_topic: "/rslidar_imu_data"
+      lid_topic: "/rslidar_front/points"
+      imu_topic: "/rslidar_front/imu"
       time_sync_en: false
       time_offset_lidar_to_imu: 0.0
 
