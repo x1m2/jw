@@ -17,6 +17,7 @@
 #include <memory>
 #include <nano_gicp/nano_gicp.hpp>
 #include <nano_gicp/point_type_nano_gicp.hpp>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -61,6 +62,8 @@ struct LoopClosureConfig {
   double history_keyframe_search_xy_radius_ = 15.0;
   double history_keyframe_search_z_tolerance_ = 1.5;
   int history_keyframe_min_index_diff_ = 30;
+  double fitness_score_thr_min_ = 0.1;
+  double fitness_adaptation_time_sec_ = 40.0;
   NanoGICPConfig gicp_config_;
   QuatroConfig quatro_config_;
 };
@@ -94,11 +97,13 @@ class LoopClosure {
                             const bool enable_submap_matching);
   // ICP 精细对齐
   RegistrationOutput icpAlignment(const pcl::PointCloud<PointType>& src,
-                                  const pcl::PointCloud<PointType>& dst);
+                                  const pcl::PointCloud<PointType>& dst,
+                                  double fitness_score_threshold);
   // Quatro 粗配准 + ICP 精细对齐
   RegistrationOutput coarseToFineAlignment(
       const pcl::PointCloud<PointType>& src,
-      const pcl::PointCloud<PointType>& dst);
+      const pcl::PointCloud<PointType>& dst,
+      double fitness_score_threshold);
   // 执行闭环检测
   RegistrationOutput performLoopClosure(const PosePcd& query_keyframe,
                                         const std::vector<PosePcd>& keyframes,
@@ -122,6 +127,7 @@ class LoopClosure {
   pcl::PointCloud<PointType> coarse_aligned_;
   pcl::PointCloud<PointType> aligned_;
   LoopClosureConfig config_;
+  std::optional<double> last_successful_loop_time_;
 };
 
 #endif  // PGO_SC__LOOP_CLOSURE_HPP_

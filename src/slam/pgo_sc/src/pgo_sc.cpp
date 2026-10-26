@@ -40,12 +40,13 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   this->declare_parameter<int>("keyframe.num_submap_keyframes", 5);
   this->declare_parameter<bool>("keyframe.enable_submap_matching", false);
 
-  this->declare_parameter<double>("loop.robust_kernel_scale", 1.0);
   this->declare_parameter<double>("loop.history_keyframe_search_xy_radius",
                                   15.0);
   this->declare_parameter<double>("loop.history_keyframe_search_z_tolerance",
                                   1.5);
   this->declare_parameter<int>("loop.history_keyframe_min_index_diff", 30);
+  this->declare_parameter<double>("loop.fitness_score_threshold_min", 0.1);
+  this->declare_parameter<double>("loop.fitness_adaptation_time_sec", 40.0);
 
   this->declare_parameter<double>("add_height_factor_threshold", 0.1);
 
@@ -108,13 +109,16 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
 
   this->get_parameter("scancontext_max_correspondence_distance",
                       lc_config.scancontext_max_correspondence_distance_);
-  this->get_parameter("loop.robust_kernel_scale", loop_robust_kernel_scale_);
   this->get_parameter("loop.history_keyframe_search_xy_radius",
                       lc_config.history_keyframe_search_xy_radius_);
   this->get_parameter("loop.history_keyframe_search_z_tolerance",
                       lc_config.history_keyframe_search_z_tolerance_);
   this->get_parameter("loop.history_keyframe_min_index_diff",
                       lc_config.history_keyframe_min_index_diff_);
+  this->get_parameter("loop.fitness_score_threshold_min",
+                      lc_config.fitness_score_thr_min_);
+  this->get_parameter("loop.fitness_adaptation_time_sec",
+                      lc_config.fitness_adaptation_time_sec_);
   this->get_parameter("add_height_factor_threshold",
                       add_height_factor_threshold_);
   this->get_parameter("nano_gicp.thread_number", gc.nano_thread_number_);
@@ -462,15 +466,11 @@ void PgoSc::odomPcdCallback(
       init_esti_.insert(current_keyframe_idx_, pose_to);
 
       for (const auto &constraint : ready_loop_constraints) {
-        auto base_loop_noise = gtsam::noiseModel::Diagonal::Variances(
+        auto loop_noise = gtsam::noiseModel::Diagonal::Variances(
             (gtsam::Vector(6) << constraint.score, constraint.score,
              constraint.score, constraint.score, constraint.score,
              constraint.score)
                 .finished());
-        auto loop_noise = gtsam::noiseModel::Robust::Create(
-            gtsam::noiseModel::mEstimator::Cauchy::Create(
-                loop_robust_kernel_scale_),
-            base_loop_noise);
         gtsam_graph_.add(gtsam::BetweenFactor<gtsam::Pose3>(
             constraint.source_index, constraint.target_index,
             constraint.relative_pose, loop_noise));
@@ -523,7 +523,15 @@ void PgoSc::odomPcdCallback(
 void PgoSc::loopTimerFunc() {
   if (!is_initialized_) return;
 
-  constexpr int kLoopCooldownKeyframes = 20;
+  bool expected = false;
+  if (!loop_detection_in_progress_.compare_exchange_strong(expected, true)) {
+    return;
+  }
+  struct LoopDetectionGuard {
+    std::atomic_bool &flag;
+    ~LoopDetectionGuard() { flag.store(false); }
+  } guard{loop_detection_in_progress_};
+
   auto t1 = std::chrono::high_resolution_clock::now();
   std::vector<PosePcd> keyframes_snapshot;
   int latest_idx = -1;
@@ -537,11 +545,6 @@ void PgoSc::loopTimerFunc() {
     if (latest_keyframe.processed_) return;
     latest_keyframe.processed_ = true;
     latest_idx = latest_keyframe.idx_;
-
-    if (last_loop_src_idx_ >= 0 &&
-        latest_idx - last_loop_src_idx_ < kLoopCooldownKeyframes) {
-      return;
-    }
 
     // Candidate search only reads poses and remains under the lock briefly.
     closest_keyframe_idx = loop_closure_->fetchRadiusSearchCandidateIdx(
@@ -585,7 +588,6 @@ void PgoSc::loopTimerFunc() {
            static_cast<size_t>(closest_keyframe_idx),
            pose_from.between(pose_to), reg_output.score_});
     }
-    last_loop_src_idx_ = latest_keyframe.idx_;
     RCLCPP_INFO(this->get_logger(),
                 "Loop constraint queued: source=%d, target=%d",
                 latest_keyframe.idx_, closest_keyframe_idx);

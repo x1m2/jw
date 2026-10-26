@@ -88,11 +88,11 @@ int LoopClosure::fetchRadiusSearchCandidateIdx(
     key_positions->emplace_back(static_cast<float>(position.x()),
                                 static_cast<float>(position.y()), 0.0F);
   }
-  //二维 KD-Tree 建立
+  // 将关键帧投影到 XY 平面建立 KD-Tree，高度差单独过滤。
   pcl::KdTreeFLANN<pcl::PointXYZ> position_tree;
   position_tree.setInputCloud(key_positions);
 
-  // 当前关键帧同样使用优化位姿并投影到 XY 平面，避免高度差影响水平搜索。
+  // 查询点同样使用优化位姿并投影到 XY 平面。
   const Eigen::Vector3d query_position =
       query_keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
   pcl::PointXYZ query_point(static_cast<float>(query_position.x()),
@@ -125,7 +125,6 @@ int LoopClosure::fetchRadiusSearchCandidateIdx(
         std::abs(query_position.z() -
                  keyframes[candidate_idx].pose_corrected_eig_(2, 3));
     if (z_difference <= config_.history_keyframe_search_z_tolerance_) {
-      // 取第一个同时通过关键帧间隔和高度过滤的候选，交给后续配准验证。
       best_candidate_idx = candidate_idx;
       best_squared_distance = nearby_squared_distances[i];
       best_keyframe_gap = keyframe_gap;
@@ -156,10 +155,9 @@ int LoopClosure::fetchRadiusSearchCandidateIdx(
     return best_candidate_idx;
   }
 
-  // 只记录接近阈值的失败，用于判断 XY/Z 阈值是否设置得过小。
+  // 只记录接近 XY/Z 阈值的失败，便于现场调参。
   constexpr double kXyNearMissMargin = 5.0;
   constexpr double kZNearMissMargin = 1.0;
-
   int nearest_same_floor_idx = -1;
   double nearest_same_floor_xy = std::numeric_limits<double>::max();
   for (const auto &keyframe : keyframes) {
@@ -170,7 +168,6 @@ int LoopClosure::fetchRadiusSearchCandidateIdx(
         keyframe.pose_corrected_eig_.block<3, 1>(0, 3);
     const double abs_dz = std::abs(query_position.z() - history_position.z());
     if (abs_dz > config_.history_keyframe_search_z_tolerance_) continue;
-
     const double xy_distance =
         (query_position.head<2>() - history_position.head<2>()).norm();
     if (xy_distance < nearest_same_floor_xy) {
@@ -188,7 +185,6 @@ int LoopClosure::fetchRadiusSearchCandidateIdx(
       old_keyframes_within_radius > 0 && nearest_z_rejected_idx >= 0 &&
       nearest_z_rejected_abs_dz > z_tolerance &&
       nearest_z_rejected_abs_dz <= z_tolerance + kZNearMissMargin;
-
   if (!xy_near_miss && !z_near_miss) return -1;
 
   const bool report_xy =
@@ -266,7 +262,8 @@ PcdPair LoopClosure::setSrcAndDstCloud(const std::vector<PosePcd> &keyframes,
 
 RegistrationOutput LoopClosure::icpAlignment(
     const pcl::PointCloud<PointType> &src,
-    const pcl::PointCloud<PointType> &dst) {
+    const pcl::PointCloud<PointType> &dst,
+    const double fitness_score_threshold) {
   RegistrationOutput reg_output;
   aligned_.clear();
   // merge subkeyframes before ICP
@@ -285,7 +282,7 @@ RegistrationOutput LoopClosure::icpAlignment(
   reg_output.score_ = nano_gicp_.getFitnessScore();
   // if matchness score is lower than threshold, (lower is better)
   if (nano_gicp_.hasConverged() &&
-      reg_output.score_ < config_.gicp_config_.icp_score_thr_) {
+      reg_output.score_ < fitness_score_threshold) {
     reg_output.is_valid_ = true;
     reg_output.is_converged_ = true;
     reg_output.pose_between_eig_ =
@@ -294,7 +291,7 @@ RegistrationOutput LoopClosure::icpAlignment(
   RCLCPP_WARN(rclcpp::get_logger("LoopClosure"),
               "[ICP RESULT] converged=%d, score=%.6f, threshold=%.6f, valid=%d",
               nano_gicp_.hasConverged(), reg_output.score_,
-              config_.gicp_config_.icp_score_thr_, reg_output.is_valid_);
+              fitness_score_threshold, reg_output.is_valid_);
   return reg_output;
 }
 
@@ -303,7 +300,8 @@ RegistrationOutput LoopClosure::icpAlignment(
 // -------------------------
 RegistrationOutput LoopClosure::coarseToFineAlignment(
     const pcl::PointCloud<PointType> &src,
-    const pcl::PointCloud<PointType> &dst) {
+    const pcl::PointCloud<PointType> &dst,
+    const double fitness_score_threshold) {
   RegistrationOutput reg_output;
   coarse_aligned_.clear();
 
@@ -364,7 +362,8 @@ RegistrationOutput LoopClosure::coarseToFineAlignment(
   // ==========================================================
   coarse_aligned_ = transformPcd(src, quatro_tf);
 
-  const auto &fine_output = icpAlignment(coarse_aligned_, dst);
+  const auto &fine_output =
+      icpAlignment(coarse_aligned_, dst, fitness_score_threshold);
 
   logPose("icp_delta_coarse_to_dst", fine_output.pose_between_eig_);
 
@@ -384,6 +383,28 @@ RegistrationOutput LoopClosure::performLoopClosure(
   RegistrationOutput reg_output;
   closest_keyframe_idx_ = closest_keyframe_idx;
   if (closest_keyframe_idx_ >= 0) {
+    const double max_threshold = config_.gicp_config_.icp_score_thr_;
+    double fitness_score_threshold = max_threshold;
+    double elapsed_since_last_loop = -1.0;
+    if (last_successful_loop_time_) {
+      elapsed_since_last_loop =
+          std::max(0.0, query_keyframe.timestamp_ - *last_successful_loop_time_);
+      const double adaptation_time =
+          std::max(config_.fitness_adaptation_time_sec_, 1e-6);
+      const double ratio =
+          std::min(elapsed_since_last_loop / adaptation_time, 1.0);
+      fitness_score_threshold =
+          config_.fitness_score_thr_min_ +
+          (max_threshold - config_.fitness_score_thr_min_) * ratio;
+    }
+
+    RCLCPP_INFO(rclcpp::get_logger("LoopClosure"),
+                "[LOOP_FITNESS_GATE] current=%d, elapsed_since_last=%.3f s, "
+                "threshold=%.3f (min=%.3f, max=%.3f)",
+                query_keyframe.idx_, elapsed_since_last_loop,
+                fitness_score_threshold, config_.fitness_score_thr_min_,
+                max_threshold);
+
     // Quatro + NANO-GICP to check loop (from front_keyframe to closest
     // keyframe's neighbor)
     const auto &[src_cloud, dst_cloud] = setSrcAndDstCloud(
@@ -398,12 +419,18 @@ RegistrationOutput LoopClosure::performLoopClosure(
       RCLCPP_INFO(rclcpp::get_logger("MapMatcher"),
                   "Execute quatro alignment: %zu vs %zu", src_cloud.size(),
                   dst_cloud.size());
-      return coarseToFineAlignment(src_cloud, dst_cloud);
+      reg_output = coarseToFineAlignment(src_cloud, dst_cloud,
+                                         fitness_score_threshold);
     } else {
       RCLCPP_INFO(rclcpp::get_logger("MapMatcher"), "Execute GICP: %zu vs %zu",
                   src_cloud.size(), dst_cloud.size());
-      return icpAlignment(src_cloud, dst_cloud);
+      reg_output =
+          icpAlignment(src_cloud, dst_cloud, fitness_score_threshold);
     }
+    if (reg_output.is_valid_) {
+      last_successful_loop_time_ = query_keyframe.timestamp_;
+    }
+    return reg_output;
   } else {
     return reg_output;  // dummy output whose `is_valid` is false
   }

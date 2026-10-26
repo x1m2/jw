@@ -14,11 +14,17 @@ def generate_launch_description():
         'pgo.rviz'
     )
 
-    config_file_path = os.path.join(
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value='pgo_mid360s.yaml',
+        description='PGO parameter YAML under pgo_sc/config'
+    )
+
+    config_file_path = PathJoinSubstitution([
         get_package_share_directory('pgo_sc'),
         'config',
-        'pgo_sc.yaml'
-    )
+        LaunchConfiguration('config_file'),
+    ])
 
     pgo_use_rviz_arg = DeclareLaunchArgument(
         "pgo_use_rviz",
@@ -39,6 +45,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        config_file_arg,
         pgo_use_rviz_arg,
         use_sim_time_arg,
         data_dir_arg,

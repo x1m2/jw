@@ -32,12 +32,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/serialization.hpp>
 #include <rclcpp/serialized_message.hpp>
-#include <slam_manager_interfaces/msg/map_keyframe.hpp>
-#include <slam_manager_interfaces/msg/z_constraint_state.hpp>
 #include <rosbag2_cpp/converter_options.hpp>
 #include <rosbag2_cpp/writer.hpp>
 #include <rosbag2_storage/storage_options.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <slam_manager_interfaces/msg/map_keyframe.hpp>
+#include <slam_manager_interfaces/msg/z_constraint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -69,8 +69,7 @@ typedef message_filters::sync_policies::ApproximateTime<
 
 class PgoSc : public rclcpp::Node {
  public:
-  explicit PgoSc(
-      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
+  explicit PgoSc(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
 
   ~PgoSc() override;
 
@@ -108,14 +107,13 @@ class PgoSc : public rclcpp::Node {
   gtsam::Values corrected_esti_;
   double keyframe_thr_;
   double keyframe_angle_thr_;
-  double loop_robust_kernel_scale_;
   double voxel_res_;
   double keyframe_voxel_res_;
   bool ikdtree_rebuild_enable_;
   double ikdtree_rebuild_voxel_res_;
   int ikdtree_reconstruct_keyframe_num_;
   int sub_key_num_;
-  int last_loop_src_idx_ = -1;
+  std::atomic_bool loop_detection_in_progress_{false};
   std::deque<LoopConstraint> pending_loop_constraints_;
   std::vector<std::pair<size_t, size_t>> loop_idx_pairs_;  // for vis
 

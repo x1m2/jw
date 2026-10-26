@@ -6,43 +6,44 @@
       vis_hz: 1.0                                 # visualize Hz
       package_path: "/robotfs/data/slam_data/map"
     keyframe:
-      keyframe_threshold: 1.5                     # unit [meter] every this distance, generate keyframe
+      keyframe_threshold: 1.0                     # unit [meter] every this distance, generate keyframe
       keyframe_angle_threshold: 0.2               # unit [radian], create a keyframe when roll, pitch, or yaw exceeds this value
-      num_submap_keyframes: 5                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
+      num_submap_keyframes: 20                     # how many subkeyframes are merged to ICP with current keyframe (closest-this ~ closest+this, if exists)
       enable_submap_matching: false               # If it is set to be `true`, submap-level (coarse-to-)fine alignment will be performed
       voxel_resolution: 0.1                       # downsample dense /cloud_registered before storing it as a backend keyframe
       # note: without Quatro, anyway scan-to-submap matching is performed, as that shows better performance
 
     loop:
-      robust_kernel_scale: 1.0                    # Cauchy robust-kernel scale for loop factors
-      history_keyframe_search_xy_radius: 5.0      # horizontal radius used to tolerate odometry drift
-      history_keyframe_search_z_tolerance: 2.5    # reject candidates on another floor
-      history_keyframe_min_index_diff: 30         # exclude the latest 20 keyframes, same as ScanContext
+      history_keyframe_search_xy_radius: 5.0      # XY-plane candidate search radius [m]
+      history_keyframe_search_z_tolerance: 2.0    # maximum absolute Z difference [m]
+      history_keyframe_min_index_diff: 30         # minimum index gap between current and candidate keyframes
+      fitness_score_threshold_min: 0.1
+      fitness_adaptation_time_sec: 40.0           # linearly relax from min to nano_gicp.icp_score_threshold
 
     # Add a Z factor after the locked height differs by this distance.
     add_height_factor_threshold: 0.1
 
-    quatro_nano_gicp_voxel_resolution: 0.3        # voxel resolution to use Quatro and Nano-GICP matching
+    quatro_nano_gicp_voxel_resolution: 0.1        # voxel resolution to use Quatro and Nano-GICP matching
     save_voxel_resolution: 0.3                    # voxel resolution to save map in .pcd format
-    ikdtree_rebuild_enable: true                  # publish a corrected map to rebuild the FAST-LIO ikd-tree after loop closure
+    ikdtree_rebuild_enable: false                  # publish a corrected map to rebuild the FAST-LIO ikd-tree after loop closure
     ikdtree_rebuild_voxel_resolution: 0.1         # voxel resolution for rebuilding the FAST-LIO ikd-tree after loop closure
     ikdtree_reconstruct_keyframe_num: 10          # number of latest optimized keyframes used to rebuild the FAST-LIO ikd-tree
     scancontext_max_correspondence_distance: 35.0 # inactive while ScanContext candidate detection is disabled
 
     nano_gicp:                                    # all values are from Nano-GICP official github (Direct LiDAR Odometry)
       thread_number: 0                            # if 0, max number of core
-      icp_score_threshold: 0.5                    # lower is more accurate, for loop detection
+      icp_score_threshold: 0.3                    # lower is more accurate, for loop detection
       correspondences_number: 15
-      max_correspondence_distance: 35.0           # this is also used for candidate trimming after ScanContext
-      max_iter: 32
-      transformation_epsilon: 0.01
-      euclidean_fitness_epsilon: 0.01
+      max_correspondence_distance: 6.0           # this is also used for candidate trimming after ScanContext
+      max_iter: 64
+      transformation_epsilon: 0.001
+      euclidean_fitness_epsilon: 0.001
       ransac:
         max_iter: 5
         outlier_rejection_threshold: 1.0
 
     quatro:                                       # all values are from Quatro official github
-      enable: true                                # whether or not to use quatro, if false -> FAST-LIO-SAM-N (Nano-GICP only)
+      enable: false                                # whether or not to use quatro, if false -> FAST-LIO-SAM-N (Nano-GICP only)
       optimize_matching: true                     # whether or not to use Optimized matching
       distance_threshold: 35.0                    # when optimized matching, use only correspondences within this radius, unit [meter]
       max_correspondences: 200                    # max correspondences to use for optimized matching
