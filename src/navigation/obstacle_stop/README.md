@@ -46,8 +46,8 @@
 节点订阅`/pose_stamped_localization`，根据`regions[].polygon`判断机器人
 实际所在区域：
 
-- 节点根据运行时拓扑中的`task_id`和区域ID读取拓扑同级目录下的
-  `region_obstacle_stop/<task_id>/<region_id>.yaml`，覆盖默认配置中的五个停障参数并
+- 节点根据区域ID读取拓扑同级目录下的
+  `region_obstacle_stop/<region_id>.yaml`，覆盖默认配置中的五个停障参数并
   重新计算停止区和减速区；
 - `enabled=false`的区域不会加载或校验对应ID的YAML；
 - 区域YAML不存在时继续使用启动时`obstacle_stop.yaml`参数；

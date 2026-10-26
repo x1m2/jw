@@ -359,123 +359,153 @@ bool parseTaskJson(const std::filesystem::path &path, TaskTopologyGraph &graph,
       graph.edges.push_back(edge);
     }
 
-    if (document.contains("regions")) {
-      if (!document["regions"].is_array()) {
-        message = "patrol JSON regions must be an array";
+  } catch (const nlohmann::json::exception &error) {
+    message = "invalid patrol JSON " + path.string() + ": " + error.what();
+    return false;
+  }
+  return true;
+}
+
+bool parseRegionsJson(const std::filesystem::path &path,
+                      std::vector<TaskTopologyRegion> &regions,
+                      std::string &message) {
+  regions.clear();
+  std::error_code filesystem_error;
+  const bool exists = std::filesystem::exists(path, filesystem_error);
+  if (filesystem_error) {
+    message = "failed to inspect regions JSON " + path.string() + ": " +
+              filesystem_error.message();
+    return false;
+  }
+  if (!exists) {
+    message.clear();
+    return true;
+  }
+
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    message = "failed to open regions JSON: " + path.string();
+    return false;
+  }
+
+  try {
+    const nlohmann::json document = nlohmann::json::parse(input);
+    if (!document.is_object() || !document.contains("regions") ||
+        !document["regions"].is_array()) {
+      message = "regions JSON must contain regions[]";
+      return false;
+    }
+
+    std::unordered_set<uint32_t> region_ids;
+    regions.reserve(document["regions"].size());
+    for (const auto &json_region : document["regions"]) {
+      if (!json_region.is_object()) {
+        message = "regions JSON entries must be objects";
         return false;
       }
-      std::unordered_set<uint32_t> region_ids;
-      graph.regions.reserve(document["regions"].size());
-      for (const auto &json_region : document["regions"]) {
-        if (!json_region.is_object()) {
-          message = "patrol JSON regions must be objects";
-          return false;
-        }
-        const uint64_t raw_id = json_region.at("id").get<uint64_t>();
-        if (raw_id > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-          message = "region id is out of planner range";
-          return false;
-        }
-
-        TaskTopologyRegion region;
-        region.id = static_cast<uint32_t>(raw_id);
-        region.region_type = json_region.at("region_type").get<std::string>();
-        region.enabled = json_region.value("enabled", true);
-        if (!region_ids.insert(region.id).second) {
-          message = "duplicate region id=" + std::to_string(region.id);
-          return false;
-        }
-        if (region.region_type != "obstacle_avoidance" &&
-            region.region_type != "speed_limit" &&
-            region.region_type != "stop") {
-          message = "unsupported region_type for region id=" +
-                    std::to_string(region.id);
-          return false;
-        }
-
-        const auto &json_polygon = json_region.at("polygon");
-        if (!json_polygon.is_array()) {
-          message = "region polygon must be an array: region id=" +
-                    std::to_string(region.id);
-          return false;
-        }
-        region.polygon.reserve(json_polygon.size());
-        for (const auto &json_point : json_polygon) {
-          region.polygon.push_back({json_point.at("x").get<double>(),
-                                    json_point.at("y").get<double>()});
-        }
-        if (!polygonIsValid(region.polygon)) {
-          message =
-              "region polygon is invalid, degenerate, or self-crossing: "
-              "region id=" +
-              std::to_string(region.id);
-          return false;
-        }
-
-        const nlohmann::json empty_parameters = nlohmann::json::object();
-        const auto &parameters = json_region.contains("param")
-                                     ? json_region.at("param")
-                                     : empty_parameters;
-        if (!parameters.is_object()) {
-          message = "region param must be an object: region id=" +
-                    std::to_string(region.id);
-          return false;
-        }
-        const std::unordered_set<std::string> allowed_region_parameters{
-            "linear_velocity", "angular_velocity",
-            "obstacle_avoidance_distance_m"};
-        for (auto parameter = parameters.begin(); parameter != parameters.end();
-             ++parameter) {
-          if (allowed_region_parameters.find(parameter.key()) ==
-              allowed_region_parameters.end()) {
-            message = "unsupported region param '" + parameter.key() +
-                      "': region id=" + std::to_string(region.id);
-            return false;
-          }
-        }
-        auto read_optional_parameter =
-            [&parameters](const char *name) -> std::optional<double> {
-          if (!parameters.contains(name)) return std::nullopt;
-          return parameters.at(name).get<double>();
-        };
-        region.parameters.linear_velocity =
-            read_optional_parameter("linear_velocity");
-        region.parameters.angular_velocity =
-            read_optional_parameter("angular_velocity");
-        region.parameters.obstacle_avoidance_distance_m =
-            read_optional_parameter("obstacle_avoidance_distance_m");
-        if ((region.parameters.linear_velocity &&
-             !finiteNonNegative(*region.parameters.linear_velocity)) ||
-            (region.parameters.angular_velocity &&
-             !finiteNonNegative(*region.parameters.angular_velocity)) ||
-            (region.parameters.obstacle_avoidance_distance_m &&
-             !finiteNonNegative(
-                 *region.parameters.obstacle_avoidance_distance_m))) {
-          message =
-              "invalid region param: region id=" + std::to_string(region.id);
-          return false;
-        }
-
-        graph.regions.push_back(std::move(region));
+      const uint64_t raw_id = json_region.at("id").get<uint64_t>();
+      if (raw_id > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        message = "region id is out of planner range";
+        return false;
       }
 
-      for (std::size_t first = 0; first < graph.regions.size(); ++first) {
-        if (!graph.regions[first].enabled) continue;
-        for (std::size_t second = first + 1U; second < graph.regions.size();
-             ++second) {
-          if (!graph.regions[second].enabled) continue;
-          if (polygonsOverlap(graph.regions[first].polygon,
-                              graph.regions[second].polygon)) {
-            message = "enabled regions overlap or touch: region id=" +
-                      std::to_string(graph.regions[first].id) +
-                      " and id=" + std::to_string(graph.regions[second].id);
-            return false;
-          }
+      TaskTopologyRegion region;
+      region.id = static_cast<uint32_t>(raw_id);
+      region.region_type = json_region.at("region_type").get<std::string>();
+      region.enabled = json_region.value("enabled", true);
+      if (!region_ids.insert(region.id).second) {
+        message = "duplicate region id=" + std::to_string(region.id);
+        return false;
+      }
+      if (region.region_type != "obstacle_avoidance" &&
+          region.region_type != "speed_limit" &&
+          region.region_type != "stop") {
+        message = "unsupported region_type for region id=" +
+                  std::to_string(region.id);
+        return false;
+      }
+
+      const auto &json_polygon = json_region.at("polygon");
+      if (!json_polygon.is_array()) {
+        message = "region polygon must be an array: region id=" +
+                  std::to_string(region.id);
+        return false;
+      }
+      region.polygon.reserve(json_polygon.size());
+      for (const auto &json_point : json_polygon) {
+        region.polygon.push_back({json_point.at("x").get<double>(),
+                                  json_point.at("y").get<double>()});
+      }
+      if (!polygonIsValid(region.polygon)) {
+        message =
+            "region polygon is invalid, degenerate, or self-crossing: "
+            "region id=" +
+            std::to_string(region.id);
+        return false;
+      }
+
+      const nlohmann::json empty_parameters = nlohmann::json::object();
+      const auto &parameters = json_region.contains("param")
+                                   ? json_region.at("param")
+                                   : empty_parameters;
+      if (!parameters.is_object()) {
+        message = "region param must be an object: region id=" +
+                  std::to_string(region.id);
+        return false;
+      }
+      const std::unordered_set<std::string> allowed_region_parameters{
+          "linear_velocity", "angular_velocity",
+          "obstacle_avoidance_distance_m"};
+      for (auto parameter = parameters.begin(); parameter != parameters.end();
+           ++parameter) {
+        if (allowed_region_parameters.find(parameter.key()) ==
+            allowed_region_parameters.end()) {
+          message = "unsupported region param '" + parameter.key() +
+                    "': region id=" + std::to_string(region.id);
+          return false;
+        }
+      }
+      auto read_optional_parameter =
+          [&parameters](const char *name) -> std::optional<double> {
+        if (!parameters.contains(name)) return std::nullopt;
+        return parameters.at(name).get<double>();
+      };
+      region.parameters.linear_velocity =
+          read_optional_parameter("linear_velocity");
+      region.parameters.angular_velocity =
+          read_optional_parameter("angular_velocity");
+      region.parameters.obstacle_avoidance_distance_m =
+          read_optional_parameter("obstacle_avoidance_distance_m");
+      if ((region.parameters.linear_velocity &&
+           !finiteNonNegative(*region.parameters.linear_velocity)) ||
+          (region.parameters.angular_velocity &&
+           !finiteNonNegative(*region.parameters.angular_velocity)) ||
+          (region.parameters.obstacle_avoidance_distance_m &&
+           !finiteNonNegative(
+               *region.parameters.obstacle_avoidance_distance_m))) {
+        message =
+            "invalid region param: region id=" + std::to_string(region.id);
+        return false;
+      }
+
+      regions.push_back(std::move(region));
+    }
+
+    for (std::size_t first = 0; first < regions.size(); ++first) {
+      if (!regions[first].enabled) continue;
+      for (std::size_t second = first + 1U; second < regions.size(); ++second) {
+        if (!regions[second].enabled) continue;
+        if (polygonsOverlap(regions[first].polygon, regions[second].polygon)) {
+          message = "enabled regions overlap or touch: region id=" +
+                    std::to_string(regions[first].id) + " and id=" +
+                    std::to_string(regions[second].id);
+          return false;
         }
       }
     }
   } catch (const nlohmann::json::exception &error) {
-    message = "invalid patrol JSON " + path.string() + ": " + error.what();
+    message = "invalid regions JSON " + path.string() + ": " + error.what();
+    regions.clear();
     return false;
   }
   return true;
@@ -577,7 +607,8 @@ const std::filesystem::path &TopologyFileWriter::outputFile() const {
 
 bool TopologyFileWriter::write(
     const std::vector<slam_manager_interfaces::msg::NavigationNode> &nodes,
-    std::string &message, const TaskEdgePolicy &policy) const {
+    std::string &message, const TaskEdgePolicy &policy,
+    const std::vector<TaskTopologyRegion> &regions) const {
   if (nodes.empty()) {
     message = "cannot generate runtime topology from an empty node list";
     return false;
@@ -587,6 +618,7 @@ bool TopologyFileWriter::write(
   // node_id 多次出现。runtime topology 本身仍保持 node_id 唯一，执行顺序
   // 由 Action 序列维护，不通过复制拓扑节点表达。
   TaskTopologyGraph graph;
+  graph.regions = regions;
   graph.nodes.reserve(nodes.size());
   std::unordered_map<uint32_t, std::size_t> node_indexes;
   node_indexes.reserve(nodes.size());
@@ -1074,6 +1106,17 @@ void NavigationTaskExecutor::executePatrolAction(
     return;
   }
 
+  std::vector<TaskTopologyRegion> map_regions;
+  const auto regions_json_file = task_directory_ / "regions.json";
+  if (!parseRegionsJson(regions_json_file, map_regions, topology_message)) {
+    result->success = false;
+    result->completed_count = 0U;
+    result->message = topology_message;
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
+
   bool topology_written = false;
   if (task_json_exists) {
     TaskTopologyGraph graph;
@@ -1087,7 +1130,8 @@ void NavigationTaskExecutor::executePatrolAction(
       releaseOperation();
       return;
     }
-    // obstacle_stop使用运行时拓扑中的task_id定位该任务专属的区域YAML。
+    graph.regions = map_regions;
+    // task_id仅作为运行时拓扑的任务追踪信息；区域配置属于地图级资源。
     graph.task_id = goal->task_id;
 
     std::unordered_map<uint32_t, std::size_t> graph_node_indexes;
@@ -1199,17 +1243,18 @@ void NavigationTaskExecutor::executePatrolAction(
     topology_written = topology_writer_->write(graph, topology_message);
   } else {
     // 没有任务JSON时保留基础巡检能力：直接使用Action数组，并为相邻节点
-    // 生成默认双向直线边。此路径没有自定义边策略和区域配置。
+    // 生成默认双向直线边；地图级区域配置仍然生效。
     patrol_nodes.assign(goal->nodes.begin(), goal->nodes.end());
     topology_written = topology_writer_->write(patrol_nodes, topology_message,
-                                               config_.default_edge_policy);
+                                               config_.default_edge_policy,
+                                               map_regions);
     if (topology_written) {
       RCLCPP_WARN(node_->get_logger(),
                   "[APP][NAVIGATION_FALLBACK] task JSON does not exist for "
                   "task_id='%s': %s; using %zu Action nodes with default "
-                  "straight edges and no region settings",
+                  "straight edges and %zu map regions",
                   goal->task_id.c_str(), task_json_file.string().c_str(),
-                  patrol_nodes.size());
+                  patrol_nodes.size(), map_regions.size());
     }
   }
 
@@ -1578,7 +1623,16 @@ void NavigationTaskExecutor::executeNavigateToPoseAction(
   topology_writer_->setOutputFile(topology_file_);
   TaskEdgePolicy policy = config_.default_edge_policy;
   policy.obstacle_avoidance_enabled = goal->enable_avoidance;
-  if (!topology_writer_->write(topology_nodes, message, policy)) {
+  std::vector<TaskTopologyRegion> map_regions;
+  if (!parseRegionsJson(task_directory_ / "regions.json", map_regions,
+                        message)) {
+    result->success = false;
+    result->message = message;
+    goal_handle->abort(result);
+    releaseOperation();
+    return;
+  }
+  if (!topology_writer_->write(topology_nodes, message, policy, map_regions)) {
     result->success = false;
     result->message = message;
     goal_handle->abort(result);

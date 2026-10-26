@@ -119,8 +119,8 @@ A -> B为map_connection时：
 - `NavigationNode.stop_duration_sec`表示到点后的停留秒数；JSON命中节点
   时使用JSON值，JSON中没有该节点时使用Action消息中的值。
 - `<task_id>.json`不存在时，直接使用Action携带的`nodes[]`位姿和停留时间
-  继续导航，并为相邻节点生成默认双向直线边；该模式不加载自定义边和区域设置，
-  边参数使用`TaskEdgePolicy`默认值。
+  继续导航，并为相邻节点生成默认双向直线边；边参数使用
+  `TaskEdgePolicy`默认值，地图级`regions.json`仍然加载。
 - 任务JSON中的edge支持`bidirectional`属性，未配置时slam_manager按当前业务约定
   默认`true`。生成runtime `topology_map.json`时会明确写出该字段。相邻执行节点
   优先使用与当前方向完全一致的edge；若只存在反方向定义，则仅当该edge的
@@ -181,24 +181,36 @@ A -> B为map_connection时：
 
 ### 导航区域
 
-任务JSON可选包含`regions[]`。未提供时保持原导航行为；第一版不允许两个
-启用区域相交或接触。每个区域包含唯一`id`、`region_type`、至少三个
-`map`坐标系多边形点，以及可选`param`：
+地图级区域从任务目录下的`regions.json`读取：
+
+```text
+/robotfs/data/slam_data/<map_id>/task/regions.json
+```
+
+文件不存在时保持原导航行为；文件存在但内容非法时拒绝启动导航。区域同时
+应用于巡检、任务JSON缺失时的兼容巡检和单点导航。第一版不允许两个启用区域
+相交或接触。文件顶层包含`regions[]`，每个区域包含唯一`id`、`region_type`、
+至少三个`map`坐标系多边形点，以及可选`param`：
 
 ```json
 {
-  "id": 0,
-  "region_type": "obstacle_avoidance",
-  "polygon": [
-    {"x": 1.0, "y": 1.0},
-    {"x": 3.0, "y": 1.0},
-    {"x": 3.0, "y": 3.0}
-  ],
-  "param": {
-    "linear_velocity": 0.2,
-    "angular_velocity": 0.3,
-    "obstacle_avoidance_distance_m": 1.0
-  }
+  "regions": [
+    {
+      "id": 0,
+      "enabled": true,
+      "region_type": "obstacle_avoidance",
+      "polygon": [
+        {"x": 1.0, "y": 1.0},
+        {"x": 3.0, "y": 1.0},
+        {"x": 3.0, "y": 3.0}
+      ],
+      "param": {
+        "linear_velocity": 0.2,
+        "angular_velocity": 0.3,
+        "obstacle_avoidance_distance_m": 1.0
+      }
+    }
+  ]
 }
 ```
 
@@ -208,7 +220,7 @@ A -> B为map_connection时：
 每个区域可在任务目录下提供狗本体停障配置：
 
 ```text
-task/region_obstacle_stop/<task_id>/<region_id>.yaml
+task/region_obstacle_stop/<region_id>.yaml
 ```
 
 文件只允许覆盖`hard_stop_distance`、`slowdown_distance`、

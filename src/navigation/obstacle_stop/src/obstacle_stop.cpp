@@ -238,19 +238,6 @@ bool ObstacleStop::loadRegionProfiles(std::string &message) {
     if (!document["regions"].is_array()) {
       throw std::runtime_error("regions must be an array");
     }
-    const std::string task_id = document.value("task_id", "");
-    if (!document["regions"].empty()) {
-      if (task_id.empty() || task_id.size() > 64U ||
-          !std::all_of(task_id.begin(), task_id.end(), [](char character) {
-            return (character >= 'a' && character <= 'z') ||
-                   (character >= 'A' && character <= 'Z') ||
-                   (character >= '0' && character <= '9') ||
-                   character == '_' || character == '-';
-          })) {
-        throw std::runtime_error(
-            "topology task_id is missing or invalid for region profiles");
-      }
-    }
     for (const auto &json_region : document["regions"]) {
       RegionProfile region;
       region.id = json_region.at("id").get<int>();
@@ -273,7 +260,7 @@ bool ObstacleStop::loadRegionProfiles(std::string &message) {
       region.config = default_config_;
       const auto profile_file =
           std::filesystem::path(topology_map_file_).parent_path() /
-          "region_obstacle_stop" / task_id /
+          "region_obstacle_stop" /
           (std::to_string(region.id) + ".yaml");
       RegionObstacleStopOverrides overrides;
       if (!loadRegionObstacleStopOverrides(
