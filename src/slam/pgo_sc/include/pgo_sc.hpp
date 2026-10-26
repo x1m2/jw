@@ -41,6 +41,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 ///// GTSAM
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/geometry/Pose3.h>
@@ -143,7 +144,7 @@ class PgoSc : public rclcpp::Node {
       corrected_pcd_map_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
       ikdtree_rebuild_pub_;
-  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       loop_detection_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
       realtime_pose_pub_;
@@ -181,7 +182,7 @@ class PgoSc : public rclcpp::Node {
   void updateOdomsAndPaths(const PosePcd &pose_pcd_in);
   bool checkIfKeyframe(const PosePcd &pose_pcd_in,
                        const PosePcd &latest_pose_pcd);
-  visualization_msgs::msg::Marker getLoopMarkers(
+  visualization_msgs::msg::MarkerArray getLoopMarkers(
       const gtsam::Values &corrected_esti_in);
   bool addHeightFactor(const gtsam::Pose3 &pose, size_t index);
   void publishIkdtreeRebuildMap();

@@ -189,8 +189,9 @@ PgoSc::PgoSc(const rclcpp::NodeOptions &options)
   corrected_current_pcd_pub_ =
       this->create_publisher<sensor_msgs::msg::PointCloud2>(
           "/corrected_current_pcd", qos_latched);
-  loop_detection_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(
-      "/loop_detection", qos_latched);
+  loop_detection_pub_ =
+      this->create_publisher<visualization_msgs::msg::MarkerArray>(
+          "/loop_detection", qos_latched);
   realtime_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
       "/pose_stamped", 10);
   debug_src_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -1225,14 +1226,39 @@ void PgoSc::updateOdomsAndPaths(const PosePcd &pose_pcd_in) {
       poseEigToPoseStamped(pose_pcd_in.pose_corrected_eig_, map_frame_));
 }
 
-visualization_msgs::msg::Marker PgoSc::getLoopMarkers(
+visualization_msgs::msg::MarkerArray PgoSc::getLoopMarkers(
     const gtsam::Values &corrected_esti_in) {
+  visualization_msgs::msg::MarkerArray markers;
+
+  visualization_msgs::msg::Marker nodes;
+  nodes.header.frame_id = map_frame_;
+  nodes.header.stamp = this->now();
+  nodes.ns = "loop_nodes";
+  nodes.id = 0;
+  nodes.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+  nodes.action = visualization_msgs::msg::Marker::ADD;
+  nodes.pose.orientation.w = 1.0;
+  nodes.scale.x = 0.3;
+  nodes.scale.y = 0.3;
+  nodes.scale.z = 0.3;
+  nodes.color.r = 0.0;
+  nodes.color.g = 0.8;
+  nodes.color.b = 1.0;
+  nodes.color.a = 1.0;
+
   visualization_msgs::msg::Marker edges;
-  edges.type = visualization_msgs::msg::Marker::LINE_LIST;
-  edges.scale.x = 0.12f;
   edges.header.frame_id = map_frame_;
-  edges.pose.orientation.w = 1.0f;
-  edges.color.r = edges.color.g = edges.color.b = edges.color.a = 1.0f;
+  edges.header.stamp = nodes.header.stamp;
+  edges.ns = "loop_edges";
+  edges.id = 1;
+  edges.type = visualization_msgs::msg::Marker::LINE_LIST;
+  edges.action = visualization_msgs::msg::Marker::ADD;
+  edges.pose.orientation.w = 1.0;
+  edges.scale.x = 0.1;
+  edges.color.r = 0.9;
+  edges.color.g = 0.9;
+  edges.color.b = 0.0;
+  edges.color.a = 1.0;
 
   for (auto &pair : loop_idx_pairs_) {
     if (pair.first >= corrected_esti_in.size() ||
@@ -1248,10 +1274,15 @@ visualization_msgs::msg::Marker PgoSc::getLoopMarkers(
     pt2.x = p2.translation().x();
     pt2.y = p2.translation().y();
     pt2.z = p2.translation().z();
+    nodes.points.push_back(pt1);
+    nodes.points.push_back(pt2);
     edges.points.push_back(pt1);
     edges.points.push_back(pt2);
   }
-  return edges;
+
+  markers.markers.push_back(nodes);
+  markers.markers.push_back(edges);
+  return markers;
 }
 
 bool PgoSc::checkIfKeyframe(const PosePcd &pose_pcd_in,
