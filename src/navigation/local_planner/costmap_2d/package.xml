@@ -19,6 +19,7 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>navigation_interfaces</depend>
   <depend>livox_ros_driver2</depend>
 
   <!-- TF2 -->

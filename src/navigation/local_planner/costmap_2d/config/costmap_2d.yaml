@@ -28,7 +28,10 @@
     # 障碍物检测参数
     max_obstacle_range: 8.0
     min_obstacle_range: 0.35
+    # /costmap在绕障非IDLE阶段使用此半径；A*使用自身固定膨胀参数。
     inflation_radius: 0.25
+    # IDLE：正常路径跟踪。0.03小于当前0.05m栅格，不覆盖相邻格。
+    tracking_inflation_radius: 0.03
 
     # 俯仰角检测参数
     enable_pitch_detection: true

@@ -1093,7 +1093,7 @@ bool LocalAvoidanceManager::isGlobalPathClearForResume(
     const geometry_msgs::msg::PoseStamped &robot_pose,
     std::size_t global_path_progress_index) {
   if (!avoidance_path_planner_ ||
-      !avoidance_path_planner_->prepareLatestCostmap()) {
+      !avoidance_path_planner_->hasPreparedCostmap()) {
     return false;
   }
 

@@ -104,6 +104,7 @@
     astar_diagonal_cost: 1.414           # 对角移动代价，通常取 sqrt(2)
     astar_straight_cost: 1.0             # 水平/垂直移动代价
     astar_safety_margin: 3               # 障碍物周围软安全范围（栅格数）
+    astar_inflation_radius: 0.25         # A*在后台从障碍本体重建膨胀，不等待Costmap切换
     astar_path_deviation_weight: 0.0     # 偏离全局路径权重；0 表示不约束
     astar_obstacle_avoidance_weight: 5.0 # 靠近障碍物的附加代价权重
     astar_obstacle_proximity_distance: 1.20 # 已知触发障碍中心周围的提前绕行软代价范围（m）

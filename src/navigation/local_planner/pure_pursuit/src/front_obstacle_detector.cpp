@@ -425,7 +425,7 @@ bool FrontObstacleDetector::isMotionCollisionFree(
   const double resolution = map.info.resolution;
   const int width = static_cast<int>(map.info.width);
   const int height = static_cast<int>(map.info.height);
-  const double half_length = robot_length_ * 0.5 + safety_margin_ + extra_margin;
+  const double half_length = robot_length_ * 0.5;
   // 恢复净空仅增加前后长度，左右保留正常安全边距，避免窄通道无法恢复。
   const double half_width = robot_width_ * 0.5 + safety_margin_;
   const double radius = std::hypot(half_length, half_width);

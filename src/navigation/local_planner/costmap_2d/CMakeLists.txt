@@ -18,6 +18,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 
 find_package(tf2 REQUIRED)
@@ -55,6 +56,7 @@ ament_target_dependencies(${PROJECT_NAME}
   sensor_msgs
   geometry_msgs
   nav_msgs
+  navigation_interfaces
   livox_ros_driver2
   tf2
   tf2_ros
@@ -81,6 +83,7 @@ ament_target_dependencies(costmap_2d_node
   sensor_msgs
   geometry_msgs
   nav_msgs
+  navigation_interfaces
   livox_ros_driver2
   tf2
   tf2_ros
@@ -139,6 +142,7 @@ ament_export_dependencies(
   sensor_msgs
   geometry_msgs
   nav_msgs
+  navigation_interfaces
   livox_ros_driver2
   tf2
   tf2_ros

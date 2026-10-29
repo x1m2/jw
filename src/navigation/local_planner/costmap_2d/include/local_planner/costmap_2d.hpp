@@ -13,6 +13,7 @@
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
 #include <nav_msgs/msg/occupancy_grid.hpp>
+#include <navigation_interfaces/msg/avoidance_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -65,6 +66,10 @@ class CostMap2D {
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
       pointcloud2_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_pub_;
+  rclcpp::Subscription<navigation_interfaces::msg::AvoidanceState>::SharedPtr
+      avoidance_state_sub_;
+  void avoidanceStateCallback(
+      const navigation_interfaces::msg::AvoidanceState::ConstSharedPtr message);
 
   // TF相关
   tf2_ros::Buffer tf_buffer_;
@@ -116,7 +121,9 @@ class CostMap2D {
   // 障碍物参数
   double max_obstacle_range_;  // 最大障碍物检测距离
   double min_obstacle_range_;  // 最小障碍物检测距离
-  double inflation_radius_;    // 膨胀半径
+  double inflation_radius_;    // 当前实际使用的膨胀半径
+  double tracking_inflation_radius_;   // 正常跟踪时的膨胀半径
+  double avoidance_inflation_radius_;  // 绕障及其等待阶段的膨胀半径
 
   // 时间衰减参数
   double obstacle_max_age_;  // 障碍物最大存在时间 (秒)
@@ -151,6 +158,8 @@ class CostMap2D {
    * @brief 预计算固定射线方向和膨胀模板
    */
   void initializeLookupTables();
+  void initializeInflationLookup();
+  std::vector<InflationOffset> makeInflationLookup(double radius) const;
 
   /**
    * @brief 清除代价地图

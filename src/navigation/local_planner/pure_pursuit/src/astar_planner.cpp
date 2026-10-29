@@ -39,6 +39,11 @@ bool AStarPlanner::initialize(rclcpp::Node::SharedPtr node) {
   obstacle_threshold_ =
       declareOrGetParameter(node_, "obstacle_cost_threshold", 50);
   safety_margin_ = declareOrGetParameter(node_, "astar_safety_margin", 2);
+  inflation_radius_ = declareOrGetParameter(node_, "astar_inflation_radius", 0.25);
+  if (!std::isfinite(inflation_radius_) || inflation_radius_ < 0.0) {
+    RCLCPP_ERROR(node_->get_logger(), "astar_inflation_radius must be finite and nonnegative");
+    return false;
+  }
   allow_diagonal_ = declareOrGetParameter(node_, "astar_allow_diagonal", true);
   diagonal_cost_ = declareOrGetParameter(node_, "astar_diagonal_cost", 1.414);
   straight_cost_ = declareOrGetParameter(node_, "astar_straight_cost", 1.0);
@@ -97,6 +102,9 @@ bool AStarPlanner::initialize(rclcpp::Node::SharedPtr node) {
       "astar_markers", 1);
 
   RCLCPP_INFO(node_->get_logger(),
+              "[ASTAR_INFLATION] local planning radius=%.3f m (no Costmap synchronization wait)",
+              inflation_radius_);
+  RCLCPP_INFO(node_->get_logger(),
               "A* initialized: obstacle=%d, rectangular footprint=%.2fx%.2fm, "
               "initial_escape=%d/%.2fm, timeout=%.3fs, early_avoid=%.2fm/%.2f, "
               "obstacle_proximity=%.2fm/%.2f, max_nodes=%zu",
@@ -148,7 +156,7 @@ bool AStarPlanner::prepareLatestCostmap() {
   const auto &info = costmap_to_prepare->info;
   const size_t expected_size =
       static_cast<size_t>(info.width) * static_cast<size_t>(info.height);
-  if (info.resolution <= 0.0 || info.width == 0 || info.height == 0 ||
+  if (!std::isfinite(info.resolution) || info.resolution <= 0.0 || info.width == 0 || info.height == 0 ||
       costmap_to_prepare->data.size() != expected_size) {
     RCLCPP_WARN_THROTTLE(
         node_->get_logger(), *node_->get_clock(), 2000,
@@ -160,6 +168,9 @@ bool AStarPlanner::prepareLatestCostmap() {
     return prepared_costmap_.valid();
   }
 
+  // 从真实障碍重建规划代价，不能对输入的膨胀区再次膨胀。
+  // 这份只读快照同时供A*、临时点和路径安全检查使用，不发布第二张地图。
+  costmap_to_prepare = buildPlanningCostmap(*costmap_to_prepare);
   auto footprint_mask = std::make_shared<const std::vector<uint8_t>>(
       buildFootprintMask(*costmap_to_prepare));
   if (footprint_mask->size() != costmap_to_prepare->data.size()) {
@@ -177,6 +188,53 @@ bool AStarPlanner::prepareLatestCostmap() {
                          std::move(footprint_mask), version_to_prepare};
   }
   return true;
+}
+
+CostmapConstPtr AStarPlanner::buildPlanningCostmap(
+    const nav_msgs::msg::OccupancyGrid &input) const {
+  auto map = std::make_shared<nav_msgs::msg::OccupancyGrid>(input);
+  const int width = static_cast<int>(map->info.width);
+  const int height = static_cast<int>(map->info.height);
+  std::vector<std::pair<int, int>> obstacles;
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      auto &cost = map->data[static_cast<std::size_t>(y) * width + x];
+      if (cost == 100) obstacles.emplace_back(x, y);
+      else if (cost >= 0) cost = 0;  // 未知区域保留，旧的软膨胀代价清除。
+    }
+  }
+  if (inflation_radius_ <= 0.0 || obstacles.empty()) return map;
+
+  struct Offset { int dx; int dy; int8_t cost; };
+  std::vector<Offset> offsets;
+  const double resolution = map->info.resolution;
+  const int cells_x = static_cast<int>(std::min(
+      std::ceil(inflation_radius_ / resolution), static_cast<double>(width - 1)));
+  const int cells_y = static_cast<int>(std::min(
+      std::ceil(inflation_radius_ / resolution), static_cast<double>(height - 1)));
+  for (int dy = -cells_y; dy <= cells_y; ++dy) {
+    for (int dx = -cells_x; dx <= cells_x; ++dx) {
+      const double distance = std::hypot(dx, dy) * resolution;
+      // OccupancyGrid分辨率是float，容纳5cm*5与0.25m之间的表示误差。
+      if (distance > inflation_radius_ + resolution * 1e-6) continue;
+      // 与Costmap一致：内部0..254线性衰减，再转换成OccupancyGrid的1..99。
+      const int raw = std::clamp(
+          static_cast<int>(254.0 - distance / inflation_radius_ * 254.0), 1, 253);
+      const auto cost = static_cast<int8_t>(std::clamp(
+          static_cast<int>(raw * 99.0 / 253.0), 1, 99));
+      offsets.push_back({dx, dy, cost});
+    }
+  }
+  for (const auto &[x, y] : obstacles) {
+    for (const auto &offset : offsets) {
+      const int nx = x + offset.dx;
+      const int ny = y + offset.dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      auto &cost = map->data[static_cast<std::size_t>(ny) * width + nx];
+      if (cost >= 0 && cost < 100) cost = std::max(cost, offset.cost);
+    }
+  }
+  return map;
 }
 
 bool AStarPlanner::hasPreparedCostmap() const {

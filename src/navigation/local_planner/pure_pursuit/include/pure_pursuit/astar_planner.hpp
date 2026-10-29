@@ -132,6 +132,7 @@ class AStarPlanner {
   // A*算法参数
   int obstacle_threshold_;            // 检测器与A*共用的障碍阻塞阈值
   int safety_margin_;                 // 安全边距（栅格数）
+  double inflation_radius_{0.25};     // 规划快照独立膨胀，不等待Costmap状态切换
   bool allow_diagonal_;               // 是否允许对角线移动
   double diagonal_cost_;              // 对角线移动代价
   double straight_cost_;              // 直线移动代价
@@ -153,7 +154,7 @@ class AStarPlanner {
 
   // 可视化参数
   std::string global_frame_;
-
+  CostmapConstPtr buildPlanningCostmap(const nav_msgs::msg::OccupancyGrid &input) const;
   // A*算法内部函数
   double calculateHeuristic(int x, int y, int goal_x, int goal_y) const;
   double calculateObstacleCost(

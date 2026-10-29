@@ -29,6 +29,9 @@ CostMap2D::CostMap2D(const rclcpp::Node::SharedPtr& node)
               max_obstacle_range_);
   RCLCPP_INFO(node_->get_logger(), "  Inflation radius: %.2f m",
               inflation_radius_);
+  RCLCPP_INFO(node_->get_logger(),
+              "  Inflation modes: tracking=%.3f m, avoidance=%.3f m",
+              tracking_inflation_radius_, avoidance_inflation_radius_);
 
   if (enable_pitch_detection_) {
     RCLCPP_INFO(node_->get_logger(),
@@ -73,10 +76,39 @@ bool CostMap2D::initialize() {
 
   initializeLookupTables();
   initializeCostMap();
+  // 与点云订阅共用默认互斥回调组，切换膨胀模板时不会与地图更新并发。
+  avoidance_state_sub_ =
+      node_->create_subscription<navigation_interfaces::msg::AvoidanceState>(
+          "/local_avoidance/state",
+          rclcpp::QoS(1).reliable().transient_local(),
+          std::bind(&CostMap2D::avoidanceStateCallback, this,
+                    std::placeholders::_1));
   RCLCPP_INFO(node_->get_logger(), "Subscribed to Livox CustomMsg: %s",
               livox_topic_.c_str());
 
   return true;
+}
+
+void CostMap2D::avoidanceStateCallback(
+    const navigation_interfaces::msg::AvoidanceState::ConstSharedPtr message) {
+  // 所有非IDLE状态（规划、跟踪、阻塞、等待动态路径和失败）均保留绕障余量。
+  const bool avoiding =
+      message->state != navigation_interfaces::msg::AvoidanceState::IDLE;
+  const double radius = avoiding ? avoidance_inflation_radius_
+                                 : tracking_inflation_radius_;
+  if (radius == inflation_radius_) return;
+
+  const double previous_radius = inflation_radius_;
+  inflation_radius_ = radius;
+  initializeInflationLookup();
+  clearInflatedCosts();
+  inflateObstacles();
+  publishCostMap();
+  RCLCPP_INFO(node_->get_logger(),
+              "[COSTMAP_INFLATION] mode=%s state=%u radius=%.3f -> %.3f m",
+              avoiding ? "avoidance" : "tracking",
+              static_cast<unsigned int>(message->state), previous_radius,
+              inflation_radius_);
 }
 
 void CostMap2D::loadParameters() {
@@ -108,7 +140,8 @@ void CostMap2D::loadParameters() {
 
   node_->declare_parameter<double>("max_obstacle_range", 10.0);
   node_->declare_parameter<double>("min_obstacle_range", 0.1);
-  node_->declare_parameter<double>("inflation_radius", 0.5);
+  node_->declare_parameter<double>("inflation_radius", 0.25);
+  node_->declare_parameter<double>("tracking_inflation_radius", 0.03);
 
   node_->declare_parameter<double>("obstacle_max_age", 1.0);
   node_->declare_parameter<bool>("use_time_decay", false);
@@ -146,7 +179,18 @@ void CostMap2D::loadParameters() {
 
   node_->get_parameter("max_obstacle_range", max_obstacle_range_);
   node_->get_parameter("min_obstacle_range", min_obstacle_range_);
-  node_->get_parameter("inflation_radius", inflation_radius_);
+  node_->get_parameter("inflation_radius", avoidance_inflation_radius_);
+  node_->get_parameter("tracking_inflation_radius", tracking_inflation_radius_);
+  if (!std::isfinite(avoidance_inflation_radius_) ||
+      avoidance_inflation_radius_ < 0.0 ||
+      !std::isfinite(tracking_inflation_radius_) ||
+      tracking_inflation_radius_ < 0.0 ||
+      !std::isfinite(resolution_) || resolution_ <= 0.0) {
+    throw std::invalid_argument(
+        "Inflation radii must be finite and nonnegative; resolution must be "
+        "finite and positive");
+  }
+  inflation_radius_ = tracking_inflation_radius_;
 
   node_->get_parameter("obstacle_max_age", obstacle_max_age_);
   node_->get_parameter("use_time_decay", use_time_decay_);
@@ -216,32 +260,42 @@ void CostMap2D::initializeLookupTables() {
     ray_sines_[i] = static_cast<float>(std::sin(angle));
   }
 
-  inflation_offsets_.clear();
-  if (inflation_radius_ <= 0.0) {
-    return;
+  initializeInflationLookup();
+}
+
+void CostMap2D::initializeInflationLookup() {
+  inflation_offsets_ = makeInflationLookup(inflation_radius_);
+}
+
+std::vector<CostMap2D::InflationOffset> CostMap2D::makeInflationLookup(
+    double radius) const {
+  std::vector<InflationOffset> offsets;
+  if (radius <= 0.0) {
+    return offsets;
   }
 
   const int inflation_cells =
-      static_cast<int>(std::ceil(inflation_radius_ / resolution_));
-  inflation_offsets_.reserve(static_cast<std::size_t>(
+      static_cast<int>(std::ceil(radius / resolution_));
+  offsets.reserve(static_cast<std::size_t>(
       (2 * inflation_cells + 1) * (2 * inflation_cells + 1)));
   for (int dx = -inflation_cells; dx <= inflation_cells; ++dx) {
     for (int dy = -inflation_cells; dy <= inflation_cells; ++dy) {
       const double dist =
           std::hypot(static_cast<double>(dx), static_cast<double>(dy)) *
           resolution_;
-      if (dist > inflation_radius_) {
+      if (dist > radius) {
         continue;
       }
 
-      const double normalized_dist = dist / inflation_radius_;
+      const double normalized_dist = dist / radius;
       unsigned char cost = static_cast<unsigned char>(
           LETHAL_OBSTACLE - normalized_dist * (LETHAL_OBSTACLE - FREE_SPACE));
       cost = std::max(static_cast<unsigned char>(FREE_SPACE + 1), cost);
       cost = std::min(static_cast<unsigned char>(LETHAL_OBSTACLE - 1), cost);
-      inflation_offsets_.push_back(InflationOffset{dx, dy, cost});
+      offsets.push_back(InflationOffset{dx, dy, cost});
     }
   }
+  return offsets;
 }
 
 void CostMap2D::livoxCallback(
@@ -744,22 +798,23 @@ void CostMap2D::publishCostMap() {
   costmap_msg_.header.stamp = node_->now();
   costmap_msg_.header.frame_id = global_frame_;
 
-  for (size_t i = 0; i < costmap_.size(); ++i) {
-    if (costmap_[i] == LETHAL_OBSTACLE) {
-      costmap_msg_.data[i] = 100;
-    } else if (costmap_[i] == FREE_SPACE) {
-      costmap_msg_.data[i] = 0;
-    } else {
-      int occupancy_value =
-          static_cast<int>((static_cast<double>(costmap_[i]) * 99.0) / 253.0);
-
-      occupancy_value = std::max(1, std::min(99, occupancy_value));
-
-      costmap_msg_.data[i] = static_cast<int8_t>(occupancy_value);
+  const auto encode = [](const std::vector<unsigned char>& grid,
+                         nav_msgs::msg::OccupancyGrid& message) {
+    for (size_t i = 0; i < grid.size(); ++i) {
+      if (grid[i] == LETHAL_OBSTACLE) {
+        message.data[i] = 100;
+      } else if (grid[i] == FREE_SPACE) {
+        message.data[i] = 0;
+      } else {
+        const int value = static_cast<int>(grid[i] * 99.0 / 253.0);
+        message.data[i] = static_cast<int8_t>(std::clamp(value, 1, 99));
+      }
     }
-  }
+  };
 
+  encode(costmap_, costmap_msg_);
   costmap_pub_->publish(costmap_msg_);
+
 }
 
 void CostMap2D::rollMap(int offset_x, int offset_y) {
