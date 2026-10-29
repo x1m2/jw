@@ -5,10 +5,11 @@
 
 ## UWB 跟随（独立于巡检导航）
 
-UWB 串口接收程序可常驻并发布 `/ble_follow_cmd`（`std_msgs/msg/Int8`）。
-Manager 独占外部指令：`0` 首次启动或暂停后恢复、`1` 暂停、`2` 停止。
-串口程序的“返回信令处”不会发布到跟随指令话题。重复的 `1` 保持
-暂停，只有 `0` 会恢复。重复的开始/停止指令是幂等的。
+Manager 订阅 `/ble_follow_cmd`（`std_msgs/msg/Int8`）：`0` 首次启动或
+暂停后恢复、`1` 暂停、`2` 停止。重复的 `1` 保持暂停，只有 `0` 会恢复。
+重复的开始/停止指令是幂等的。UWB 串口驱动保持原有发布值；若直接将其
+`/ble_follow_cmd` 接入 Manager，旧值 `1`（停止）、`2`（返回信令处）、
+`3`（暂停）与此协议不兼容，发布方需要先转换。
 
 开始时，Manager 单独启动 FAST-LIO2、terrain_filter、obstacle_stop、
 costmap_2d、path_smoother、pure_pursuit 和 uwb_follow_planner Worker。

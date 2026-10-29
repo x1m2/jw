@@ -156,9 +156,9 @@ class libAoa_robot_publisher : public rclcpp::Node
 
         switch (cmd) {
             case 0x01: msg.data = 0;  printf(">>> 开始跟随 (BLE)\n"); break;
-            case 0x02: msg.data = 2;  printf("<<< 停止跟随 (BLE)\n"); break;
-            case 0x03: printf("--- 返回信令处 (BLE)\n"); pos = 0; return;
-            case 0x04: msg.data = 1;  printf("--- 暂停 (BLE)\n"); break;
+            case 0x02: msg.data = 1;  printf("<<< 停止跟随 (BLE)\n"); break;
+            case 0x03: msg.data = 2;  printf("--- 返回信令处 (BLE)\n"); break;
+            case 0x04: msg.data = 3;  printf("--- 暂停/恢复 (BLE)\n"); break;
             default: return;
         }
         ble_follow_pub_->publish(msg);
