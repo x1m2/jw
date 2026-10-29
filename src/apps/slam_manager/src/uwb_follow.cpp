@@ -160,7 +160,7 @@ bool SlamManagerNode::sendUwbPlannerCommand(int8_t command) {
 bool SlamManagerNode::stopUwbFollowWorkers(std::string &message) {
   std::string ignored;
   setRobotMode(0, ignored);
-  if (uwb_follow_controller_->plannerAttempted()) sendUwbPlannerCommand(1);
+  if (uwb_follow_controller_->plannerAttempted()) sendUwbPlannerCommand(2);
   return uwb_follow_controller_->stop(kUwbWorkerTimeoutSec, message);
 }
 
@@ -193,7 +193,7 @@ void SlamManagerNode::uwbFollowCommandCallback(
       RCLCPP_WARN(get_logger(), "UWB follow start rejected in mode=%s",
                   std::string(toString(mode)).c_str());
     }
-  } else if (value == 1) {
+  } else if (value == 2) {
     const auto mode = state_machine_.mode();
     if (mode == SlamMode::kStartingFollow || mode == SlamMode::kFollowing ||
         mode == SlamMode::kFollowPaused) {
@@ -205,13 +205,13 @@ void SlamManagerNode::uwbFollowCommandCallback(
       // cannot be cleared by a BLE command.
       stopUwbFollow();
     }
-  } else if (value == 3) {
+  } else if (value == 1) {
     const auto mode = state_machine_.mode();
     if (mode == SlamMode::kFollowing) {
       pauseUwbFollow();
     } else if (mode == SlamMode::kFollowPaused) {
-      // The original UWB protocol uses 3 only for pause; 0 resumes.
-      sendUwbPlannerCommand(3);
+      // Pause is idempotent; only 0 resumes.
+      sendUwbPlannerCommand(1);
     } else {
       RCLCPP_WARN(get_logger(), "UWB pause ignored in mode=%s",
                   std::string(toString(mode)).c_str());
@@ -280,7 +280,7 @@ bool SlamManagerNode::startUwbFollow(uint64_t generation) {
 bool SlamManagerNode::pauseUwbFollow() {
   std::unique_lock<std::mutex> lifecycle_lock(lifecycle_mutex_);
   if (state_machine_.mode() != SlamMode::kFollowing) return false;
-  if (!sendUwbPlannerCommand(3)) {
+  if (!sendUwbPlannerCommand(1)) {
     // No planner can own PP pause in this state. Stop the follow stack.
     std::string stop_message;
     const bool stopped = stopUwbFollowWorkers(stop_message);

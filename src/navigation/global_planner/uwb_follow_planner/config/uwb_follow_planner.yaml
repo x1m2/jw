@@ -5,7 +5,7 @@ uwb_follow_planner_node:
     uwb_topic: "/libAoa_robot_publisher"
     # true：订阅BLE命令，必须收到data=0才开始跟随；false：不订阅并自动跟随。
     enable_follow_command_topic: true
-    # BLE事件命令（非心跳）：0开始/恢复，1停止，3暂停；未发布时保持上次状态。
+    # BLE事件命令（非心跳）：0开始/恢复，1暂停，2停止；未发布时保持上次状态。
     follow_command_topic: "/ble_follow_cmd"
     # FAST-LIO2 建图期间输出的实时里程计，类型 nav_msgs/msg/Odometry。
     odometry_topic: "/Odometry"

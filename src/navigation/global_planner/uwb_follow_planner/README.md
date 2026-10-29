@@ -8,7 +8,7 @@ In the platform runtime, the executable is a ManagedWorker. It waits for
 passes profile `managed_follow`, which changes its command input to
 `/slam_manager/uwb_follow_cmd` and keeps the existing UWB follow policy.
 The planner remains the only follow-mode caller of
-`/pure_pursuit/set_paused`: command `3` pauses, and command `0` resumes only
+`/pure_pursuit/set_paused`: command `1` pauses, and command `0` resumes only
 after the planner's pose and UWB checks pass. Manager starts and stops Workers
 and does not call the Pure Pursuit pause service in follow mode.
 The standalone launch defaults to `runtime_profile:=test`, autostarts the
@@ -18,7 +18,7 @@ algorithm, and retains direct `/ble_follow_cmd` input for bench testing.
 
 ```text
 /libAoa_robot_publisher + /Odometry (nav_msgs/msg/Odometry, frame=odom)
-  + /ble_follow_cmd (std_msgs/msg/Int8: 0=start, 1=stop, 3=pause)
+  + /ble_follow_cmd (std_msgs/msg/Int8: 0=start, 1=pause, 2=stop)
   -> uwb_follow_planner
   -> /global_path_with_policy
   -> path_smoother
@@ -51,8 +51,8 @@ distance are configurable in `config/uwb_follow_planner.yaml`.
 
 `/ble_follow_cmd` is an event command rather than a heartbeat. The last command
 is latched internally when the publisher is silent. The planner starts in the
-stopped state and requires `0` before following; `1` stops and clears the
-locked control target, while `3` pauses without clearing the target so a later
+stopped state and requires `0` before following; `2` stops and clears the
+locked control target, while `1` pauses without clearing the target so a later
 `0` can resume it. Other command values are ignored. Set
 `enable_follow_command_topic: false` to disable the subscription and start the
 follow state machine automatically as soon as odometry and UWB data are valid.

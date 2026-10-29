@@ -6,20 +6,20 @@
 ## UWB 跟随（独立于巡检导航）
 
 UWB 串口接收程序可常驻并发布 `/ble_follow_cmd`（`std_msgs/msg/Int8`）。
-Manager 独占外部指令：`0` 首次启动或暂停后恢复、`1` 停止、`3` 暂停；
-`2` 保留给串口程序的“返回信令处”，当前跟随链路不执行。重复的 `3` 保持
+Manager 独占外部指令：`0` 首次启动或暂停后恢复、`1` 暂停、`2` 停止。
+串口程序的“返回信令处”不会发布到跟随指令话题。重复的 `1` 保持
 暂停，只有 `0` 会恢复。重复的开始/停止指令是幂等的。
 
 开始时，Manager 单独启动 FAST-LIO2、terrain_filter、obstacle_stop、
 costmap_2d、path_smoother、pure_pursuit 和 uwb_follow_planner Worker。
 不会启动 PGO、地图重定位或 global_path_planner。跟随 Worker 的规划和代价
-地图运行在 `odom`；Pure Pursuit 启动时保持暂停。Manager 转发 `0/3` 给
+地图运行在 `odom`；Pure Pursuit 启动时保持暂停。Manager 转发 `0/1` 给
 UWB 规划器，由规划器按原有逻辑检查 UWB 目标和里程计、调用 PP 暂停服务；
 Manager 不直接调用 PP 暂停服务。暂停期间保留全部 Worker 和 FAST-LIO2；
 停止时先封锁底盘运动再逆序停止 Worker。正常导航与 UWB 跟随共用控制
 输出，因此两种运行模式互斥。
-若停止失败进入错误态，可再次发送 `1` 重试未确认停止的 UWB Worker；
-确认全部停止后回到 IDLE。其他流程产生的错误不会被 BLE `1` 清除。
+若停止失败进入错误态，可再次发送 `2` 重试未确认停止的 UWB Worker；
+确认全部停止后回到 IDLE。其他流程产生的错误不会被 BLE `2` 清除。
 Manager 处于 IDLE 但仍保留 APP 定位 Worker 时，UWB 开始指令会被拒绝，
 不会停止定位或清除普通导航的重定位结果。需要先通过 APP 的正常生命周期
 流程结束该定位会话，再启动 UWB 跟随。

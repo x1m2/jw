@@ -45,8 +45,8 @@ class UwbFollowPlanner : public rclcpp::Node {
 
   enum class FollowCommand : int8_t {
     kStart = 0,
-    kStop = 1,
-    kPause = 3,
+    kPause = 1,
+    kStop = 2,
   };
 
   void odometryCallback(nav_msgs::msg::Odometry::ConstSharedPtr message);

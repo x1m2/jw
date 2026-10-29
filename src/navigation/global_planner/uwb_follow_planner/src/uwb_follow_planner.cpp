@@ -154,7 +154,7 @@ UwbFollowPlanner::UwbFollowPlanner(const rclcpp::NodeOptions &options)
   if (enable_follow_command_topic_) {
     RCLCPP_INFO(get_logger(),
                 "UWB follow planner ready: input=%s, odometry=%s, frame=%s, "
-                "output=%s, command=%s (0=start, 1=stop, 3=pause)",
+                "output=%s, command=%s (0=start, 1=pause, 2=stop)",
                 uwb_topic_.c_str(), odometry_topic_.c_str(),
                 global_frame_.c_str(), path_topic_.c_str(),
                 follow_command_topic_.c_str());
@@ -179,7 +179,7 @@ void UwbFollowPlanner::followCommandCallback(
       command != static_cast<int8_t>(FollowCommand::kStop) &&
       command != static_cast<int8_t>(FollowCommand::kPause)) {
     RCLCPP_WARN(get_logger(),
-                "Ignoring unsupported BLE follow command: %d (valid: 0,1,3)",
+                "Ignoring unsupported BLE follow command: %d (valid: 0,1,2)",
                 static_cast<int>(command));
     return;
   }
