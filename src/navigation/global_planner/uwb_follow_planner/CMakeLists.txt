@@ -13,6 +13,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(navigation_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(slam_manager REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -41,7 +42,7 @@ ament_target_dependencies(${PROJECT_NAME}_lib
 add_executable(uwb_follow_planner_node
   src/uwb_follow_planner_node.cpp
 )
-ament_target_dependencies(uwb_follow_planner_node rclcpp)
+ament_target_dependencies(uwb_follow_planner_node rclcpp slam_manager)
 target_link_libraries(uwb_follow_planner_node ${PROJECT_NAME}_lib)
 
 install(TARGETS

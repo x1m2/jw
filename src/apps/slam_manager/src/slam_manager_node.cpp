@@ -171,6 +171,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       std::make_unique<MappingController>(this, worker_callback_group_);
   localization_controller_ =
       std::make_unique<LocalizationController>(this, worker_callback_group_);
+  uwb_follow_controller_ =
+      std::make_unique<UwbFollowController>(this, worker_callback_group_);
   navigation_task_executor_ = std::make_unique<NavigationTaskExecutor>(
       this, worker_callback_group_, &state_machine_,
       topology_file_writer_.get(),
@@ -206,6 +208,14 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
           }});
   posture_stop_pub_ = create_publisher<std_msgs::msg::Bool>(
       "/navigation/posture_stop", rclcpp::QoS(1).reliable().transient_local());
+  uwb_planner_command_pub_ = create_publisher<std_msgs::msg::Int8>(
+      "/slam_manager/uwb_follow_cmd", rclcpp::QoS(1).reliable());
+  rclcpp::SubscriptionOptions uwb_command_options;
+  uwb_command_options.callback_group = lifecycle_control_callback_group_;
+  uwb_command_sub_ = create_subscription<std_msgs::msg::Int8>(
+      "/ble_follow_cmd", rclcpp::QoS(10).reliable(),
+      std::bind(&SlamManagerNode::uwbFollowCommandCallback, this,
+                std::placeholders::_1), uwb_command_options);
   robot_state_timer_ = create_wall_timer(
       kRobotStatePollPeriod, std::bind(&SlamManagerNode::pollRobotState, this),
       robot_control_callback_group_);
@@ -557,6 +567,12 @@ bool SlamManagerNode::stopAllAlgorithms(std::string &message) {
   };
 
   std::string stop_message;
+  // An APP start can also clean up a previous follow session.
+  if (uwb_follow_controller_->active()) {
+    const bool follow_stopped = stopUwbFollowWorkers(stop_message);
+    append_result("uwb_follow", follow_stopped, stop_message);
+  }
+  stop_message.clear();
   const bool navigation_stopped =
       navigation_task_executor_->stopAndWait(0U, stop_message);
   append_result("navigation", navigation_stopped, stop_message);
@@ -1897,7 +1913,8 @@ bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
 
 void SlamManagerNode::pollRobotState() {
   const auto mode = state_machine_.mode();
-  if (mode != SlamMode::kNavigating && mode != SlamMode::kNavigationPaused) {
+  if (mode != SlamMode::kNavigating && mode != SlamMode::kNavigationPaused &&
+      mode != SlamMode::kFollowing && mode != SlamMode::kFollowPaused) {
     if (state_req_pending_.exchange(false)) {
       state_req_seq_.fetch_add(1U);
       get_robot_state_client_->prune_pending_requests();
@@ -1948,7 +1965,9 @@ void SlamManagerNode::pollRobotState() {
             const auto response = future.get();
             const auto mode = state_machine_.mode();
             if (mode != SlamMode::kNavigating &&
-                mode != SlamMode::kNavigationPaused) {
+                mode != SlamMode::kNavigationPaused &&
+                mode != SlamMode::kFollowing &&
+                mode != SlamMode::kFollowPaused) {
               return;
             }
             const bool blocked = response->code != 0 ||
@@ -1976,6 +1995,11 @@ void SlamManagerNode::handlePostureState(bool stopped) {
   if (!stopped) {
     // 姿态恢复只解除姿态封锁。若此前触发了暂停，kManualPause仍然有效，
     // 导航保持navigation_paused，直到APP显式调用resume_navigation。
+    return;
+  }
+
+  if (state_machine_.mode() == SlamMode::kFollowing) {
+    pauseUwbFollow();
     return;
   }
 
@@ -2316,6 +2340,14 @@ void SlamManagerNode::publishMode() {
       break;
     case SlamMode::kNavigationPaused:
       protocol_state = RuntimeState::NAVIGATION_PAUSED;
+      break;
+    case SlamMode::kStartingFollow:
+    case SlamMode::kFollowing:
+    case SlamMode::kStoppingFollow:
+      protocol_state = RuntimeState::FOLLOWING;
+      break;
+    case SlamMode::kFollowPaused:
+      protocol_state = RuntimeState::FOLLOW_PAUSED;
       break;
     case SlamMode::kError: {
       int32_t error_code = RuntimeState::NO_ERROR;

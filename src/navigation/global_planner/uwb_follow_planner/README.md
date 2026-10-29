@@ -3,6 +3,17 @@
 Generates a dynamic person-following `PathWithPolicy` from LibAoa UWB
 range/bearing measurements and FAST-LIO2 mapping odometry.
 
+In the platform runtime, the executable is a ManagedWorker. It waits for
+`/uwb_follow_planner_worker/set_state` START from `slam_manager`; the Manager
+passes profile `managed_follow`, which changes its command input to
+`/slam_manager/uwb_follow_cmd` and keeps the existing UWB follow policy.
+The planner remains the only follow-mode caller of
+`/pure_pursuit/set_paused`: command `3` pauses, and command `0` resumes only
+after the planner's pose and UWB checks pass. Manager starts and stops Workers
+and does not call the Pure Pursuit pause service in follow mode.
+The standalone launch defaults to `runtime_profile:=test`, autostarts the
+algorithm, and retains direct `/ble_follow_cmd` input for bench testing.
+
 ## Data flow
 
 ```text

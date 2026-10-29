@@ -76,13 +76,16 @@ class WorkerClient {
   void start(uint64_t session_id, const WorkerStartContext &context,
              Completion completion);
   void stop(uint64_t session_id, Completion completion);
+  void stopConfirmed(uint64_t session_id, Completion completion);
   void save(uint64_t session_id, const std::string &resource_path,
             Completion completion);
+  bool serviceReady() const;
 
  private:
   // 发送统一命令，并通过 completion 返回执行结果。
   void request(uint8_t command, uint64_t session_id,
-               const WorkerStartContext &context, Completion completion);
+               const WorkerStartContext &context, Completion completion,
+               bool require_stopped = false);
 
   std::string service_name_;
   rclcpp::Client<SetWorkerState>::SharedPtr client_;

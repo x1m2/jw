@@ -25,6 +25,11 @@ def generate_launch_description():
             description='UWB follow planner parameter file',
         ),
         DeclareLaunchArgument(
+            'runtime_profile',
+            default_value='test',
+            description='test autostarts; platform waits for slam_manager',
+        ),
+        DeclareLaunchArgument(
             'launch_rviz',
             default_value='true',
             description='Whether to launch the UWB follow RViz view',
@@ -39,7 +44,10 @@ def generate_launch_description():
             executable='uwb_follow_planner_node',
             name='uwb_follow_planner_node',
             output='screen',
-            parameters=[LaunchConfiguration('config_file')],
+            parameters=[
+                LaunchConfiguration('config_file'),
+                {'runtime_profile': LaunchConfiguration('runtime_profile')},
+            ],
         ),
         Node(
             condition=IfCondition(LaunchConfiguration('launch_rviz')),

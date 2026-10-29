@@ -1,4 +1,5 @@
 #include "slam_manager/worker_runtime.hpp"
+#include "slam_manager_interfaces/msg/worker_status.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -119,6 +120,10 @@ WorkerClient::WorkerClient(rclcpp::Node *node, const std::string &service_name,
       service_name_, rmw_qos_profile_services_default, callback_group);
 }
 
+bool WorkerClient::serviceReady() const {
+  return client_->service_is_ready();
+}
+
 void WorkerClient::start(uint64_t session_id, Completion completion) {
   start(session_id, WorkerStartContext{}, std::move(completion));
 }
@@ -135,6 +140,11 @@ void WorkerClient::stop(uint64_t session_id, Completion completion) {
           std::move(completion));
 }
 
+void WorkerClient::stopConfirmed(uint64_t session_id, Completion completion) {
+  request(SetWorkerState::Request::STOP, session_id, WorkerStartContext{},
+          std::move(completion), true);
+}
+
 void WorkerClient::save(uint64_t session_id, const std::string &resource_path,
                         Completion completion) {
   WorkerStartContext context;
@@ -145,7 +155,7 @@ void WorkerClient::save(uint64_t session_id, const std::string &resource_path,
 
 void WorkerClient::request(uint8_t command, uint64_t session_id,
                            const WorkerStartContext &context,
-                           Completion completion) {
+                           Completion completion, bool require_stopped) {
   // 服务未就绪时立即返回，避免控制流程无限等待。
   if (!client_->wait_for_service(std::chrono::seconds(3))) {
     completion(false, service_name_ + " is not ready");
@@ -162,11 +172,18 @@ void WorkerClient::request(uint8_t command, uint64_t session_id,
 
   // 异步响应继续驱动控制器中的下一步启动或停止操作。
   client_->async_send_request(
-      request, [completion = std::move(completion)](
+      request, [completion = std::move(completion), require_stopped](
                    rclcpp::Client<SetWorkerState>::SharedFuture future) {
         try {
           const auto response = future.get();
-          completion(response->success, response->message);
+          const bool stopped =
+              response->actual_state ==
+              slam_manager_interfaces::msg::WorkerStatus::STOPPED;
+          const bool success = response->success &&
+                               (!require_stopped || stopped);
+          completion(success, success || !require_stopped
+                                  ? response->message
+                                  : response->message + "; Worker is not stopped");
         } catch (const std::exception &error) {
           completion(false, error.what());
         }

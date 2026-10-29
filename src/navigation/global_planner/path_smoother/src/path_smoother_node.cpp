@@ -17,8 +17,13 @@ int main(int argc, char ** argv)
 
   try {
     auto worker = std::make_shared<slam_manager::ManagedWorker>(
-        "path_smoother_worker", []() {
-          auto node = std::make_shared<rclcpp::Node>("path_smoother");
+        "path_smoother_worker",
+        [](const slam_manager::ManagedWorker::StartContext &context) {
+          rclcpp::NodeOptions options;
+          if (context.algorithm_profile == "uwb_follow") {
+            options.append_parameter_override("global_frame", "odom");
+          }
+          auto node = std::make_shared<rclcpp::Node>("path_smoother", options);
           auto smoother = std::make_shared<path_smoother::PathSmoother>(node);
           if (!smoother->initialize()) {
             throw std::runtime_error("路径平滑器初始化失败");

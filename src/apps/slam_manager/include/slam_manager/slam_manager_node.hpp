@@ -16,6 +16,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/u_int8.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <string>
@@ -27,6 +28,7 @@
 #include "slam_manager/mapping.hpp"
 #include "slam_manager/navigation_task.hpp"
 #include "slam_manager/slam_mode.hpp"
+#include "slam_manager/uwb_follow.hpp"
 #include "slam_manager_interfaces/action/navigate_to_pose.hpp"
 #include "slam_manager_interfaces/action/start_localization.hpp"
 #include "slam_manager_interfaces/action/start_navigation.hpp"
@@ -142,6 +144,13 @@ class SlamManagerNode : public rclcpp::Node {
                                Trigger::Response::SharedPtr response);
   void resumeNavigationCallback(const Trigger::Request::SharedPtr request,
                                 Trigger::Response::SharedPtr response);
+  void uwbFollowCommandCallback(const std_msgs::msg::Int8::ConstSharedPtr cmd);
+  bool startUwbFollow(uint64_t generation);
+  bool pauseUwbFollow();
+  bool resumeUwbFollow();
+  bool stopUwbFollow();
+  bool sendUwbPlannerCommand(int8_t command);
+  bool stopUwbFollowWorkers(std::string &message);
 
   // 协议2.6：巡检导航Action的接收、取消和异步执行入口。
   rclcpp_action::GoalResponse handleNavigationGoal(
@@ -279,6 +288,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::CallbackGroup::SharedPtr imu_calibration_callback_group_;
   std::unique_ptr<MappingController> mapping_controller_;
   std::unique_ptr<LocalizationController> localization_controller_;
+  std::unique_ptr<UwbFollowController> uwb_follow_controller_;
   std::unique_ptr<MapStorage> map_storage_;
   std::unique_ptr<BbsVoxelGenerator> bbs_voxel_generator_;
   std::unique_ptr<TopologyFileWriter> topology_file_writer_;
@@ -305,6 +315,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Publisher<NavigationObstacleState>::SharedPtr
       navigation_obstacle_state_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr posture_stop_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr uwb_planner_command_pub_;
   rclcpp::Publisher<MapKeyframe>::SharedPtr keyframe_cloud_pub_;
   rclcpp::Publisher<RobotPose>::SharedPtr current_pose_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr body_cloud_pub_;
@@ -322,6 +333,7 @@ class SlamManagerNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr navigation_state_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr
       obstacle_handling_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr uwb_command_sub_;
 };
 
 }  // namespace slam_manager

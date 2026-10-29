@@ -26,6 +26,7 @@ add_library(${PROJECT_NAME}_core STATIC
   src/mapping.cpp
   src/navigation.cpp
   src/navigation_task.cpp
+  src/uwb_follow.cpp
   src/slam_manager_node.cpp
   src/worker_runtime.cpp
 )

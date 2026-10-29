@@ -20,6 +20,10 @@ enum class SlamMode : uint8_t {
   kNavigating,
   kNavigationPaused,
   kStoppingNavigation,
+  kStartingFollow,
+  kFollowing,
+  kFollowPaused,
+  kStoppingFollow,
   kError,
 };
 
@@ -50,6 +54,14 @@ inline std::string_view toString(SlamMode mode) {
       return "navigation_paused";
     case SlamMode::kStoppingNavigation:
       return "stopping_navigation";
+    case SlamMode::kStartingFollow:
+      return "starting_follow";
+    case SlamMode::kFollowing:
+      return "following";
+    case SlamMode::kFollowPaused:
+      return "follow_paused";
+    case SlamMode::kStoppingFollow:
+      return "stopping_follow";
     case SlamMode::kError:
       return "error";
   }
@@ -78,6 +90,12 @@ class SlamStateMachine {
   bool resumeNavigation();
   bool beginStopNavigation();
   bool navigationStopped();
+  bool beginFollow();
+  bool followStarted();
+  bool pauseFollow();
+  bool resumeFollow();
+  bool beginStopFollow();
+  bool followStopped();
   void resetToIdleAfterTeardown();
   void enterError();
 
@@ -180,6 +198,36 @@ inline bool SlamStateMachine::beginStopNavigation() {
 
 inline bool SlamStateMachine::navigationStopped() {
   return transition(SlamMode::kStoppingNavigation, SlamMode::kIdle);
+}
+
+inline bool SlamStateMachine::beginFollow() {
+  return transition(SlamMode::kIdle, SlamMode::kStartingFollow);
+}
+
+inline bool SlamStateMachine::followStarted() {
+  return transition(SlamMode::kStartingFollow, SlamMode::kFollowing);
+}
+
+inline bool SlamStateMachine::pauseFollow() {
+  return transition(SlamMode::kFollowing, SlamMode::kFollowPaused);
+}
+
+inline bool SlamStateMachine::resumeFollow() {
+  return transition(SlamMode::kFollowPaused, SlamMode::kFollowing);
+}
+
+inline bool SlamStateMachine::beginStopFollow() {
+  std::scoped_lock lock(mutex_);
+  if (mode_ != SlamMode::kStartingFollow && mode_ != SlamMode::kFollowing &&
+      mode_ != SlamMode::kFollowPaused && mode_ != SlamMode::kError) {
+    return false;
+  }
+  mode_ = SlamMode::kStoppingFollow;
+  return true;
+}
+
+inline bool SlamStateMachine::followStopped() {
+  return transition(SlamMode::kStoppingFollow, SlamMode::kIdle);
 }
 
 inline void SlamStateMachine::resetToIdleAfterTeardown() {
