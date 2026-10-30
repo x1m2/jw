@@ -3,14 +3,57 @@
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
 #include <thread>
 #include <utility>
 
 namespace slam_manager {
 
 namespace {
-constexpr double kUwbWorkerTimeoutSec = 5.0;
+constexpr double kUwbWorkerStartTimeoutSec = 30.0;
+constexpr double kUwbWorkerStopTimeoutSec = 5.0;
+constexpr std::array<const char *, 7> kUwbWorkerNames{
+    "FAST-LIO", "terrain_filter", "obstacle_stop", "costmap",
+    "path_smoother", "pure_pursuit", "uwb_follow_planner"};
 }
+
+// Keep the response across individual wait timeouts. Only the lifecycle
+// thread replaces the waiter; the ROS response callback completes it once.
+struct UwbFollowController::PendingStart {
+  void wait(WorkerCompletion completion) {
+    bool success;
+    std::string message;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!completed_) {
+        waiter_ = std::move(completion);
+        return;
+      }
+      success = success_;
+      message = message_;
+    }
+    completion(success, message);
+  }
+
+  void complete(bool success, const std::string &message) {
+    WorkerCompletion waiter;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      completed_ = true;
+      success_ = success;
+      message_ = message;
+      waiter = std::move(waiter_);
+    }
+    if (waiter) waiter(success, message);
+  }
+
+ private:
+  std::mutex mutex_;
+  bool completed_{false};
+  bool success_{false};
+  std::string message_;
+  WorkerCompletion waiter_;
+};
 
 UwbFollowController::UwbFollowController(
     rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr callback_group)
@@ -46,32 +89,37 @@ bool UwbFollowController::wasAttempted(const WorkerClient *worker) const {
          attempted_[static_cast<std::size_t>(entry - start_order_.begin())];
 }
 
-bool UwbFollowController::ready(std::string &message) const {
-  // Check every service before changing the Manager mode or starting Workers.
-  // The follow planner is first because it may be absent from an older OTA.
-  if (!uwb_follow_planner_worker_.serviceReady()) {
-    message = "UWB follow planner Worker is unavailable";
-    return false;
-  }
-  for (WorkerClient *worker : start_order_) {
-    if (worker == &uwb_follow_planner_worker_) continue;
-    if (!worker->serviceReady()) {
-      message = "UWB follow Worker is unavailable";
-      return false;
-    }
-  }
-  message = "UWB follow Workers are available";
-  return true;
+bool UwbFollowController::startFastLio(
+    uint64_t session_id, const std::shared_ptr<WorkerOperationToken> &token,
+    double timeout_sec, std::string &message) {
+  return startThrough(session_id, token, timeout_sec, 1U, message);
 }
 
 bool UwbFollowController::start(
     uint64_t session_id, const std::shared_ptr<WorkerOperationToken> &token,
     double timeout_sec, std::string &message) {
+  return startThrough(session_id, token, timeout_sec, start_order_.size(),
+                      message);
+}
+
+bool UwbFollowController::startThrough(
+    uint64_t session_id, const std::shared_ptr<WorkerOperationToken> &token,
+    double timeout_sec, std::size_t worker_count, std::string &message) {
+  if (session_id_ != 0U && session_id_ != session_id) {
+    message = "previous UWB follow session has not been stopped";
+    return false;
+  }
   session_id_ = session_id;
-  for (std::size_t index = 0; index < start_order_.size(); ++index) {
+  for (std::size_t index = 0; index < worker_count; ++index) {
     WorkerClient *worker = start_order_[index];
     if (!token || !token->active()) {
       message = "follow startup superseded";
+      return false;
+    }
+    if (started_[index]) continue;
+    const bool send_start = !pending_starts_[index];
+    if (send_start && !worker->serviceReady()) {
+      message = std::string(kUwbWorkerNames[index]) + " Worker is unavailable";
       return false;
     }
     WorkerStartContext context;
@@ -81,35 +129,49 @@ bool UwbFollowController::start(
     } else if (worker == &uwb_follow_planner_worker_) {
       context.algorithm_profile = "managed_follow";
     }
-    // A timed-out START can still finish inside the Worker. Remember the
-    // attempt before sending it, then use the same session for every STOP.
-    attempted_[index] = true;
+    if (send_start) {
+      // A timed-out START can still finish inside the Worker. Keep both
+      // ownership and the response state until it resolves or teardown.
+      attempted_[index] = true;
+      pending_starts_[index] = std::make_shared<PendingStart>();
+    }
+    const auto pending = pending_starts_[index];
     const auto result = awaitWorkerCommand(
-        "UWB follow worker start", timeout_sec, token,
-        [worker, session_id, context, token](WorkerCompletion completion) {
+        "UWB follow worker start", timeout_sec,
+        std::make_shared<WorkerOperationToken>(),
+        [worker, session_id, context, token, pending,
+         send_start](WorkerCompletion completion) {
+          pending->wait(std::move(completion));
+          if (!send_start) return;
           worker->start(
               session_id, context,
-              [worker, session_id, token,
-               completion = std::move(completion)](
+              [worker, session_id, token, pending](
                   bool success, const std::string &response) {
-                // A START response can arrive after timeout and cleanup.
-                // Its session-scoped STOP cannot stop a later APP session.
+                // Only an explicit session cancellation (STOP or APP takeover)
+                // stops a late success. An individual retry timeout does not.
                 if (success && !token->active()) {
                   worker->stopConfirmed(
                       session_id, [](bool, const std::string &) {});
                 }
-                completion(success, response);
+                pending->complete(success, response);
               });
-        });
+        },
+        [token]() { return token && token->active() && rclcpp::ok(); });
     if (!result.success()) {
-      // A completed failure cannot own an algorithm in this session. A
-      // timeout is uncertain and must remain in the cleanup set.
       if (result.status == WorkerCommandStatus::kFailed) {
-        attempted_[index] = false;
+        // An explicit failure (or send exception) permits a new attempt.
+        // A timeout leaves the original request pending and never resends it.
+        pending_starts_[index].reset();
       }
-      message = result.message;
+      // Retain uncertain ownership across retries for explicit teardown.
+      message = std::string(kUwbWorkerNames[index]) + ": " + result.message;
+      if (result.status == WorkerCommandStatus::kTimedOut) {
+        message += "; waiting for the outstanding START response (not resent)";
+      }
       return false;
     }
+    pending_starts_[index].reset();
+    started_[index] = true;
   }
   message = "UWB follow workers started";
   return true;
@@ -117,6 +179,9 @@ bool UwbFollowController::start(
 
 bool UwbFollowController::stop(double timeout_sec, std::string &message) {
   if (!active()) {
+    session_id_ = 0U;
+    started_.fill(false);
+    pending_starts_.fill(nullptr);
     message = "already stopped";
     return true;
   }
@@ -133,7 +198,13 @@ bool UwbFollowController::stop(double timeout_sec, std::string &message) {
           worker->stopConfirmed(session_id, std::move(completion));
         });
     all_stopped = all_stopped && result.success();
-    if (result.success()) attempted_[index] = false;
+    if (result.success()) {
+      attempted_[index] = false;
+      started_[index] = false;
+      // Late callbacks retain their response state and cancelled session
+      // token independently; they cannot stop a newer APP session.
+      pending_starts_[index].reset();
+    }
     if (!message.empty()) message += "; ";
     message += result.message;
   }
@@ -161,7 +232,7 @@ bool SlamManagerNode::stopUwbFollowWorkers(std::string &message) {
   std::string ignored;
   setRobotMode(0, ignored);
   if (uwb_follow_controller_->plannerAttempted()) sendUwbPlannerCommand(2);
-  return uwb_follow_controller_->stop(kUwbWorkerTimeoutSec, message);
+  return uwb_follow_controller_->stop(kUwbWorkerStopTimeoutSec, message);
 }
 
 void SlamManagerNode::uwbFollowCommandCallback(
@@ -181,14 +252,11 @@ void SlamManagerNode::uwbFollowCommandCallback(
                     "UWB follow rejected: APP localization is active");
         return;
       }
-      std::string readiness_message;
-      if (!uwb_follow_controller_->ready(readiness_message)) {
-        RCLCPP_WARN(get_logger(), "UWB follow rejected: %s",
-                    readiness_message.c_str());
-        return;
-      }
       const auto generation = beginLifecycleCommand("start_uwb_follow");
       startUwbFollow(generation);
+    } else if (mode == SlamMode::kStartingFollow) {
+      RCLCPP_INFO(get_logger(),
+                  "[UWB_FOLLOW] start already pending; retaining request");
     } else if (mode != SlamMode::kFollowing) {
       RCLCPP_WARN(get_logger(), "UWB follow start rejected in mode=%s",
                   std::string(toString(mode)).c_str());
@@ -232,37 +300,72 @@ bool SlamManagerNode::startUwbFollow(uint64_t generation) {
   relocalization_succeeded_.store(false);
   publishMode();
 
+  ++session_id_;
+  const uint64_t follow_session = session_id_;
+
   // Pure Pursuit starts paused in the follow profile. The UWB planner alone
   // decides when fresh odometry and target data allow it to resume.
-  std::string mode_message;
-  bool success = robotStateAllowsNavigation(message) &&
-                 setRobotMode(0, mode_message);
-  if (success) {
-    ++session_id_;
-    success = uwb_follow_controller_->start(
-        session_id_, token, kUwbWorkerTimeoutSec, message);
-  }
-  if (success && isLifecycleCommandActive(generation, token)) {
-    success = sendUwbPlannerCommand(0);
-    if (!success) message = "UWB planner command subscriber unavailable";
-  }
-  if (success && isLifecycleCommandActive(generation, token)) {
-    success = robotStateAllowsNavigation(message);
-  }
-  if (success && isLifecycleCommandActive(generation, token)) {
-    success = setRobotMode(1, mode_message);
-    if (!success) message = "SetMode(1) failed: " + mode_message;
-  }
-  if (success && isLifecycleCommandActive(generation, token) &&
-      state_machine_.followStarted()) {
-    publishMode();
-    RCLCPP_INFO(get_logger(), "[UWB_FOLLOW] started, session=%llu",
-                static_cast<unsigned long long>(session_id_));
-    return true;
+  while (rclcpp::ok() && !shutting_down_.load() &&
+         isLifecycleCommandActive(generation, token)) {
+    // FAST-LIO has no motion output. Bring it up even while the robot gate or
+    // the rest of the follow stack is unavailable, and retain it on retries.
+    bool success = uwb_follow_controller_->startFastLio(
+        follow_session, token, kUwbWorkerStartTimeoutSec, message);
+    std::string mode_message;
+    if (success && isLifecycleCommandActive(generation, token)) {
+      success = robotStateAllowsNavigation(message);
+    }
+    if (success && isLifecycleCommandActive(generation, token)) {
+      success = setRobotMode(0, mode_message);
+      if (!success) message = "SetMode(0) failed: " + mode_message;
+    }
+    if (success && isLifecycleCommandActive(generation, token)) {
+      success = uwb_follow_controller_->start(
+          follow_session, token, kUwbWorkerStartTimeoutSec, message);
+    }
+    if (success && isLifecycleCommandActive(generation, token) &&
+        uwb_planner_command_pub_->get_subscription_count() == 0U) {
+      success = false;
+      message = "UWB planner command subscriber unavailable";
+    }
+    if (success && isLifecycleCommandActive(generation, token)) {
+      success = robotStateAllowsNavigation(message);
+    }
+    if (success && isLifecycleCommandActive(generation, token)) {
+      success = setRobotMode(1, mode_message);
+      if (!success) message = "SetMode(1) failed: " + mode_message;
+    }
+    if (success && isLifecycleCommandActive(generation, token)) {
+      // Release the planner (and therefore PP) only after the whole stack
+      // and robot gate are ready. Missing DDS discovery is retried above.
+      success = sendUwbPlannerCommand(0);
+      if (!success) {
+        message = "UWB planner command subscriber unavailable";
+        setRobotMode(0, mode_message);
+      }
+    }
+    if (success && isLifecycleCommandActive(generation, token) &&
+        state_machine_.followStarted()) {
+      publishMode();
+      RCLCPP_INFO(get_logger(), "[UWB_FOLLOW] started, session=%llu",
+                  static_cast<unsigned long long>(follow_session));
+      return true;
+    }
+    if (!isLifecycleCommandActive(generation, token)) break;
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 3000,
+        "[UWB_FOLLOW] startup pending, retaining Workers and retrying: %s",
+        message.c_str());
+    for (int attempt = 0; attempt < 10 && rclcpp::ok() &&
+         !shutting_down_.load() &&
+         isLifecycleCommandActive(generation, token); ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
   }
 
-  // Roll back even if a newer command cancelled this startup. Never leave a
-  // partially started path controller running.
+  // Retryable startup failures keep the session and FAST-LIO. Only STOP,
+  // APP takeover, or shutdown tears down this session.
+  token->cancel();
   std::string stop_message;
   const bool stopped = stopUwbFollowWorkers(stop_message);
   if (stopped) {
@@ -272,8 +375,8 @@ bool SlamManagerNode::startUwbFollow(uint64_t generation) {
     enterError(RuntimeState::NAVIGATION_ERROR,
                "UWB follow rollback failed: " + stop_message);
   }
-  RCLCPP_ERROR(get_logger(), "UWB follow start failed: %s; cleanup: %s",
-               message.c_str(), stop_message.c_str());
+  RCLCPP_INFO(get_logger(), "[UWB_FOLLOW] startup cancelled; cleanup: %s",
+              stop_message.c_str());
   return false;
 }
 

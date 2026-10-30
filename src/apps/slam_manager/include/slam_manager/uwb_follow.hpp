@@ -18,7 +18,9 @@ class UwbFollowController {
   UwbFollowController(rclcpp::Node *node,
                       rclcpp::CallbackGroup::SharedPtr callback_group);
 
-  bool ready(std::string &message) const;
+  bool startFastLio(uint64_t session_id,
+                    const std::shared_ptr<WorkerOperationToken> &token,
+                    double timeout_sec, std::string &message);
   bool start(uint64_t session_id,
              const std::shared_ptr<WorkerOperationToken> &token,
              double timeout_sec, std::string &message);
@@ -27,6 +29,11 @@ class UwbFollowController {
   bool plannerAttempted() const { return wasAttempted(&uwb_follow_planner_worker_); }
 
  private:
+  struct PendingStart;
+  bool startThrough(uint64_t session_id,
+                    const std::shared_ptr<WorkerOperationToken> &token,
+                    double timeout_sec, std::size_t worker_count,
+                    std::string &message);
   bool wasAttempted(const WorkerClient *worker) const;
   WorkerClient fast_lio_worker_;
   WorkerClient terrain_filter_worker_;
@@ -38,6 +45,8 @@ class UwbFollowController {
   std::array<WorkerClient *, 7> start_order_;
   std::array<WorkerClient *, 7> stop_order_;
   std::array<bool, 7> attempted_{};
+  std::array<bool, 7> started_{};
+  std::array<std::shared_ptr<PendingStart>, 7> pending_starts_{};
   uint64_t session_id_{0U};
 };
 

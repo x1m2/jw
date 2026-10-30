@@ -11,14 +11,29 @@ Manager 订阅 `/ble_follow_cmd`（`std_msgs/msg/Int8`）：`0` 首次启动或
 `/ble_follow_cmd` 接入 Manager，旧值 `1`（停止）、`2`（返回信令处）、
 `3`（暂停）与此协议不兼容，发布方需要先转换。
 
-开始时，Manager 单独启动 FAST-LIO2、terrain_filter、obstacle_stop、
+接受空闲态的开始指令后，Manager 保留本次启动请求，先启动 FAST-LIO2，
+再检查底盘状态并启动其他跟随 Worker。Worker 服务尚未发现或明确返回
+启动失败时，每隔 0.5 秒重试未成功的步骤，不要求重新发送 `0`。
+每个 Worker 在本次会话中同时只保留一个未完成的 START 请求；30 秒
+等待超时后记录等待状态并继续跟踪原请求，不重复发送，避免请求堆积。
+已确认启动的 Worker 不重复启动，超时后的迟到成功响应也不会因为该次
+超时而停止 FAST-LIO2。等待期间内部模式为 `starting_follow`；重复 `0`
+沿用已有启动请求。FAST-LIO2 本身启动失败时也会继续尝试。
+
+Manager 单独启动 FAST-LIO2、terrain_filter、obstacle_stop、
 costmap_2d、path_smoother、pure_pursuit 和 uwb_follow_planner Worker。
 不会启动 PGO、地图重定位或 global_path_planner。跟随 Worker 的规划和代价
 地图运行在 `odom`；Pure Pursuit 启动时保持暂停。Manager 转发 `0/1` 给
 UWB 规划器，由规划器按原有逻辑检查 UWB 目标和里程计、调用 PP 暂停服务；
-Manager 不直接调用 PP 暂停服务。暂停期间保留全部 Worker 和 FAST-LIO2；
+Manager 不直接调用 PP 暂停服务。启动期间 PP 保持暂停，只有整套 Worker、
+规划器指令订阅和底盘检查均就绪、设置运动模式成功后，才发送开始跟随指令。
+规划器订阅未建立或其他跟随模块启动失败，不再回滚已启动的 FAST-LIO2，
+而是保持等待。暂停期间保留全部 Worker 和 FAST-LIO2；
 停止时先封锁底盘运动再逆序停止 Worker。正常导航与 UWB 跟随共用控制
-输出，因此两种运行模式互斥。
+输出，因此两种运行模式互斥。停止指令 `2` 或 APP 的加载地图、开始定位、
+开始建图等替换型生命周期命令会取消待启动请求并清理 UWB Worker；
+清理后不自动恢复旧的跟随请求。APP 定位和导航期间的 UWB 开始指令仍按
+原规则拒绝，不抢占巡检任务。
 若停止失败进入错误态，可再次发送 `2` 重试未确认停止的 UWB Worker；
 确认全部停止后回到 IDLE。其他流程产生的错误不会被 BLE `2` 清除。
 Manager 处于 IDLE 但仍保留 APP 定位 Worker 时，UWB 开始指令会被拒绝，
@@ -30,8 +45,9 @@ Manager 处于 IDLE 但仍保留 APP 定位 Worker 时，UWB 开始指令会被�
 `/ble_follow_cmd`。正式 OTA 必须把该节点、接口库和参数文件一起更新，并
 停用旧的 `uwb-follow.service` 整套自启动流程，只保留 UWB 串口接收程序常驻。
 FAST-LIO Worker 的雷达配置必须与实际硬件一致（MID360 跟随需 MID360
-配置）；不能用 Airy96 建图参数代替。UWB Worker 的单次启停等待上限
-固定为 5 秒。
+配置）；不能用 Airy96 建图参数代替。全部 UWB Worker 的单次启动等待上限
+为 30 秒，超时后保留跟随会话并等待原请求响应；单次停止等待上限为 5 秒，
+停止仍要求确认算法已停止。
 
 ## 地图流程
 
