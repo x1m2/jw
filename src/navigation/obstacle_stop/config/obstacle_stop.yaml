@@ -3,6 +3,7 @@
     # 使用terrain_filter输出的base_link障碍物点云。
     lidar_type: 2
     lidar_topic: "/obstacle_cloud"
+    pointcloud2_apply_height_filter: true # PointCloud2按min_height/max_height过滤高度
     planned_cmd_topic: "/cmd_vel_planned"
     safe_cmd_topic: "/cmd_vel"
     base_frame: "base_link"
@@ -16,16 +17,16 @@
     range_max: 3.0
 
     # 内部栅格只用于复用原停障区域占比语义，不发布为导航costmap。
-    grid_resolution: 0.05
+    grid_resolution: 0.01
     grid_width: 80
     grid_height: 50
-    inflation_radius: 0.1
+    inflation_radius: 0.01
 
-    safety_margin: 0.05
+    safety_margin: 0.0
     # 近矩形：从车体前缘开始，检测到障碍后强制停车。
-    hard_stop_distance: 0.2
+    hard_stop_distance: 0.05
     # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
-    slowdown_distance: 0.25
+    slowdown_distance: 0.05
     obstacle_ratio_threshold: 0.02
 
     linear_velocity_factor: 0.40
