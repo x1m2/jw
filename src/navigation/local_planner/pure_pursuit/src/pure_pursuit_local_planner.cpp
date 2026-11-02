@@ -1362,8 +1362,7 @@ bool PurePursuitLocalPlanner::computeLookaheadPoint(
         ? std::min(policy.linear_velocity, config_.max_linear_velocity)
         : config_.max_linear_velocity;
     const auto now = std::chrono::steady_clock::now();
-    if (costmap_motion_blocked_ || cruise_velocity <= 1e-6 ||
-        current_velocity < 0.8 * cruise_velocity) {
+    if (costmap_motion_blocked_ || cruise_velocity <= 1e-6) {
       costmap_lookahead_stable_since_ = {};
     } else {
       if (costmap_lookahead_stable_since_ ==
