@@ -10,6 +10,7 @@
     livox_topic: "/obstacle_cloud"
     lidar_frame: "base_link"
     pointcloud2_in_base_frame: true
+    pointcloud2_apply_height_filter: true # PointCloud2按min_height/max_height过滤高度
 
     # 在 base_link 坐标系中裁剪点云并投影为内部二维射线
     min_height: 0.2

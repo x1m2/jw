@@ -17,8 +17,6 @@ int main(int argc, char** argv) {
           if (context.algorithm_profile == "uwb_follow") {
             options.append_parameter_override("global_frame", "odom");
             options.append_parameter_override("pointcloud2_in_base_frame", true);
-            options.append_parameter_override("pointcloud2_apply_height_filter",
-                                              false);
             options.append_parameter_override("clear_unobserved_rays", false);
           }
           auto node = std::make_shared<rclcpp::Node>("costmap_2d", options);
