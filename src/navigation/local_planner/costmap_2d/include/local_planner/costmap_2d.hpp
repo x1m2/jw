@@ -98,6 +98,8 @@ class CostMap2D {
   int lidar_type_;  // 1: Livox CustomMsg，其他: PointCloud2
   // PointCloud2 已经在 robot_base_frame 下时跳过固定雷达外参。
   bool pointcloud2_in_base_frame_;
+  // 语义障碍点云已完成地面剔除时，可跳过重复的绝对Z高度裁剪。
+  bool pointcloud2_apply_height_filter_;
   // 点云投影后的无穷距离仅表示该角度本帧没有点，不代表传感器确认了
   // 一条完整的自由射线。语义障碍点云必须关闭这种清除方式。
   bool clear_unobserved_rays_;

@@ -1,0 +1,52 @@
+/**:
+  ros__parameters:
+    # 使用terrain_filter输出的base_link障碍物点云。
+    lidar_type: 2
+    lidar_topic: "/obstacle_cloud"
+    pointcloud2_apply_height_filter: true # PointCloud2按min_height/max_height过滤高度
+    planned_cmd_topic: "/cmd_vel_planned"
+    safe_cmd_topic: "/cmd_vel"
+    base_frame: "base_link"
+
+    # 在base_link中裁剪MID360点云，并使用XY坐标直接构建障碍栅格。
+    min_height: 0.2
+    max_height: 1.0
+    angle_min: -3.1415926
+    angle_max: 3.1415926
+    range_min: 0.4
+    range_max: 3.0
+
+    # 内部栅格只用于复用原停障区域占比语义，不发布为导航costmap。
+    grid_resolution: 0.01
+    grid_width: 80
+    grid_height: 50
+    inflation_radius: 0.01
+
+    safety_margin: 0.0
+    # 近矩形：从车体前缘开始，检测到障碍后强制停车。
+    hard_stop_distance: 0.05
+    # 远矩形：紧接硬停区，检测到障碍后按下方系数减速。
+    slowdown_distance: 0.05
+    obstacle_ratio_threshold: 0.02
+
+    linear_velocity_factor: 0.40
+    angular_velocity_factor: 1.0
+    # 障碍消失后延迟解除，避免点云波动导致速度状态频繁切换。
+    hard_stop_clear_delay: 0.30
+    slowdown_clear_delay: 0.50
+
+    # 将检测矩形分成左/中/右三区。单侧障碍且规划速度明确向相反侧运动时，
+    # 只释放该侧停障；中央障碍、两侧夹障和转向不足仍然停车。
+    directional_release_enabled: false
+    directional_center_half_width: 0.20
+    # 检测区域中心横向速度 |vy + wz*x| 至少达到该值才认为正在脱离（m/s）。
+    directional_escape_velocity_threshold: 0.05
+    # 非全向底盘不使用中央横移脱困；中央近障碍始终由硬停保护。
+    center_lateral_escape_enabled: false
+    center_escape_max_forward_velocity: 0.02
+    center_escape_max_angular_velocity: 0.10
+
+    lidar_timeout_sec: 0.30
+    command_timeout_sec: 0.30
+    control_frequency: 30.0
+    publish_visualization: true

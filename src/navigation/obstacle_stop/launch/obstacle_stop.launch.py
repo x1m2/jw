@@ -2,72 +2,45 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
-MODEL_FILES = {
-    'p2.5_mid360s': (
-        'obstacle_stop_p2.5_mid360s.yaml',
-        'p2.5_mid360s.yaml',
-    ),
-    'p3_airy96': (
-        'obstacle_stop_p3_airy96.yaml',
-        'p3_airy96.yaml',
-    ),
-}
-
-
-def find_robot_param(package_share, file_name):
+def find_robot_param(package_share):
     current = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current, 'src', 'config', file_name)
+        candidate = os.path.join(current, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
         parent = os.path.dirname(current)
         if parent == current:
-            raise FileNotFoundError(
-                f'Cannot find src/config/{file_name}'
-            )
+            raise FileNotFoundError('Cannot find src/config/robot_param.yaml')
         current = parent
-
-
-def launch_setup(context, package_share):
-    robot_model = LaunchConfiguration('robot_model').perform(context)
-    if robot_model not in MODEL_FILES:
-        supported = ', '.join(MODEL_FILES)
-        raise RuntimeError(
-            f'Unsupported robot_model "{robot_model}"; choose: {supported}'
-        )
-
-    obstacle_file, robot_file = MODEL_FILES[robot_model]
-    config_file = os.path.join(package_share, 'config', obstacle_file)
-    robot_param_file = find_robot_param(package_share, robot_file)
-
-    overrides = {
-        'runtime_profile': LaunchConfiguration(
-            'runtime_profile'
-        ).perform(context),
-    }
-
-    return [Node(
-        package='obstacle_stop',
-        executable='obstacle_stop_node',
-        output='screen',
-        parameters=[config_file, robot_param_file, overrides],
-    )]
 
 
 def generate_launch_description():
     package_share = get_package_share_directory('obstacle_stop')
+    config_file = LaunchConfiguration('config_file')
+    robot_param_file = LaunchConfiguration('robot_param_file')
+    runtime_profile = LaunchConfiguration('runtime_profile')
+    lidar_type = LaunchConfiguration('lidar_type')
+    lidar_topic = LaunchConfiguration('lidar_topic')
+    pointcloud2_apply_height_filter = LaunchConfiguration(
+        'pointcloud2_apply_height_filter'
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'robot_model',
-            default_value='p2.5_mid360s',
-            description='Robot model: p2.5_mid360s or p3_airy96',
+            'config_file',
+            default_value=os.path.join(
+                package_share, 'config', 'obstacle_stop.yaml'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'robot_param_file',
+            default_value=find_robot_param(package_share),
         ),
         DeclareLaunchArgument(
             'runtime_profile',
@@ -75,18 +48,35 @@ def generate_launch_description():
             description='test autostarts; platform waits for slam_manager',
         ),
         DeclareLaunchArgument(
-            'use_rviz',
-            default_value='true',
-            description='Start RViz2 with the obstacle stop visualization',
+            'lidar_type',
+            default_value='2',
+            description='1 uses Livox CustomMsg; other values use PointCloud2',
         ),
-        OpaqueFunction(function=launch_setup, args=[package_share]),
+        DeclareLaunchArgument(
+            'lidar_topic',
+            default_value='/obstacle_cloud',
+            description='Input Livox or semantic obstacle cloud topic',
+        ),
+        DeclareLaunchArgument(
+            'pointcloud2_apply_height_filter',
+            default_value='true',
+            description='Apply min/max height clipping to PointCloud2 input',
+        ),
         Node(
-            package='rviz2',
-            executable='rviz2',
-            name='obstacle_stop_rviz',
+            package='obstacle_stop',
+            executable='obstacle_stop_node',
             output='screen',
-            arguments=['-d', os.path.join(
-                package_share, 'config', 'obstacle_stop.rviz')],
-            condition=IfCondition(LaunchConfiguration('use_rviz')),
+            parameters=[
+                config_file,
+                robot_param_file,
+                {
+                    'runtime_profile': runtime_profile,
+                    'lidar_type': ParameterValue(lidar_type, value_type=int),
+                    'lidar_topic': lidar_topic,
+                    'pointcloud2_apply_height_filter': ParameterValue(
+                        pointcloud2_apply_height_filter, value_type=bool
+                    ),
+                },
+            ],
         ),
     ])

@@ -12,15 +12,14 @@ import os
 def find_robot_param(package_share):
     current_path = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(
-            current_path, 'src', 'config', 'p2.5_mid360s.yaml')
+        candidate = os.path.join(current_path, 'src', 'config', 'robot_param.yaml')
         if os.path.isfile(candidate):
             return candidate
 
         parent_path = os.path.dirname(current_path)
         if parent_path == current_path:
             raise FileNotFoundError(
-                'Cannot find src/config/p2.5_mid360s.yaml from package share: '
+                'Cannot find src/config/robot_param.yaml from package share: '
                 + package_share
             )
         current_path = parent_path
@@ -37,6 +36,9 @@ def generate_launch_description():
     lidar_frame = LaunchConfiguration('lidar_frame')
     pointcloud2_in_base_frame = LaunchConfiguration(
         'pointcloud2_in_base_frame'
+    )
+    pointcloud2_apply_height_filter = LaunchConfiguration(
+        'pointcloud2_apply_height_filter'
     )
     clear_unobserved_rays = LaunchConfiguration('clear_unobserved_rays')
 
@@ -91,6 +93,11 @@ def generate_launch_description():
             description='PointCloud2 input is already expressed in base_link'
         ),
         DeclareLaunchArgument(
+            'pointcloud2_apply_height_filter',
+            default_value='true',
+            description='Apply min/max height clipping to PointCloud2 input'
+        ),
+        DeclareLaunchArgument(
             'clear_unobserved_rays',
             default_value='false',
             description='Treat empty projected angle bins as confirmed free rays'
@@ -111,6 +118,9 @@ def generate_launch_description():
                     'lidar_frame': lidar_frame,
                     'pointcloud2_in_base_frame': ParameterValue(
                         pointcloud2_in_base_frame, value_type=bool
+                    ),
+                    'pointcloud2_apply_height_filter': ParameterValue(
+                        pointcloud2_apply_height_filter, value_type=bool
                     ),
                     'clear_unobserved_rays': ParameterValue(
                         clear_unobserved_rays, value_type=bool

@@ -41,7 +41,7 @@ contains the P2 robot calibration.
 ros2 launch fastlio_localization run_launch.py \
   config_file:=reloc_airy96.yaml \
   map_path:=/path/to/map \
-  robot_param_file:=/path/to/p3_airy96.yaml
+  robot_param_file:=/path/to/airy_robot_param.yaml
 ros2 bag play /path/to/airy96_fastlio_20250604_222402 --rate 0.5
 ```
 

@@ -18,6 +18,8 @@ int main(int argc, char **argv) {
           }
           if (context.algorithm_profile == "uwb_follow") {
             options.append_parameter_override("global_frame", "odom");
+            options.append_parameter_override("pointcloud2_apply_height_filter",
+                                              false);
           }
           auto node = std::make_shared<rclcpp::Node>("obstacle_stop", options);
           auto obstacle_stop =

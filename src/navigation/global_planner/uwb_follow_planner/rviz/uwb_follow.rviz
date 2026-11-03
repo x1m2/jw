@@ -251,11 +251,11 @@ Visualization Manager:
           Namespaces: {}
           Queue Size: 10
           Value: true
-        - Class: rviz_default_plugins/MarkerArray
+        - Class: rviz_default_plugins/Marker
           Enabled: true
           Marker Topic:
             Depth: 5
-            Durability Policy: Transient Local
+            Durability Policy: Volatile
             History Policy: Keep Last
             Reliability Policy: Reliable
             Value: /obstacle_stop/detection_marker
