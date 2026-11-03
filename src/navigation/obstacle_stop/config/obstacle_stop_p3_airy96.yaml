@@ -60,3 +60,19 @@
     command_timeout_sec: 0.30
     control_frequency: 30.0
     publish_visualization: true
+
+    # Woodox设备姿态；持续倾斜只屏蔽减速，停止区和其他保护仍然生效。
+    # 未收到有效IMU或超时则恢复正常减速。此功能也会识别坡道倾斜。
+    imu_stairs:
+      enabled: true
+      topic: /imu/data
+      frame: woodox_imu
+      # R_base_imu，旋转IMU坐标轴到车体坐标轴；roll/pitch/yaw，单位rad。
+      imu_to_base_rpy: [0.0, 0.0, 0.0]
+      pitch_baseline_deg: 0.0
+      enter_angle_deg: 14.0
+      exit_angle_deg: 10.0
+      filter_time_constant_sec: 0.15
+      enter_duration_sec: 0.15
+      exit_duration_sec: 0.40
+      timeout_sec: 0.30

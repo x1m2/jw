@@ -211,3 +211,28 @@ RViz默认开启完整base_link点云（前黄色、后青色），裁剪彩色�
 
 `src/region_profile_loader.cpp` 专门解析地图区域的 YAML 配置覆盖；拓扑多边形加载、定位选区和配置切换保留在主文件。
 检测统计与控制决策共用原有状态和锁；可视化定时器在配置锁内复制快照，再在锁外构造和发布消息。调试点云仍由雷达回调在配置锁内发布。
+
+## IMU倾斜期间屏蔽减速
+
+stop直接订阅`woodox_imu_bridge`发布的`/imu/data`，进程内调用`src/depd/imu_stair_detector`公共库，不启动额外检测节点，也不依赖`imu_tools`。bridge应使用其默认参数文件（`orientation_format: wxyz`），提供有效设备姿态；裸运行bridge时其代码默认禁用姿态。
+
+两个机型配置均设置`imu_stairs.enabled: true`。使用有效车体pitch与固定平地基准的绝对偏差，默认持续超过/等于14°达0.15秒进入，持续低于/等于10°达0.40秒退出；滤波时间常数为0.15秒。默认阈值和时间需要按实际姿态噪声、上下楼动作验证。坡道也可能触发；该算法不能提前识别第一阶。
+
+进入倾斜状态后，最终速度决策忽略减速区触发及已有`slowdown_clear_delay`保持；占用统计和可视化仍保留。停止区、急停、姿态封锁、雷达异常及指令超时继续按原逻辑生效。退出后正常减速判断立即恢复，区域覆盖不会重置IMU检测器。
+
+IMU未到达、姿态不可用（`orientation_covariance[0] < 0`）、非法四元数、坐标系不符、消息过旧/超前、时间倒退或超过0.30秒未更新时，取消屏蔽并恢复正常减速。超时不会单独引起停车。`/obstacle_stop/stairs_active`（Bool，Transient Local）表示当前有效倾斜减速屏蔽状态，不表示当前一定在移动；进入、退出或失效解除屏蔽时打印日志。
+
+参数集中在`imu_stairs`下：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | true | 是否启用倾斜减速屏蔽 |
+| `topic` / `frame` | `/imu/data` / `woodox_imu` | 输入及严格匹配的IMU坐标系 |
+| `imu_to_base_rpy` | `[0, 0, 0]` | R_base_imu的roll/pitch/yaw，rad；将IMU轴旋转到车体轴 |
+| `pitch_baseline_deg` | 0 | 固定平地车体pitch基准，度 |
+| `enter_angle_deg` / `exit_angle_deg` | 14 / 10 | 相对基准的进入/退出角度，度 |
+| `filter_time_constant_sec` | 0.15 | 低通时间常数，0为关闭滤波 |
+| `enter_duration_sec` / `exit_duration_sec` | 0.15 / 0.40 | 持续确认时间 |
+| `timeout_sec` | 0.30 | 消息新鲜度及连续采样超时 |
+
+`imu_to_base_rpy`默认假定IMU轴与车体轴对齐，需按实际安装填写，不能拿雷达外参替代。设备四元数参考系应保持重力对齐；平地、抬头、低头时须核对转换后的pitch。角度不自动以启动姿态归零，避免在楼梯上启动时把倾斜当作平地。

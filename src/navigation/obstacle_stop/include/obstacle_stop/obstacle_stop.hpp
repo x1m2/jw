@@ -12,6 +12,8 @@
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include "imu_stair_detector/imu_stair_detector.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <string>
@@ -127,6 +129,8 @@ class ObstacleStop {
   // 主流程：配置、地图区域切换与停障控制（obstacle_stop.cpp）。
   void loadParameters();
   bool loadRegionProfiles(std::string &message);
+  bool initializeImuStairDetection(std::string &message);
+  void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr message);
   void localizationPoseCallback(
       const geometry_msgs::msg::PoseStamped::ConstSharedPtr message);
   const RegionProfile *findRegion(double x, double y) const;
@@ -185,6 +189,14 @@ class ObstacleStop {
   void publishDetectionMarkers(const VisualizationSnapshot &snapshot);
   void publishOccupiedCells(const VisualizationSnapshot &snapshot);
   void publishOccupiedColumns(const VisualizationSnapshot &snapshot);
+
+  // IMU detector is independent of map-region overrides; guarded by mutex_.
+  bool imu_stairs_enabled_{true};
+  std::string imu_frame_;
+  imu_stair_detector::ImuStairDetector imu_stair_detector_;
+  bool last_stairs_active_{false};
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stairs_active_pub_;
 
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr lidar_sub_;

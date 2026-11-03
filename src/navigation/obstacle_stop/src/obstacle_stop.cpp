@@ -51,6 +51,7 @@ ObstacleStop::ObstacleStop(rclcpp::Node::SharedPtr node)
 
 bool ObstacleStop::initialize(std::string &message) {
   loadParameters();
+  if (!initializeImuStairDetection(message)) return false;
   default_config_ = config_;
   if (!loadRegionProfiles(message)) return false;
   initializeGridLookup();
@@ -257,6 +258,60 @@ void ObstacleStop::loadParameters() {
         static_cast<int64_t>(zone.obstacle_cell_threshold));
     zone.obstacle_cell_threshold = static_cast<std::size_t>(threshold);
   }
+}
+
+bool ObstacleStop::initializeImuStairDetection(std::string &message) {
+  imu_stairs_enabled_ = node_->declare_parameter<bool>("imu_stairs.enabled", true);
+  const auto topic = node_->declare_parameter<std::string>("imu_stairs.topic", "/imu/data");
+  imu_frame_ = node_->declare_parameter<std::string>("imu_stairs.frame", "woodox_imu");
+  const auto rotation = node_->declare_parameter<std::vector<double>>(
+      "imu_stairs.imu_to_base_rpy", std::vector<double>{0.0, 0.0, 0.0});
+  imu_stair_detector::Config config;
+  config.pitch_baseline_deg = node_->declare_parameter<double>("imu_stairs.pitch_baseline_deg", 0.0);
+  config.enter_angle_deg = node_->declare_parameter<double>("imu_stairs.enter_angle_deg", 14.0);
+  config.exit_angle_deg = node_->declare_parameter<double>("imu_stairs.exit_angle_deg", 10.0);
+  config.filter_time_constant_sec = node_->declare_parameter<double>("imu_stairs.filter_time_constant_sec", 0.15);
+  config.enter_duration_sec = node_->declare_parameter<double>("imu_stairs.enter_duration_sec", 0.15);
+  config.exit_duration_sec = node_->declare_parameter<double>("imu_stairs.exit_duration_sec", 0.40);
+  config.timeout_sec = node_->declare_parameter<double>("imu_stairs.timeout_sec", 0.30);
+  if (!imu_stairs_enabled_) return true;
+  if (rotation.size() != 3U || !std::all_of(rotation.begin(), rotation.end(),
+      [](double value) { return std::isfinite(value); }) || topic.empty() || imu_frame_.empty()) {
+    message = "invalid imu_stairs topic, frame or imu_to_base_rpy (expected three radians)";
+    return false;
+  }
+  config.imu_to_base = Eigen::AngleAxisd(rotation[2], Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(rotation[1], Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(rotation[0], Eigen::Vector3d::UnitX());
+  if (!imu_stair_detector_.configure(config)) {
+    message = "invalid imu_stairs thresholds, durations or timeout";
+    return false;
+  }
+  stairs_active_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
+      "/obstacle_stop/stairs_active", rclcpp::QoS(1).transient_local());
+  // Only the latest orientation matters; do not accumulate an IMU backlog.
+  imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
+      topic, rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&ObstacleStop::imuCallback, this, std::placeholders::_1));
+  return true;
+}
+
+void ObstacleStop::imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr message) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const double stamp = static_cast<double>(message->header.stamp.sec) +
+      static_cast<double>(message->header.stamp.nanosec) * 1e-9;
+  const double now = node_->now().seconds();
+  if (message->header.frame_id != imu_frame_ ||
+      !std::isfinite(message->orientation_covariance[0]) ||
+      message->orientation_covariance[0] < 0.0 ||
+      message->header.stamp.nanosec >= 1000000000U || stamp <= 0.0 || stamp > now) {
+    imu_stair_detector_.reset();
+    return;
+  }
+  const auto &q = message->orientation;
+  imu_stair_detector_.update(Eigen::Quaterniond(q.w, q.x, q.y, q.z), stamp);
+  // Reject stale samples immediately rather than briefly keeping a bypass alive.
+  (void)imu_stair_detector_.status(now);
 }
 
 bool ObstacleStop::loadRegionProfiles(std::string &message) {
@@ -506,6 +561,7 @@ void ObstacleStop::controlCallback() {
   bool posture_stop = false;
   bool obstacle_stop_enabled = true;
   bool directional_escape_release = false;
+  imu_stair_detector::Status stairs;
   rclcpp::Time lidar_time(0, 0, node_->get_clock()->get_clock_type());
   rclcpp::Time rear_lidar_time(0, 0, node_->get_clock()->get_clock_type());
   rclcpp::Time command_time(0, 0, node_->get_clock()->get_clock_type());
@@ -526,6 +582,7 @@ void ObstacleStop::controlCallback() {
     lidar_time = last_lidar_time_;
     rear_lidar_time = rear_last_lidar_time_;
     command_time = last_command_time_;
+    if (imu_stairs_enabled_) stairs = imu_stair_detector_.status(node_->now().seconds());
   }
   const auto now = node_->now();
   const double lidar_age = has_lidar ? (now - lidar_time).seconds()
@@ -547,6 +604,18 @@ void ObstacleStop::controlCallback() {
       (!sourceRequired(1U) || lidar_valid) && (!sourceRequired(2U) || rear_lidar_valid);
   const bool command_fresh = has_command && command_age >= 0.0 &&
                              command_age <= config_.command_timeout_sec;
+
+  const bool suppress_slowdown = stairs.valid && stairs.on_stairs;
+  if (stairs_active_pub_) {
+    std_msgs::msg::Bool active;
+    active.data = suppress_slowdown;
+    stairs_active_pub_->publish(active);
+  }
+  if (suppress_slowdown != last_stairs_active_) {
+    RCLCPP_INFO(node_->get_logger(), "IMU stairs slowdown suppression=%s, valid=%s pitch=%.2f deg",
+        suppress_slowdown ? "on" : "off", stairs.valid ? "true" : "false", stairs.pitch_deg);
+    last_stairs_active_ = suppress_slowdown;
+  }
 
   // safe_command默认是零速度，因此所有异常分支都会失效停车。
   geometry_msgs::msg::Twist safe_command;
@@ -584,7 +653,7 @@ void ObstacleStop::controlCallback() {
   } else if (hard_stop && directional_escape_release) {
     safe_command = planned;
     reason = "directional escape away from side obstacle";
-  } else if (slowdown) {
+  } else if (slowdown && !suppress_slowdown) {
     safe_command = planned;
     // 远矩形有障碍时降低速度，近矩形仍具有更高优先级。
     safe_command.linear.x *= config_.linear_velocity_factor;
