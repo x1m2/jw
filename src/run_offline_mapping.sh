@@ -100,6 +100,7 @@ fi
 case "${LIDAR_TYPE}" in
     airy)
         FASTLIO_CONFIG="mapping_airy96.yaml"
+        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/p3_airy96.yaml"
         PGO_CONFIG="pgo_airy96.yaml"
         # Packet 解码为点云；Airy 的 IMU 已作为独立话题录入 bag，
         # rslidar_sdk 从 packet 回放时不会重新发布这一路 IMU。
@@ -125,6 +126,7 @@ PY
         ;;
     mid360)
         FASTLIO_CONFIG="mapping_mid360s.yaml"
+        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/p2.5_mid360s.yaml"
         PGO_CONFIG="pgo_mid360s.yaml"
         BAG_TOPICS=(/livox/lidar /livox/imu)
         ;;
@@ -397,7 +399,9 @@ fi
 
 start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py \
-    "config_file:=${FASTLIO_CONFIG}" fast_lio_use_rviz:=false use_sim_time:=true
+    "config_file:=${FASTLIO_CONFIG}" \
+    "robot_param_file:=${ROBOT_PARAM_FILE}" \
+    fast_lio_use_rviz:=false use_sim_time:=true
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 2 \
     ros2 launch pgo_sc run.launch.py "pgo_use_rviz:=${PGO_USE_RVIZ}" use_sim_time:=true \

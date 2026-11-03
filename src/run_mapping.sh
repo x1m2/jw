@@ -57,11 +57,13 @@ readonly AIRY_FASTDDS_PROFILE="${AIRY_SDK_DIR}/config/fastshm.xml"
 case "${LIDAR_TYPE}" in
     mid360)
         readonly FASTLIO_CONFIG="mapping_mid360s.yaml"
+        readonly ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/p2.5_mid360s.yaml"
         readonly PGO_CONFIG="pgo_mid360s.yaml"
         readonly LIDAR_DRIVER_NAME="Livox ROS Driver2"
         ;;
     airy)
         readonly FASTLIO_CONFIG="mapping_airy96.yaml"
+        readonly ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/p3_airy96.yaml"
         readonly PGO_CONFIG="pgo_airy96.yaml"
         readonly LIDAR_DRIVER_NAME="Airy96 ROS Driver"
         ;;
@@ -72,7 +74,6 @@ case "${LIDAR_TYPE}" in
         ;;
 esac
 
-readonly SLAM_DATA_ROOT="/robotfs/data/slam_data"
 readonly MAP_ID_INPUT="${MAP_ID:-0}"
 if ! [[ "${MAP_ID_INPUT}" =~ ^[0-9]+$ ]] ||
    [ "${#MAP_ID_INPUT}" -gt 10 ] ||
@@ -81,9 +82,9 @@ if ! [[ "${MAP_ID_INPUT}" =~ ^[0-9]+$ ]] ||
     exit 1
 fi
 readonly MAP_ID="$((10#${MAP_ID_INPUT}))"
-# GUI 会显式传入 DATA_DIR；直接执行脚本时默认保存到 map_0。
-readonly DATA_DIR="${DATA_DIR:-${SLAM_DATA_ROOT}/map_${MAP_ID}}"
-readonly BBS_BUILD_DIR="${WORKSPACE_DIR}/env/3d_bbs/test/build"
+# GUI 会显式传入 DATA_DIR；直接执行脚本时默认保存到该目录。
+readonly DATA_DIR="${DATA_DIR:-/home/jw/slam_data}"
+readonly BBS_BUILD_DIR="/home/jw/3d_bbs/test/build"
 readonly MAP_DIR="${DATA_DIR}/map"
 
 if [ ! -d "${WORKSPACE_DIR}/src" ]; then
@@ -161,8 +162,8 @@ CLEANING=0
 
 SAVE_POPUP_PID=""
 SLAM_MANAGER_DIR="$(dirname "${DATA_DIR}")"
-SAVE_POPUP_SIGNAL="${SLAM_MANAGER_DIR}/run_slam_save_popup_done_$$"
-SAVE_POPUP_STATUS="${SLAM_MANAGER_DIR}/run_slam_save_popup_status_$$"
+SAVE_POPUP_SIGNAL="${SLAM_MANAGER_DIR}/run_mapping_save_popup_done_$$"
+SAVE_POPUP_STATUS="${SLAM_MANAGER_DIR}/run_mapping_save_popup_status_$$"
 
 show_save_popup_with_done_button() {
     rm -f "${SAVE_POPUP_SIGNAL}" "${SAVE_POPUP_STATUS}"
@@ -435,7 +436,7 @@ fi
 
 start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false \
-    config_file:="${FASTLIO_CONFIG}"
+    config_file:="${FASTLIO_CONFIG}" robot_param_file:="${ROBOT_PARAM_FILE}"
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
     ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}" \

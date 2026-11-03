@@ -137,7 +137,7 @@ bool PurePursuitController::computeCommand(
     if (correcting_) {
       cmd_vel.linear.x = direction * target_velocity;
       cmd_vel.angular.z = angular_gain * yaw_error;
-      const double min_walk_wz = 0.08;
+      const double min_walk_wz = 0.1;
       if (std::abs(cmd_vel.angular.z) < min_walk_wz) {
         cmd_vel.angular.z = std::copysign(min_walk_wz, yaw_error);
       }

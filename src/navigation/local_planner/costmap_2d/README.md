@@ -73,8 +73,8 @@ rostopic echo /costmap
 - `lidar_frame`: 雷达坐标系 (默认: "livox_frame")
 
 ### 雷达外参与投影参数
-- `lidar_to_base_T`: `robot_param.yaml` 中的雷达位置 `[x, y, z]`，单位 m
-- `lidar_to_base_R`: `robot_param.yaml` 中的 `[roll, pitch, yaw]`，单位 rad
+- `lidar_to_base_T`: 机器人参数文件中的雷达位置 `[x, y, z]`，单位 m
+- `lidar_to_base_R`: 机器人参数文件中的 `[roll, pitch, yaw]`，单位 rad
 - `min_height/max_height`: 在 `base_link` 中保留的点云高度
 - `angle_min/angle_max/angle_increment`: 内部二维射线角度范围和分辨率
 - `range_min/range_max`: 点云有效距离范围
@@ -123,3 +123,6 @@ rostopic echo /costmap
 - [ ] 速度控制器节点
 - [ ] 动态窗口算法 (DWA)
 - [ ] 轨迹跟踪
+
+所有Livox CustomMsg和PointCloud2输入均在车体坐标系中按`min_height/max_height`过滤；
+UWB跟随模式也执行此规则。输入已在车体系时跳过外参变换，但仍进行高度过滤。
