@@ -121,6 +121,12 @@ class GlobalPathPlanner : public rclcpp::Node {
       pose_topic_;  // 实时定位位姿话题名，类型 geometry_msgs/msg/PoseStamped
   double connection_distance_threshold_;
   double interpolation_spacing_m_;
+  double path_z_offset_;
+  bool path_interpolation_enable_;
+  double path_interpolation_z_threshold_;
+  int path_interpolation_insert_count_;
+  double path_interpolation_start_offset_;
+  double path_interpolation_end_offset_;
 
   bool enable_direct_connection_;
   double direct_connection_threshold_;
@@ -202,6 +208,10 @@ class GlobalPathPlanner : public rclcpp::Node {
   // 路径规划核心方法
   nav_msgs::msg::Path planGlobalPath();
   // 路径构建方法
+  std::vector<double> interpolationRatios(
+      const geometry_msgs::msg::Point &start,
+      const geometry_msgs::msg::Point &end, std::size_t intervals,
+      bool insert_waypoints = true);
   std::vector<geometry_msgs::msg::Point> interpolatePath(
       const geometry_msgs::msg::Point &start,
       const geometry_msgs::msg::Point &end);

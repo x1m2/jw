@@ -8,6 +8,12 @@
     # 路径规划参数
     connection_distance_threshold: 5.0   #临时点连接第二层拓扑邻居的最大距离，单位：米
     interpolation_spacing_m: 0.2  # 全局路径相邻插值点的目标间距（米）
+    path_z_offset: 0.2  # 路径生成后每个点统一增加的 z 偏移（米）；0 不偏移，负值降低。
+    path_interpolation.enable: true
+    path_interpolation.z_threshold: 0.5  # 原始边两端高度差严格大于此值时插点（米）。
+    path_interpolation.insert_count: 2  # 2：直线边生成平台—坡段—平台；其他数量沿用均匀插点。
+    path_interpolation.start_offset: 1.0  # 起点到第一个途经点的水平距离（米），该点保持起点高度。
+    path_interpolation.end_offset: 1.0  # 终点到第二个途经点的水平距离（米），该点保持终点高度。
     # 仅到点任务及 clicked_point 启用；拓扑巡检仍按指定边执行。
     deviation_replan_enabled: true
     deviation_replan_distance: 0.5       # 到实际跟踪路径线段的 XY 距离（米）

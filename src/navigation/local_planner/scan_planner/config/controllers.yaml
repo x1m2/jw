@@ -1,0 +1,22 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    controller_mode: closed_loop
+    closed_loop.time_forward: 0.8
+    closed_loop.heading_error_threshold: 0.8
+    closed_loop.kp_pos: 0.8
+    closed_loop.kp_yaw: 1.5
+    closed_loop.cross_track_gain: 0.6
+    closed_loop.cross_track_max_wz: 0.15
+    closed_loop.max_vx: 0.75
+    closed_loop.max_vy: 0.0
+    closed_loop.max_vyaw: 1.0
+    closed_loop.finish_dist: 0.1
+    closed_loop.terminal_enter_dist: 0.5
+    closed_loop.terminal_max_vx: 0.3
+    closed_loop.terminal_min_vx: 0.12
+    closed_loop.terminal_max_wz: 0.45
+    closed_loop.final_yaw_gain: 0.9
+    closed_loop.final_yaw_min_wz: 0.35
+    closed_loop.yaw_tolerance: 0.26
+    closed_loop.odom_timeout: 0.5
