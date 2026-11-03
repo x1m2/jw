@@ -2,15 +2,13 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <unordered_set>
 
 namespace obstacle_stop {
 namespace {
-
-bool finiteNonNegative(const std::optional<double> &value) {
-  return !value || (std::isfinite(*value) && *value >= 0.0);
-}
 
 bool finiteRatio(const std::optional<double> &value) {
   return !value || (std::isfinite(*value) && *value >= 0.0 && *value <= 1.0);
@@ -62,8 +60,8 @@ bool loadRegionObstacleStopOverrides(const std::filesystem::path &path,
     }
 
     const std::unordered_set<std::string> allowed{
-        "hard_stop_distance", "slowdown_distance", "obstacle_ratio_threshold",
-        "linear_velocity_factor", "angular_velocity_factor"};
+        "linear_velocity_factor",
+        "angular_velocity_factor", "zones"};
     for (const auto &entry : parameters) {
       const std::string name = entry.first.as<std::string>();
       if (allowed.find(name) == allowed.end()) {
@@ -73,20 +71,52 @@ bool loadRegionObstacleStopOverrides(const std::filesystem::path &path,
       }
     }
 
+    if (parameters["zones"]) {
+      const auto zones = parameters["zones"];
+      if (!zones.IsMap()) throw YAML::RepresentationException(zones.Mark(), "zones must be a map");
+      const std::array<std::string,4> names{"front","rear","left","right"};
+      const std::unordered_set<std::string> keys{
+          "stop_distance", "slowdown_distance", "obstacle_cell_threshold"};
+      for (const auto &entry : zones) {
+        const auto name = entry.first.as<std::string>();
+        const auto it = std::find(names.begin(), names.end(), name);
+        if (it == names.end() || !entry.second.IsMap()) {
+          message = "invalid region zone '" + name + "' in " + path.string(); return false;
+        }
+        auto &target = overrides.zones[static_cast<std::size_t>(it-names.begin())];
+        for (const auto &value : entry.second) {
+          const auto key = value.first.as<std::string>();
+          if ((name == "left" || name == "right") && key == "slowdown_distance") {
+            message = "side zones support stopping only; remove " + name + ".slowdown_distance in " + path.string();
+            return false;
+          }
+          if (!keys.count(key)) {
+            message = "unsupported region zone parameter '" + name + "." + key + "' in " + path.string(); return false;
+          }
+          if (key == "obstacle_cell_threshold") {
+            const auto threshold = value.second.as<int64_t>();
+            if (threshold < 1) { message = "zone occupancy threshold must be at least 1"; return false; }
+            target.obstacle_cell_threshold = static_cast<std::size_t>(threshold);
+          } else {
+            const double distance = value.second.as<double>();
+            if (!std::isfinite(distance) || distance < 0.0) {
+              message = "zone distances must be finite and nonnegative"; return false;
+            }
+            if (key == "stop_distance") target.stop_distance = distance;
+            if (key == "slowdown_distance") target.slowdown_distance = distance;
+          }
+        }
+      }
+    }
+
     const auto read = [&parameters](const char *name) -> std::optional<double> {
       if (!parameters[name]) return std::nullopt;
       return parameters[name].as<double>();
     };
-    overrides.hard_stop_distance = read("hard_stop_distance");
-    overrides.slowdown_distance = read("slowdown_distance");
-    overrides.obstacle_ratio_threshold = read("obstacle_ratio_threshold");
     overrides.linear_velocity_factor = read("linear_velocity_factor");
     overrides.angular_velocity_factor = read("angular_velocity_factor");
 
-    if (!finiteNonNegative(overrides.hard_stop_distance) ||
-        !finiteNonNegative(overrides.slowdown_distance) ||
-        !finiteRatio(overrides.obstacle_ratio_threshold) ||
-        !finiteRatio(overrides.linear_velocity_factor) ||
+    if (!finiteRatio(overrides.linear_velocity_factor) ||
         !finiteRatio(overrides.angular_velocity_factor)) {
       message = "invalid region obstacle_stop parameter in " + path.string();
       return false;

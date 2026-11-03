@@ -1,16 +1,22 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
 
 namespace obstacle_stop {
 
-// 区域YAML只允许覆盖会改变本体停障行为的参数。
-struct RegionObstacleStopOverrides {
-  std::optional<double> hard_stop_distance;
+struct ZoneDistanceOverrides {
+  std::optional<double> stop_distance;
   std::optional<double> slowdown_distance;
-  std::optional<double> obstacle_ratio_threshold;
+  std::optional<std::size_t> obstacle_cell_threshold;
+};
+
+// 区域YAML不改变传感器来源、区域开关或坐标基准。
+struct RegionObstacleStopOverrides {
+  std::array<ZoneDistanceOverrides, 4> zones;
   std::optional<double> linear_velocity_factor;
   std::optional<double> angular_velocity_factor;
 };

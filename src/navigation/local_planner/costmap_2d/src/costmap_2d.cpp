@@ -118,7 +118,6 @@ void CostMap2D::loadParameters() {
   node_->declare_parameter<std::string>("lidar_frame", "livox_frame");
   node_->declare_parameter<int>("lidar_type", 1);
   node_->declare_parameter<bool>("pointcloud2_in_base_frame", false);
-  node_->declare_parameter<bool>("pointcloud2_apply_height_filter", true);
   node_->declare_parameter<bool>("clear_unobserved_rays", false);
 
   node_->declare_parameter<std::vector<double>>("lidar_to_base_T",
@@ -157,8 +156,6 @@ void CostMap2D::loadParameters() {
   node_->get_parameter("lidar_type", lidar_type_);
   node_->get_parameter("pointcloud2_in_base_frame",
                        pointcloud2_in_base_frame_);
-  node_->get_parameter("pointcloud2_apply_height_filter",
-                       pointcloud2_apply_height_filter_);
   node_->get_parameter("clear_unobserved_rays", clear_unobserved_rays_);
 
   std::vector<double> lidar_to_base_T;
@@ -356,11 +353,8 @@ void CostMap2D::projectLidarPoint(double x, double y, double z,
   if (lidar_type_ == 1 || !pointcloud2_in_base_frame_) {
     point_base = lidar_to_base_transform_ * point_base;
   }
-  const bool apply_height_filter =
-      lidar_type_ == 1 || pointcloud2_apply_height_filter_;
-  if (apply_height_filter &&
-      (point_base.z() < projection_config_.min_height ||
-       point_base.z() > projection_config_.max_height)) {
+  if (point_base.z() < projection_config_.min_height ||
+      point_base.z() > projection_config_.max_height) {
     return;
   }
 

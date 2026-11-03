@@ -62,14 +62,12 @@ mkdir -p "${NAV_LOG_DIR}" "${RELOCALIZATION_DIR}"
 
 RELOCALIZATION_EXIT_CODE_FILE="${RELOCALIZATION_DIR}/relocalization_exit_code.txt"
 RELOCALIZATION_SUCCESS_FILE="${RELOCALIZATION_DIR}/relocalization_success.txt"
-NAVIGATION_CONFIRM_FILE="${RELOCALIZATION_DIR}/navigation_confirm.txt"
 SLAM_MANAGER_DIR="$(dirname "${DATA_DIR}")"
 WAIT_SCRIPT="${SLAM_MANAGER_DIR}/wait_reloc_success_$$.py"
 
 rm -f \
     "${RELOCALIZATION_EXIT_CODE_FILE}" \
     "${RELOCALIZATION_SUCCESS_FILE}" \
-    "${NAVIGATION_CONFIRM_FILE}" \
     "${WAIT_SCRIPT}"
 
 log_time() {
@@ -273,7 +271,7 @@ if wait "${WAIT_PID}"; then
     WAIT_PID=""
     rm -f "${WAIT_SCRIPT}"
     write_relocalization_result 0 1
-    info "重定位成功，等待 GUI 确认当前位置和朝向"
+    info "重定位成功，自动启动导航"
 else
     WAIT_PID=""
     rm -f "${WAIT_SCRIPT}"
@@ -283,25 +281,7 @@ else
     exit 1
 fi
 
-# GUI 读取上面的结果后弹出人工确认框，再写入 navigation_confirm.txt。
-CONFIRM_TIMEOUT_SEC=300
-CONFIRM_WAITED_SEC=0
-while [ ! -f "${NAVIGATION_CONFIRM_FILE}" ]; do
-    sleep 1
-    CONFIRM_WAITED_SEC=$((CONFIRM_WAITED_SEC + 1))
-    if [ "${CONFIRM_WAITED_SEC}" -ge "${CONFIRM_TIMEOUT_SEC}" ]; then
-        err "等待 GUI 确认重定位结果超时"
-        exit 1
-    fi
-done
-
-CONFIRM_VALUE="$(tr -d '[:space:]' < "${NAVIGATION_CONFIRM_FILE}")"
-if [ "${CONFIRM_VALUE}" != "1" ]; then
-    warn "用户未确认重定位结果，取消启动导航"
-    exit 1
-fi
-
-info "用户已确认重定位结果，开始启动导航节点"
+info "收到 /reloc_success=true，开始启动导航节点"
 
 # ==================================================
 # 启动导航节点
@@ -344,7 +324,7 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 
 # ==================================================
 # 导航保持运行：
-# run_nav.sh 统一负责重定位、人工确认后的导航启动和后台节点清理。
+# run_nav.sh 统一负责重定位成功后的导航启动和后台节点清理。
 # 该脚本保留旧的独立导航状态机流程；正式APP流程由SlamManager Action控制。
 # ==================================================
 info "导航后台节点已启动"

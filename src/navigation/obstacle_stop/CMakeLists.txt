@@ -25,6 +25,8 @@ find_package(yaml-cpp REQUIRED)
 add_executable(obstacle_stop_node
   src/obstacle_stop_node.cpp
   src/obstacle_stop.cpp
+  src/obstacle_stop_detection.cpp
+  src/obstacle_stop_visualization.cpp
   src/region_profile_loader.cpp
 )
 

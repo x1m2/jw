@@ -130,12 +130,11 @@ start_bg "Terrain Filter" \
     ros2 launch terrain_filter terrain_filter.launch.py
 
 start_bg "Obstacle Stop" "${FOLLOW_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
-    ros2 launch obstacle_stop obstacle_stop.launch.py \
-    pointcloud2_apply_height_filter:=true
+    ros2 launch obstacle_stop obstacle_stop.launch.py
 
 start_bg "Local Costmap" "${FOLLOW_LOG_DIR}/costmap_2d_$(log_time).log" 1 \
     ros2 launch costmap_2d costmap_2d.launch.py global_frame:=odom \
-    pointcloud2_in_base_frame:=true pointcloud2_apply_height_filter:=true \
+    pointcloud2_in_base_frame:=true \
     clear_unobserved_rays:=false
 
 start_bg "Path Smoother" "${FOLLOW_LOG_DIR}/path_smoother_$(log_time).log" 1 \
