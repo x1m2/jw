@@ -12,8 +12,8 @@ namespace slam_manager {
 namespace {
 constexpr double kUwbWorkerStartTimeoutSec = 30.0;
 constexpr double kUwbWorkerStopTimeoutSec = 5.0;
-constexpr std::array<const char *, 7> kUwbWorkerNames{
-    "FAST-LIO", "terrain_filter", "obstacle_stop", "costmap",
+constexpr std::array<const char *, 5> kUwbWorkerNames{
+    "FAST-LIO", "obstacle_stop",
     "path_smoother", "pure_pursuit", "uwb_follow_planner"};
 }
 
@@ -58,24 +58,19 @@ struct UwbFollowController::PendingStart {
 UwbFollowController::UwbFollowController(
     rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr callback_group)
     : fast_lio_worker_(node, "/fast_lio_worker/set_state", callback_group),
-      terrain_filter_worker_(node, "/terrain_filter_worker/set_state",
-                             callback_group),
       obstacle_stop_worker_(node, "/obstacle_stop_worker/set_state",
                             callback_group),
-      costmap_worker_(node, "/costmap_worker/set_state", callback_group),
       path_smoother_worker_(node, "/path_smoother_worker/set_state",
                             callback_group),
       pure_pursuit_worker_(node, "/pure_pursuit_worker/set_state",
                            callback_group),
       uwb_follow_planner_worker_(
           node, "/uwb_follow_planner_worker/set_state", callback_group),
-      start_order_{&fast_lio_worker_, &terrain_filter_worker_,
-                   &obstacle_stop_worker_, &costmap_worker_,
+      start_order_{&fast_lio_worker_, &obstacle_stop_worker_,
                    &path_smoother_worker_, &pure_pursuit_worker_,
                    &uwb_follow_planner_worker_},
       stop_order_{&pure_pursuit_worker_, &uwb_follow_planner_worker_,
-                  &path_smoother_worker_, &costmap_worker_,
-                  &obstacle_stop_worker_, &terrain_filter_worker_,
+                  &path_smoother_worker_, &obstacle_stop_worker_,
                   &fast_lio_worker_} {}
 
 bool UwbFollowController::active() const {
@@ -123,7 +118,7 @@ bool UwbFollowController::startThrough(
       return false;
     }
     WorkerStartContext context;
-    if (worker == &pure_pursuit_worker_ || worker == &costmap_worker_ ||
+    if (worker == &pure_pursuit_worker_ ||
         worker == &path_smoother_worker_ || worker == &obstacle_stop_worker_) {
       context.algorithm_profile = "uwb_follow";
     } else if (worker == &uwb_follow_planner_worker_) {
@@ -241,26 +236,8 @@ void SlamManagerNode::uwbFollowCommandCallback(
   RCLCPP_INFO(get_logger(), "[UWB_FOLLOW] BLE command=%d mode=%s", value,
               std::string(toString(state_machine_.mode())).c_str());
   if (value == 0) {
-    const auto mode = state_machine_.mode();
-    if (mode == SlamMode::kFollowPaused) {
-      resumeUwbFollow();
-    } else if (mode == SlamMode::kIdle) {
-      // Localization can leave the Manager idle while its APP Worker is active.
-      // Reject before beginLifecycleCommand cancels an APP operation.
-      if (active_localization_session_id_.load() != 0U) {
-        RCLCPP_WARN(get_logger(),
-                    "UWB follow rejected: APP localization is active");
-        return;
-      }
-      const auto generation = beginLifecycleCommand("start_uwb_follow");
-      startUwbFollow(generation);
-    } else if (mode == SlamMode::kStartingFollow) {
-      RCLCPP_INFO(get_logger(),
-                  "[UWB_FOLLOW] start already pending; retaining request");
-    } else if (mode != SlamMode::kFollowing) {
-      RCLCPP_WARN(get_logger(), "UWB follow start rejected in mode=%s",
-                  std::string(toString(mode)).c_str());
-    }
+    RCLCPP_WARN(get_logger(),
+                "[uwb_follow_disabled] UWB follow is unavailable: SCAN adaptation was withdrawn");
   } else if (value == 2) {
     const auto mode = state_machine_.mode();
     if (mode == SlamMode::kStartingFollow || mode == SlamMode::kFollowing ||

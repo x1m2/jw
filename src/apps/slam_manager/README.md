@@ -5,6 +5,10 @@
 
 ## UWB 跟随（独立于巡检导航）
 
+当前 UWB 跟随暂不可用：SCAN 适配已撤销，旧 PP 及 costmap_2d、terrain_filter
+未恢复。Manager 拒绝 `/ble_follow_cmd=0`，独立跟随脚本也会直接退出。
+下文保留原有跟随协议说明，不代表当前版本可以运行该链路。
+
 Manager 订阅 `/ble_follow_cmd`（`std_msgs/msg/Int8`）：`0` 首次启动或
 暂停后恢复、`1` 暂停、`2` 停止。重复的 `1` 保持暂停，只有 `0` 会恢复。
 重复的开始/停止指令是幂等的。UWB 串口驱动保持原有发布值；若直接将其

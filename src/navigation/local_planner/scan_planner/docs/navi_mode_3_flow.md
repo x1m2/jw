@@ -9,7 +9,7 @@ ManagedWorker 管理节点 pure_pursuit_worker 与算法节点 pure_pursuit_node
 ## 实机输入
 
 - `/pose_stamped_localization`：geometry_msgs/PoseStamped，map -> base_link。
-- `/obstacle_cloud`：sensor_msgs/PointCloud2，已经去地面、位于 base_link。
+- `/cloud_registered`：sensor_msgs/PointCloud2，位于 map。
 - `/smoothed_global_path`：nav_msgs/Path，位于 map。仍为普通 Path，不消费逐边策略。
 - `/navigation/task_target`：slam_manager_interfaces/TaskTarget，指定真实终点及最终朝向。
 - `/navigation/global_replan_request`：std_msgs/Header，停止旧路径并等待相应的新路径。
@@ -19,9 +19,11 @@ ManagedWorker 管理节点 pure_pursuit_worker 与算法节点 pure_pursuit_node
 topics.* 参数直接控制输入输出，无需 launch 重映射。
 PoseStamped 在入口适配成原版内部 Odometry；规划速度由连续定位差分、低通和限幅得到。
 frame_id、坐标有效性和四元数在入口校验，不重复应用原版硬编码雷达外参。
-点云转换由原版 cloudCallback 执行：base_link 点旋转平移到 map。
-need_extrinsic=false、cloud_is_world=false、body_height=0.0 与当前实机定位/点云约定配套。
-算法本身不做地面分割，不应直接换成含地面的原始点云。
+当前点云已经位于世界坐标系，cloud_is_world=true、need_extrinsic=false，不重复转换。
+算法本身不做地面分割；地面和楼梯是否与轨迹碰撞，取决于高度参考和膨胀范围。
+
+UWB 对 SCAN 的适配已撤销，当前暂不支持 UWB 跟随。
+普通导航不再需要 costmap_2d/terrain_filter，停障仍使用原始雷达及自身高度过滤。
 
 ## 从点云到速度
 

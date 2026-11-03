@@ -2,6 +2,9 @@
 set -e
 set -o pipefail
 
+echo "[uwb_follow_disabled] UWB 跟随暂不可用，SCAN 适配已撤销" >&2
+exit 1
+
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
 WORKSPACE_DIR="$(dirname "${SCRIPT_DIR}")"

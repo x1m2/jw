@@ -45,8 +45,6 @@ class NavigationController {
                 Completion completion);
 
   WorkerClient obstacle_stop_worker_;
-  WorkerClient terrain_filter_worker_;
-  WorkerClient costmap_worker_;
   WorkerClient global_planner_worker_;
   WorkerClient path_smoother_worker_;
   WorkerClient pure_pursuit_worker_;

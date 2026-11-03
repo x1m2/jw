@@ -11,9 +11,6 @@ NavigationController::NavigationController(
     rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr callback_group)
     : obstacle_stop_worker_(node, "/obstacle_stop_worker/set_state",
                             callback_group),
-      terrain_filter_worker_(node, "/terrain_filter_worker/set_state",
-                             callback_group),
-      costmap_worker_(node, "/costmap_worker/set_state", callback_group),
       global_planner_worker_(node, "/global_path_planner_worker/set_state",
                              callback_group),
       path_smoother_worker_(node, "/path_smoother_worker/set_state",
@@ -21,15 +18,13 @@ NavigationController::NavigationController(
       pure_pursuit_worker_(node, "/pure_pursuit_worker/set_state",
                            callback_group),
       // 纯跟踪最后启动，避免依赖模块未就绪时提前输出速度。
-      // 过滤器先处理原始点云，停障和Costmap再消费 /obstacle_cloud。
-      start_order_{&terrain_filter_worker_, &obstacle_stop_worker_,
-                   &costmap_worker_,
+      // SCAN自行建图，停障独立消费原始雷达。
+      start_order_{&obstacle_stop_worker_,
                    &global_planner_worker_,
                    &path_smoother_worker_, &pure_pursuit_worker_},
       // 停止时优先关闭运动控制，确保机器人先停下来。
       stop_order_{&pure_pursuit_worker_, &path_smoother_worker_,
-                  &global_planner_worker_, &costmap_worker_,
-                  &obstacle_stop_worker_, &terrain_filter_worker_} {
+                  &global_planner_worker_, &obstacle_stop_worker_} {
   pause_client_ = node->create_client<std_srvs::srv::SetBool>(
       "/pure_pursuit/set_paused", rmw_qos_profile_services_default,
       callback_group);

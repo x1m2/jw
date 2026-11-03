@@ -36,17 +36,15 @@ class UwbFollowController {
                     std::string &message);
   bool wasAttempted(const WorkerClient *worker) const;
   WorkerClient fast_lio_worker_;
-  WorkerClient terrain_filter_worker_;
   WorkerClient obstacle_stop_worker_;
-  WorkerClient costmap_worker_;
   WorkerClient path_smoother_worker_;
   WorkerClient pure_pursuit_worker_;
   WorkerClient uwb_follow_planner_worker_;
-  std::array<WorkerClient *, 7> start_order_;
-  std::array<WorkerClient *, 7> stop_order_;
-  std::array<bool, 7> attempted_{};
-  std::array<bool, 7> started_{};
-  std::array<std::shared_ptr<PendingStart>, 7> pending_starts_{};
+  std::array<WorkerClient *, 5> start_order_;
+  std::array<WorkerClient *, 5> stop_order_;
+  std::array<bool, 5> attempted_{};
+  std::array<bool, 5> started_{};
+  std::array<std::shared_ptr<PendingStart>, 5> pending_starts_{};
   uint64_t session_id_{0U};
 };
 

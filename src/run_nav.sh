@@ -89,12 +89,10 @@ LOCALIZATION_PID=""
 WAIT_PID=""
 
 # 导航阶段节点 PID
-COSTMAP_PID=""
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
 PURE_PURSUIT_PID=""
 OBSTACLE_STOP_PID=""
-# TERRAIN_FILTER_PID=""
 TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
 
@@ -291,10 +289,6 @@ start_bg OBSTACLE_STOP_PID "obstacle_stop" \
     "${NAV_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
     ros2 launch obstacle_stop obstacle_stop.launch.py
 
-start_bg COSTMAP_PID "costmap_2d" \
-    "${NAV_LOG_DIR}/costmap_2d_$(log_time).log" 1 \
-    ros2 launch costmap_2d costmap_2d.launch.py
-
 start_bg GLOBAL_PLANNER_PID "global_path_planner" \
     "${NAV_LOG_DIR}/global_path_planner_$(log_time).log" 1 \
     ros2 launch global_path_planner global_path_planner.launch.py \
@@ -306,11 +300,15 @@ start_bg PATH_SMOOTHER_PID "path_smoother" \
 
 start_bg PURE_PURSUIT_PID "pure_pursuit" \
     "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
-    ros2 launch pure_pursuit pure_pursuit.launch.py
+    ros2 launch pure_pursuit scan_planner.launch.py
 
-# start_bg TERRAIN_FILTER_PID "terrain_filter" \
-#     "${NAV_LOG_DIR}/terrain_filter_$(log_time).log" 3 \
-#     ros2 launch terrain_filter terrain_filter.launch.py
+if ! scan_start_reply="$(timeout 15s ros2 service call \
+    /pure_pursuit_worker/set_state slam_manager_interfaces/srv/SetWorkerState \
+    '{command: 1, session_id: 1}' 2>&1)" || \
+    [[ "${scan_start_reply}" != *"success=True"* ]]; then
+    err "启动 SCAN 失败: ${scan_start_reply}"
+    exit 1
+fi
 
 start_bg TARGET_POINTS_VISUALIZER_PID "target_points_visualizer" \
     "${NAV_LOG_DIR}/target_points_visualizer_$(log_time).log" 1 \
