@@ -91,7 +91,7 @@ WAIT_PID=""
 # 导航阶段节点 PID
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
-PURE_PURSUIT_PID=""
+SCAN_PLANNER_PID=""
 OBSTACLE_STOP_PID=""
 TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
@@ -298,12 +298,12 @@ start_bg PATH_SMOOTHER_PID "path_smoother" \
     "${NAV_LOG_DIR}/path_smoother_$(log_time).log" 1 \
     ros2 launch path_smoother path_smoother.launch.py
 
-start_bg PURE_PURSUIT_PID "pure_pursuit" \
-    "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
-    ros2 launch pure_pursuit scan_planner.launch.py
+start_bg SCAN_PLANNER_PID "scan_planner" \
+    "${NAV_LOG_DIR}/scan_planner_$(log_time).log" 1 \
+    ros2 launch scan_planner scan_planner.launch.py
 
 if ! scan_start_reply="$(timeout 15s ros2 service call \
-    /pure_pursuit_worker/set_state slam_manager_interfaces/srv/SetWorkerState \
+    /scan_planner_worker/set_state slam_manager_interfaces/srv/SetWorkerState \
     '{command: 1, session_id: 1}' 2>&1)" || \
     [[ "${scan_start_reply}" != *"success=True"* ]]; then
     err "启动 SCAN 失败: ${scan_start_reply}"

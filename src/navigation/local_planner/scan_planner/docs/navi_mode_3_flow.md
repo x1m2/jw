@@ -1,8 +1,12 @@
 # navi_mode=3：原版算法与实机适配
 
 当前版本以 `src/SCAN-Planner-Ros2` 为算法基线。
-包名保持 pure_pursuit，唯一可执行程序为 pure_pursuit_node。
-ManagedWorker 管理节点 pure_pursuit_worker 与算法节点 pure_pursuit_node 同处一个进程。
+包名为 scan_planner，唯一可执行程序为 scan_planner_node。
+ManagedWorker 管理节点 scan_planner_worker 与算法节点 scan_planner_node 同处一个进程。
+
+OTA 部署必须同步更新程序名、参数文件路径和 Manager；新版本不提供旧名称兼容接口。
+直接启动命令：`ros2 run scan_planner scan_planner_node --ros-args --params-file <配置目录>/scan_planner_params.yaml`。
+平台模式仍需通过 `/scan_planner_worker/set_state` 发送 START，launch 仅负责加载参数和启动进程。
 算法回调使用一个默认互斥组和一个执行线程，保持原版顺序访问地图，避免可变地图并发读写。
 不使用此前的地图快照、多组调度、额外绕障引导、规划预算或 BLOCKED_WAIT 状态。
 
@@ -13,8 +17,8 @@ ManagedWorker 管理节点 pure_pursuit_worker 与算法节点 pure_pursuit_node
 - `/smoothed_global_path`：nav_msgs/Path，位于 map。仍为普通 Path，不消费逐边策略。
 - `/navigation/task_target`：slam_manager_interfaces/TaskTarget，指定真实终点及最终朝向。
 - `/navigation/global_replan_request`：std_msgs/Header，停止旧路径并等待相应的新路径。
-- `/pure_pursuit_worker/set_state`：平台 START/STOP。
-- `/pure_pursuit/set_paused`：暂停与恢复。
+- `/scan_planner_worker/set_state`：平台 START/STOP。
+- `/scan_planner/set_paused`：暂停与恢复。
 
 topics.* 参数直接控制输入输出，无需 launch 重映射。
 PoseStamped 在入口适配成原版内部 Odometry；规划速度由连续定位差分、低通和限幅得到。
@@ -87,7 +91,7 @@ TaskTarget 没有独立任务序号。同一未完成任务按导航类型、拓
 
 原版失败累计达到 fsm.max_replan_fail_count（恢复默认 1000）时会进入原版紧急停止及等待新目标流程。
 原版动态障碍清除、首次带障碍规划和运行性能需重新实测；当前不保留此前对此的额外修复。
-本版不自动读取配置，OTA 必须显式 --params-file 加载 config/pure_pursuit_params.yaml。
+本版不自动读取配置，OTA 必须显式 --params-file 加载 config/scan_planner_params.yaml。
 
 ## 本次验证发现的原版限制
 

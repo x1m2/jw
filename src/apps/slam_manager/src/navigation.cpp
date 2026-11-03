@@ -15,18 +15,18 @@ NavigationController::NavigationController(
                              callback_group),
       path_smoother_worker_(node, "/path_smoother_worker/set_state",
                             callback_group),
-      pure_pursuit_worker_(node, "/pure_pursuit_worker/set_state",
+      scan_planner_worker_(node, "/scan_planner_worker/set_state",
                            callback_group),
       // 纯跟踪最后启动，避免依赖模块未就绪时提前输出速度。
       // SCAN自行建图，停障独立消费原始雷达。
       start_order_{&obstacle_stop_worker_,
                    &global_planner_worker_,
-                   &path_smoother_worker_, &pure_pursuit_worker_},
+                   &path_smoother_worker_, &scan_planner_worker_},
       // 停止时优先关闭运动控制，确保机器人先停下来。
-      stop_order_{&pure_pursuit_worker_, &path_smoother_worker_,
+      stop_order_{&scan_planner_worker_, &path_smoother_worker_,
                   &global_planner_worker_, &obstacle_stop_worker_} {
   pause_client_ = node->create_client<std_srvs::srv::SetBool>(
-      "/pure_pursuit/set_paused", rmw_qos_profile_services_default,
+      "/scan_planner/set_paused", rmw_qos_profile_services_default,
       callback_group);
 }
 

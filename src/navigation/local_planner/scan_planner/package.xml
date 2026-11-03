@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>pure_pursuit</name>
+  <name>scan_planner</name>
   <version>0.1.0</version>
   <description>SCAN-Planner ROS 2 node and supporting libraries.</description>
   <maintainer email="iszhouxin@zju.edu.cn">SCAN-Planner maintainers</maintainer>

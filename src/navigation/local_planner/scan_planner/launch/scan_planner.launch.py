@@ -9,15 +9,15 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     params_file = os.path.join(
-        get_package_share_directory("pure_pursuit"),
+        get_package_share_directory("scan_planner"),
         "config",
-        "pure_pursuit_params.yaml",
+        "scan_planner_params.yaml",
     )
 
     return LaunchDescription([
         Node(
-            package="pure_pursuit",
-            executable="pure_pursuit_node",
+            package="scan_planner",
+            executable="scan_planner_node",
             output="screen",
             parameters=[params_file],
         ),

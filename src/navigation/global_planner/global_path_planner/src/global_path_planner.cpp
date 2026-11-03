@@ -197,7 +197,7 @@ bool GlobalPathPlanner::initialize() {
   replan_request_pub_ = create_publisher<std_msgs::msg::Header>(
       "/navigation/global_replan_request", rclcpp::QoS(10).reliable());
   paused_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local(),
+      "/scan_planner/paused", rclcpp::QoS(1).reliable().transient_local(),
       [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
         const bool was_paused = navigation_paused_;
         navigation_paused_ = msg->data;

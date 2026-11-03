@@ -110,7 +110,7 @@ Pure Pursuit执行。
   跟踪的最早路径版本，`frame_id` 为全局坐标系。
 - `/navigation/global_path_accepted`：`std_msgs/Header`，控制器实际接收的全局
   路径版本。全局规划器持续等待匹配确认；旧版本确认不能解除等待。
-- `/pure_pursuit/paused`：`std_msgs/Bool`，控制器的人工/上层暂停状态。
+- `/scan_planner/paused`：`std_msgs/Bool`，控制器的人工/上层暂停状态。
 
 普通全局路径仍使用 `dynamic_path=false`。平滑器必须保留源路径的 header
 时间戳；控制器会拒绝等待期间排队的旧路径和空路径。

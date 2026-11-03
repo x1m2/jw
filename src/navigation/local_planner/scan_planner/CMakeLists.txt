@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(pure_pursuit)
+project(scan_planner)
 
 # Avoid silently building the map kernel without optimization after an OTA
 # build-type typo such as "Releas". Explicit Debug builds remain supported.
@@ -44,7 +44,7 @@ set(ros_dependencies
 
 # Compile all SCAN modules into the executable; OTA need not deploy separate
 # plan_env/path_searching/bspline_opt/traj_utils shared libraries.
-add_executable(pure_pursuit_node
+add_executable(scan_planner_node
   src/plan_manage/scan_planner_node.cpp
   src/plan_manage/scan_replan_fsm.cpp
   src/plan_manage/planner_manager.cpp
@@ -57,12 +57,12 @@ add_executable(pure_pursuit_node
   src/bspline_opt/gradient_descent_optimizer.cpp
   src/traj_utils/planning_visualization.cpp
   src/traj_utils/polynomial_traj.cpp)
-target_include_directories(pure_pursuit_node PRIVATE
+target_include_directories(scan_planner_node PRIVATE
   include ${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
-ament_target_dependencies(pure_pursuit_node ${ros_dependencies} slam_manager)
-target_link_libraries(pure_pursuit_node Eigen3::Eigen ${PCL_LIBRARIES} ${OpenCV_LIBS})
+ament_target_dependencies(scan_planner_node ${ros_dependencies} slam_manager)
+target_link_libraries(scan_planner_node Eigen3::Eigen ${PCL_LIBRARIES} ${OpenCV_LIBS})
 
-install(TARGETS pure_pursuit_node
+install(TARGETS scan_planner_node
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

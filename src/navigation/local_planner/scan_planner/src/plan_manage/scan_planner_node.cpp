@@ -14,8 +14,8 @@ struct PlannerRuntime {
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   try {
-    auto worker = std::make_shared<slam_manager::ManagedWorker>("pure_pursuit_worker", []() {
-      auto node = std::make_shared<rclcpp::Node>("pure_pursuit_node");
+    auto worker = std::make_shared<slam_manager::ManagedWorker>("scan_planner_worker", []() {
+      auto node = std::make_shared<rclcpp::Node>("scan_planner_node");
       if (node->declare_parameter<std::string>("controller_mode", "closed_loop") != "closed_loop")
         throw std::invalid_argument("hardware baseline requires controller_mode=closed_loop");
       auto runtime = std::make_shared<PlannerRuntime>();
@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
     rclcpp::spin(worker);
     worker.reset();
   } catch (const std::exception &e) {
-    RCLCPP_FATAL(rclcpp::get_logger("pure_pursuit_worker"), "[scan_start_error] %s", e.what());
+    RCLCPP_FATAL(rclcpp::get_logger("scan_planner_worker"), "[scan_start_error] %s", e.what());
     rclcpp::shutdown(); return 1;
   }
   rclcpp::shutdown(); return 0;

@@ -53,7 +53,7 @@ class ClosedLoopController : public Controller {
     cmd_vel_pub_ = node_.create_publisher<geometry_msgs::msg::Twist>(topicName(node_, "cmd_vel", "/cmd_vel_planned"), 20);
     execution_frozen_pub_ = node_.create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
     nav_state_pub_ = node_.create_publisher<std_msgs::msg::Bool>("/nav_state", 10);
-    paused_pub_ = node_.create_publisher<std_msgs::msg::Bool>("/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local());
+    paused_pub_ = node_.create_publisher<std_msgs::msg::Bool>("/scan_planner/paused", rclcpp::QoS(1).reliable().transient_local());
     odom_sub_ = node_.create_subscription<geometry_msgs::msg::PoseStamped>(
         topicName(node_, "body_pose", "/pose_stamped_localization"), rclcpp::SensorDataQoS(),
         [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr message) {
@@ -96,7 +96,7 @@ class ClosedLoopController : public Controller {
           RCLCPP_INFO(node_.get_logger(), "[scan_task] goal=(%.3f,%.3f) yaw=%.3f matching_path=%d after_completed=%d",
               task_goal_.x(), task_goal_.y(), final_yaw_, have_final_goal_, start_after_completion_);
         });
-    pause_service_ = node_.create_service<std_srvs::srv::SetBool>("/pure_pursuit/set_paused",
+    pause_service_ = node_.create_service<std_srvs::srv::SetBool>("/scan_planner/set_paused",
         [this](std_srvs::srv::SetBool::Request::SharedPtr req, std_srvs::srv::SetBool::Response::SharedPtr res) {
           paused_ = req->data;
           std_msgs::msg::Bool message; message.data = paused_; paused_pub_->publish(message);
