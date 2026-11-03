@@ -2,13 +2,14 @@
 <package format="3">
   <name>obstacle_stop</name>
   <version>0.1.0</version>
-  <description>MID360 based obstacle stop and final navigation velocity guard.</description>
+  <description>Raw lidar based obstacle stop and final navigation velocity guard.</description>
   <maintainer email="maintainer@example.com">robot</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>eigen</depend>
   <depend>geometry_msgs</depend>
+  <depend>imu_stair_detector</depend>
   <depend>livox_ros_driver2</depend>
   <depend>nlohmann_json</depend>
   <depend>rclcpp</depend>
@@ -17,6 +18,7 @@
   <depend>std_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>yaml_cpp_vendor</depend>
+  <exec_depend>rviz2</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -131,7 +131,7 @@ start_bg "Terrain Filter" \
 
 start_bg "Obstacle Stop" "${FOLLOW_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
     ros2 launch obstacle_stop obstacle_stop.launch.py \
-    pointcloud2_apply_height_filter:=true
+    robot_model:=p2.5_mid360s use_rviz:=false
 
 start_bg "Local Costmap" "${FOLLOW_LOG_DIR}/costmap_2d_$(log_time).log" 1 \
     ros2 launch costmap_2d costmap_2d.launch.py global_frame:=odom \
