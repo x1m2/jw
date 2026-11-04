@@ -1,0 +1,13 @@
+# 后雷达 -> 前雷达：p_front = R * p_rear + t；平移单位 m。
+# 本安装的未独立验收空间候选；delta_s 只适用于原 packet bag 会话。
+# 实机使用默认启动时间检查重新估计时差。
+transform: front <- rear
+time_convention: t_front = t_rear + delta_s
+T_front_rear:
+  - [0.9980606232260616, 0.06167823250477539, 0.008413560524102777, -0.007530084667989228]
+  - [0.06166549993785719, -0.9980953120556677, 0.001764701083313769, -0.006242967891288315]
+  - [0.008506378960521666, -0.0012424522470436284, -0.9999630482319803, -0.9277915511715523]
+  - [0.0, 0.0, 0.0, 1.0]
+delta_s: -0.006360054016113281
+status: EXPERIMENTAL_NOT_ACCEPTED
+valid_for: Same rigid mounting as this packet recording; delta_s is this recorded clock session only. Not a new robot startup offset.
