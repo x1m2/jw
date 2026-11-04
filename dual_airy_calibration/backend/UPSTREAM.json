@@ -1,0 +1,18 @@
+{
+  "upstream": "https://github.com/hku-mars/mlcc",
+  "commit": "20f3b3a42ed88cdc287fd93d24d24a2df2a81999",
+  "license": "GPL-2.0",
+  "origin": "packet MLCC adapter; ROS1 includes removed; upstream optimization equations retained; world gauge preserved between voxel rebuilds",
+  "sha256": {
+    "backend/src/mlcc_runner.cpp": "7327219989ceb80d7535139aa5b34752e4659a3fccb09e5f3bbcbf4074a8ee78",
+    "backend/vendor/cut_extrinsic.hpp": "e5a98b33a13a78d55e3571a3ba27770d7ff11aaf16957cfd87020557461bdaf5",
+    "backend/vendor/cut_global.hpp": "e526a86d051657ee9998e8bc7fdb100bebd62e171ada2da317d8ef8f4e7b9de0",
+    "backend/vendor/cut_pose.hpp": "a49edb88a52aa80964894a16c80bf8b01878d51925da297f0f88ba9a6bca96b8",
+    "backend/vendor/include/BA/mypcl.hpp": "2d4f66d8f70fa0e38afc0c2ed8ab235a6f71aa33839173c9ad17d2158ececd95",
+    "backend/vendor/include/BA/tools.hpp": "90b2e205643d3bb58f08fa5ab4de912c5b986b99d0e520693c0f4f8880758d97",
+    "backend/vendor/include/common.h": "bdac1365d5de35ba8c71c42a323169cd4a8fa5ef1013ef53e62e1481a6256a16",
+    "backend/vendor/include/extrinsic_refine.hpp": "b4612712bd652af5bcc306848d7009b9e7740bbd53dcbda4ae1215ea849f110d",
+    "backend/vendor/include/global.hpp": "290c439bacf438915d9efa32fc9a487df29348ab25c123c7db323bd3df6cb415",
+    "backend/vendor/include/pose_refine.hpp": "1134449c1c5a01fcbe3799584536a3ffdc99e17b7064a4131ecd8b52a0f4a0fa"
+  }
+}

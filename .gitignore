@@ -1,0 +1,15 @@
+build/
+install/
+log/
+runs/
+__pycache__/
+*.pyc
+*.bag
+*.db3
+*.mcap
+*.pcd
+*.ply
+*.tar
+*.tar.gz
+*.tar.xz
+*.zip

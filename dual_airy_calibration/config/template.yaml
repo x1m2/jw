@@ -1,0 +1,11 @@
+# 通常使用 run.sh init 生成配置。只需填写本机名称和粗略安装初值；其余使用程序默认值。
+schema_version: 1
+robot: dog_02
+# 后雷达原点和坐标轴 -> 前雷达原生坐标系，平移单位米。
+# null 会明确报错；这里故意不放其他机器的标定数值。
+initial_T_front_rear: null
+topics:
+  front_points: /rslidar_front/points
+  rear_points: /rslidar_rear/points
+  front_imu: /rslidar_front/imu
+  rear_imu: /rslidar_rear/imu

@@ -1,0 +1,16 @@
+# 当前默认空间外参：dual_airy_packet_20250604_225732 的本次 MLCC 三阶段精化结果。
+# 后雷达 R -> 前雷达 F；列向量 [p_F;1] = T_front_rear * [p_R;1]。
+# 左上 3x3 是旋转，右上 3x1 是米制平移；前雷达坐标轴不等于机身 base_link。
+# 默认 bash run.sh 仍会重测当前时差；下面 delta_s 只适用于标定 packet bag 的时钟会话。
+# --fixed-time 仅用于已经核实的同一时钟会话。雷达重启后不得直接复用历史时差。
+transform: front <- rear
+time_convention: t_front = t_rear + delta_s
+T_front_rear:
+  - [0.9980606232260616, 0.06167823250477539, 0.008413560524102777, -0.007530084667989228]
+  - [0.06166549993785719, -0.9980953120556677, 0.001764701083313769, -0.006242967891288315]
+  - [0.008506378960521666, -0.0012424522470436284, -0.9999630482319803, -0.9277915511715523]
+  - [0.0, 0.0, 0.0, 1.0]
+delta_s: -0.006360054016113281
+status: EXPERIMENTAL_NOT_ACCEPTED
+valid_for: Same rigid mounting as this packet recording; delta_s is this recorded
+  clock session only. Not a new robot startup offset.
