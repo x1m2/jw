@@ -1,0 +1,53 @@
+{
+  "runs": [
+    {
+      "domain": 220,
+      "startup_elapsed_s": 12.00149514199984,
+      "delta_s": -0.0074040889739990234,
+      "callbacks_total": {
+        "front_imu": 2368,
+        "front_points": 117,
+        "rear_imu": 2369,
+        "rear_points": 117
+      },
+      "received": 101,
+      "hz": 10.076116952298754,
+      "max_header_gap_s": 0.10013808000030622,
+      "duplicate_start": "rejected",
+      "stale_hz": 0.0
+    },
+    {
+      "domain": 221,
+      "startup_elapsed_s": 12.001413977999619,
+      "delta_s": -0.007395267486572266,
+      "callbacks_total": {
+        "front_imu": 2392,
+        "front_points": 120,
+        "rear_imu": 2393,
+        "rear_points": 120
+      },
+      "received": 100,
+      "hz": 10.002146447493846,
+      "max_header_gap_s": 0.10013808000030622,
+      "duplicate_start": "rejected",
+      "stale_hz": 0.0
+    },
+    {
+      "domain": 222,
+      "startup_elapsed_s": 12.001471681000112,
+      "delta_s": -0.007395505905151367,
+      "callbacks_total": {
+        "front_imu": 2377,
+        "front_points": 119,
+        "rear_imu": 2376,
+        "rear_points": 119
+      },
+      "received": 100,
+      "hz": 10.018352397127,
+      "max_header_gap_s": 0.10013808000030622,
+      "duplicate_start": "rejected",
+      "stale_hz": 0.0
+    }
+  ],
+  "missing_inputs": "PASS"
+}

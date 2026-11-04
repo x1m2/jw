@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <!-- 大点云整帧通常为 3～4 MB。这里控制 DDS 发送突发，不改变点云点数或 10 Hz 扫描周期。
+       run.sh 在创建融合进程前加载本文件；已经运行的驱动不受影响。
+       注意：只有 rmw_fastrtps_cpp 使用本配置，其他 RMW 不会采用这些参数。 -->
+  <participant profile_name="airy_paced_participant" is_default_profile="true">
+    <rtps>
+      <flow_controller_descriptor_list>
+        <flow_controller_descriptor>
+          <name>airy_paced_flow</name>
+          <!-- FIFO 按排队顺序发送；字节预算控制传输片段发送节拍，不是 ROS 消息队列深度。 -->
+          <scheduler>FIFO</scheduler>
+          <!-- 每 1 ms 最多发送 131072 字节，即 128 KiB；名义预算约 131 MB/s。
+               这是发送预算，不是保证的网速；实际负载取决于传输和接收者数量。
+               不要改成每 100 ms 发送一个小片段，那样会造成发送能力不足及积压。 -->
+          <max_bytes_per_period>131072</max_bytes_per_period>
+          <period_ms>1</period_ms>
+        </flow_controller_descriptor>
+      </flow_controller_descriptor_list>
+    </rtps>
+  </participant>
+  <data_writer profile_name="default_airy_writer" is_default_profile="true">
+    <!-- 默认小消息 writer 保持同步发布；下面为融合点云单独覆盖为异步。
+         DYNAMIC 允许历史消息按实际大小分配内存，适应点数变化。 -->
+    <qos><publishMode><kind>SYNCHRONOUS</kind></publishMode></qos>
+    <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+  </data_writer>
+  <data_reader profile_name="default_airy_reader" is_default_profile="true">
+    <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+  </data_reader>
+  <!-- profile_name 必须与 ROS 完整输出话题完全一致；重命名/重映射话题时须同步核对。
+       这项 writer 配置才是融合点云的异步发送与流控绑定。 -->
+  <data_writer profile_name="/dual_airy/points_merged">
+    <qos>
+      <!-- publish() 将消息交给 DDS，异步发送线程再按 airy_paced_flow 节拍发送。
+           publish 返回次数不等于接收端交付次数，必须结合 ros2 topic hz/接收计数验收。 -->
+      <publishMode><kind>ASYNCHRONOUS</kind><flow_controller_name>airy_paced_flow</flow_controller_name></publishMode>
+      <!-- Data Sharing 关闭；这与 Shared Memory Transport 是两个功能。
+           此处不是“禁用所有共享内存传输”，也不能据此断定原问题由共享内存引起。 -->
+      <data_sharing><kind>OFF</kind></data_sharing>
+    </qos>
+    <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+  </data_writer>
+</profiles>
