@@ -21,7 +21,7 @@ import os
 
 def generate_launch_description():
     package_share = get_package_share_directory('woodox_imu_bridge')
-    parameters = os.path.join(package_share, 'config', 'params.yaml')
+    parameters = os.path.join(package_share, 'config', 'woodox_imu_bridge.yaml')
 
     return LaunchDescription([
         Node(
