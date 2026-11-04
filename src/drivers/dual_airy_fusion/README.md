@@ -19,9 +19,16 @@ ros2 launch dual_airy_fusion dual_airy_fusion.launch.py
 
 ## 配置与参数
 
-外参文件为 `config/dual_airy_fusion.yaml`，由节点直接读取，不是 ROS 参数文件。
+`config/dual_airy_fusion.yaml` 是 ROS 2 标准参数文件，统一配置话题、启动选项和外参。launch 通过 `parameters` 加载，节点通过 `declare_parameter` 读取。
 
-- `T_front_rear`：后雷达到前雷达的 4×4 变换，`p_front = T_front_rear * p_rear`，平移单位米。
+也可以直接启动节点：
+
+```bash
+ros2 run dual_airy_fusion dual_airy_fusion_node --ros-args \
+  --params-file src/drivers/dual_airy_fusion/config/dual_airy_fusion.yaml
+```
+
+- `T_front_rear`：后雷达到前雷达的 4×4 变换，按行展开为 16 个浮点数，`p_front = T_front_rear * p_rear`，平移单位米。
 - `delta_s`：时间关系为 `t_front = t_rear + delta_s`；默认启动检查会替换历史时差。
 - 默认矩阵来自 packet_225732 的 MLCC 标定，状态为 `EXPERIMENTAL_NOT_ACCEPTED`，尚未完成独立精度验收，仅适用于对应的刚性安装。
 
@@ -29,16 +36,16 @@ launch 支持以下参数：
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `extrinsics_file` | 包内 YAML | 外参文件路径 |
-| `auto_time` | `true` | 启动时检查时间差 |
-| `startup_timeout_s` | `60.0` | 检查超时秒数，至少 12 |
-| `session_file` | 空 | 可选输出路径，保存会话 YAML 和 `.timing.json`；默认仅在内存中交接 |
+| `config_file` | 包内 YAML | ROS 2 参数文件路径 |
+| `auto_time` | 沿用 YAML（`true`） | 可选覆盖启动时差检查开关 |
+| `startup_timeout_s` | 沿用 YAML（`60.0`） | 可选覆盖检查超时秒数，至少 12 |
+| `session_file` | 沿用 YAML（空） | 可选输出路径，保存 ROS 2 格式会话外参和 `.timing.json`；默认仅在内存中交接 |
 
 仅在当前时钟会话的时间差已确认时，使用固定时差：
 
 ```bash
 ros2 launch dual_airy_fusion dual_airy_fusion.launch.py \
-  auto_time:=false extrinsics_file:=/path/to/current_session/dual_airy_fusion.yaml
+  auto_time:=false config_file:=/path/to/current_session/dual_airy_fusion.yaml
 ```
 
 ## 话题与检查

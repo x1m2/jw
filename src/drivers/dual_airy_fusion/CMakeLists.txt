@@ -15,14 +15,14 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
-# 共享核心包含外参读取、26 字节点数据、融合缓存和启动时差估计；无需 PCL。
+# 共享核心包含外参校验、26 字节点数据、融合缓存和启动时差估计；无需 PCL。
 add_library(dual_airy_core src/core.cpp)
 target_include_directories(dual_airy_core PUBLIC include)
 ament_target_dependencies(dual_airy_core sensor_msgs)
-target_link_libraries(dual_airy_core yaml-cpp nlohmann_json::nlohmann_json)
+target_link_libraries(dual_airy_core nlohmann_json::nlohmann_json)
 # 单节点内先检查启动时差，再进入融合；时间检查作为独立模块编译。
 add_executable(dual_airy_fusion_node src/fusion_node.cpp src/startup_time_check.cpp)
-target_link_libraries(dual_airy_fusion_node dual_airy_core)
+target_link_libraries(dual_airy_fusion_node dual_airy_core yaml-cpp)
 ament_target_dependencies(dual_airy_fusion_node rclcpp sensor_msgs std_msgs geometry_msgs tf2 tf2_ros)
 install(TARGETS dual_airy_fusion_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})

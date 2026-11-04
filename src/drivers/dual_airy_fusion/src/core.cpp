@@ -26,23 +26,14 @@ void require(bool ok, const char *message) {
   if (!ok) throw std::runtime_error(message);
 }
 }  // namespace
-Calibration load_calibration(const std::string &path) {
-  // 先验证方向、矩阵和时间约定。配置格式通过不表示该外参已达到精度验收标准。
+Calibration load_calibration(const std::vector<double> &matrix, double delta,
+                             std::string status, std::string valid_for) {
+  // 配置格式通过不表示该外参已达到精度验收标准。
   Calibration c;
-  c.document = YAML::LoadFile(path);
-  require(c.document["transform"].as<std::string>() == "front <- rear",
-          "transform must be front <- rear");
-  require(c.document["time_convention"].as<std::string>() ==
-              "t_front = t_rear + delta_s",
-          "unsupported time convention");
-  require(!c.document["R"] && !c.document["t_m"],
-          "use only the 4x4 T_front_rear matrix, not R/t_m");
-  auto m = c.document["T_front_rear"];
-  require(m.IsSequence() && m.size() == 4, "T_front_rear must have four rows");
+  require(matrix.size() == 16, "T_front_rear must contain 16 row-major doubles");
   for (size_t i = 0; i < 4; ++i) {
-    require(m[i].IsSequence() && m[i].size() == 4, "T_front_rear must be 4x4");
     for (size_t j = 0; j < 4; ++j) {
-      c.matrix[i][j] = m[i][j].as<double>();
+      c.matrix[i][j] = matrix[i * 4 + j];
       require(std::isfinite(c.matrix[i][j]), "nonfinite matrix value");
     }
   }
@@ -62,10 +53,10 @@ Calibration load_calibration(const std::string &path) {
                r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
   require(std::sqrt(orthogonal_error) < 1e-5 && std::abs(det - 1) < 1e-5,
           "matrix rotation must be orthonormal with determinant +1");
-  c.delta = c.document["delta_s"].as<double>();
+  c.delta = delta;
   require(std::isfinite(c.delta), "delta_s must be finite");
-  c.status = c.document["status"].as<std::string>("unspecified");
-  c.valid_for = c.document["valid_for"].as<std::string>("unspecified");
+  c.status = std::move(status);
+  c.valid_for = std::move(valid_for);
   return c;
 }
 float coordinate(const Point &p, size_t axis) {

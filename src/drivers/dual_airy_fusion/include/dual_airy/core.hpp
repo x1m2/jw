@@ -1,5 +1,4 @@
 #pragma once
-#include <yaml-cpp/yaml.h>
 
 #include <array>
 #include <cstdint>
@@ -34,14 +33,15 @@ inline constexpr std::array<PointFieldLayout, 6> point_fields{{
 }};
 inline constexpr uint32_t timestamp_offset = point_fields.back().offset;
 struct Calibration {
-  YAML::Node document;
   // 后雷达 -> 前雷达，列向量 [p_F;1] = matrix * [p_R;1]；平移列单位为米。
   std::array<std::array<double, 4>, 4> matrix{};
   // 后雷达时间换算到前雷达：t_F = t_R + delta。与空间矩阵分开处理。
   double delta = 0;
   std::string status, valid_for;
 };
-Calibration load_calibration(const std::string &path);
+// ROS 2 数组参数按行存放 16 个数；验证规则与融合内部矩阵保持一致。
+Calibration load_calibration(const std::vector<double> &matrix, double delta,
+                             std::string status, std::string valid_for);
 // timestamp 位于第 18 字节，并非 8 字节对齐；用 memcpy 读取，兼容 ARM64。
 struct Point {
   std::array<uint8_t, point_bytes> bytes{};

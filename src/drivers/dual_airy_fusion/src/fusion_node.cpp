@@ -22,8 +22,11 @@ class FusionNode : public rclcpp::Node {
  public:
   FusionNode()
       : Node("dual_airy_fusion_node"),
-        buffer_(load_calibration(declare_parameter<std::string>(
-            "extrinsics_file", "config/dual_airy_fusion.yaml"))) {
+        buffer_(load_calibration(
+            declare_parameter<std::vector<double>>("T_front_rear", std::vector<double>{}),
+            declare_parameter<double>("delta_s", 0.0),
+            declare_parameter<std::string>("status", "unspecified"),
+            declare_parameter<std::string>("valid_for", "unspecified"))) {
     front_topic_ =
         declare_parameter<std::string>("front_topic", "/rslidar_front/points");
     rear_topic_ =

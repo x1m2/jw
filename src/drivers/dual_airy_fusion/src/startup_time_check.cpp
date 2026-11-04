@@ -1,8 +1,12 @@
 #include "dual_airy/startup_time_check.hpp"
 
+#include <yaml-cpp/yaml.h>
+
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -163,18 +167,26 @@ StartupTimeCheck::State StartupTimeCheck::poll() {
   // 至少观察 12 s 才交接；只改会话副本的 delta 和诊断元数据，原矩阵不变。
   // 17 位有效数字保留矩阵精度；输入 YAML 不被覆盖。
   if (report["state"] == "ready" && elapsed >= 12.) {
-    auto cfg = YAML::Clone(config_.document);
-    cfg["delta_s"] = report["delta_s"].get<double>();
-    cfg["time_source"] = "integrated_cpp_grouped_startup_check";
-    cfg["input_config_valid_for"] = config_.valid_for;
-    cfg["valid_for"] =
+    const double delta = report["delta_s"].get<double>();
+    const std::string valid_for =
         "Same rigid mounting as input calibration; current startup-check clock "
         "session only";
-    cfg["time_notes"] =
-        "Effective receive offset includes differential delivery delay; "
-        "restart after sensor reset.";
-    cfg["startup_time_check"] = YAML::Load(report.dump());
     if (!output_.empty()) {
+      // 会话文件可直接通过 --params-file 或 config_file 再次加载。
+      // 诊断详情保存在旁边的 .timing.json，不混入 ROS 参数。
+      // 保留小数点，避免 0.0/1.0 被输出成整数，导致 ROS 拒绝混合类型数组。
+      const auto float_scalar = [](double value) {
+        std::ostringstream text;
+        text << std::setprecision(17) << std::showpoint << value;
+        return text.str();
+      };
+      YAML::Node cfg;
+      auto params = cfg["/**"]["ros__parameters"];
+      for (const auto &row : config_.matrix)
+        for (double value : row) params["T_front_rear"].push_back(float_scalar(value));
+      params["delta_s"] = float_scalar(delta);
+      params["status"] = config_.status;
+      params["valid_for"] = valid_for;
       YAML::Emitter out;
       out.SetDoublePrecision(17);
       out << cfg;
@@ -187,9 +199,8 @@ StartupTimeCheck::State StartupTimeCheck::poll() {
       }
       std::filesystem::rename(temporary, output_);
     }
-    config_.delta = report["delta_s"].get<double>();
-    config_.valid_for = cfg["valid_for"].as<std::string>();
-    config_.document = cfg;
+    config_.delta = delta;
+    config_.valid_for = valid_for;
     state_ = State::Ready;
     RCLCPP_DEBUG(node_.get_logger(), "Startup time check passed: delta_s=%+.9f",
                 config_.delta);
