@@ -1,7 +1,7 @@
 /**:
   ros__parameters:
       # P3 Airy96机器人外形尺寸，单位m。
-      robot_width: 0.70
+      robot_width: 0.60
       robot_length: 1.10
 
       # 雷达输入；stop的zones通过front/rear名称引用。

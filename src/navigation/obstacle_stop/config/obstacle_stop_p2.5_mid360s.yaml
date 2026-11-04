@@ -15,10 +15,10 @@
 
     # 内部栅格对同一位置的点去重，不发布为导航costmap。
     # 每格在当前帧内达到此有效点数才占用；高度跨度不作触发门槛。
-    min_points_per_cell: 1
-    grid_resolution: 0.05
-    grid_width: 80
-    grid_height: 50
+    min_points_per_cell: 2
+    grid_resolution: 0.03
+    grid_width: 100
+    grid_height: 100
 
     # 区域厚度沿车体轴计算；前后基准为雷达原点，左右基准为车身侧边。
     zones:
@@ -27,23 +27,23 @@
         sources: [front]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 1
+        obstacle_cell_threshold: 3
       rear:
         enabled: false
         sources: [rear]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 1
+        obstacle_cell_threshold: 3
       left:
         enabled: true
         sources: [front]
         stop_distance: 0.10
-        obstacle_cell_threshold: 1
+        obstacle_cell_threshold: 3
       right:
         enabled: true
         sources: [front]
         stop_distance: 0.10
-        obstacle_cell_threshold: 1
+        obstacle_cell_threshold: 3
 
     linear_velocity_factor: 0.40
     angular_velocity_factor: 1.0
