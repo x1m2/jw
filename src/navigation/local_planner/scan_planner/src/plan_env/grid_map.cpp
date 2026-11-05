@@ -143,6 +143,7 @@ void GridMap::initMap(rclcpp::Node *node)
 
   if (mp_.sensor_type_ == "depth")
   {
+#if 0  // Temporarily disabled while cv_bridge is commented out.
     depth_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>();
     depth_pose_sub_ = std::make_shared<message_filters::Subscriber<nav_msgs::msg::Odometry>>();
     depth_sub_->subscribe(node_, "depth", rmw_qos_profile_sensor_data);
@@ -152,6 +153,7 @@ void GridMap::initMap(rclcpp::Node *node)
         SyncPolicyImagePose(100), *depth_sub_, *depth_pose_sub_));
     sync_image_pose_->registerCallback(
         std::bind(&GridMap::depthPoseCallback, this, std::placeholders::_1, std::placeholders::_2));
+#endif
   }
   else if (mp_.sensor_type_ == "lidar")
   {
@@ -788,6 +790,7 @@ void GridMap::updateOccupancyCallback()
   md_.use_cloud_update_ = false;
 }
 
+#if 0  // Temporarily disabled while cv_bridge is commented out.
 void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &img,
                                 const nav_msgs::msg::Odometry::ConstSharedPtr &pose)
 {
@@ -850,6 +853,8 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
     md_.occ_need_update_ = false;
   }
 }
+
+#endif
 
 void GridMap::sensorPoseCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &pose_msg)
 {

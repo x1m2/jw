@@ -19,7 +19,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(cv_bridge REQUIRED)
+# find_package(cv_bridge REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(message_filters REQUIRED)
@@ -39,7 +39,8 @@ find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 set(ros_dependencies
-  ament_index_cpp cv_bridge geometry_msgs message_filters nav_msgs navigation_interfaces pcl_conversions
+  # cv_bridge  # Temporarily disabled with depth image input.
+  ament_index_cpp geometry_msgs message_filters nav_msgs navigation_interfaces pcl_conversions
   rclcpp sensor_msgs std_msgs std_srvs tf2 tf2_geometry_msgs tf2_ros visualization_msgs)
 
 # Compile all SCAN modules into the executable; OTA need not deploy separate
