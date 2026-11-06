@@ -1,8 +1,7 @@
-uart_name="/dev/ttyUSB0"
+#!/usr/bin/env bash
+set -e
 
-sudo chmod 666 $uart_name
-
-colcon build
-source ./install/setup.bash
-
-ros2 run uwb_aoa_pkg libAoa_robot_example $uart_name
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+source "/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+source ../../install/setup.bash
+exec ros2 run uwb_aoa_pkg libAoa_robot_example /dev/ttyFT232
