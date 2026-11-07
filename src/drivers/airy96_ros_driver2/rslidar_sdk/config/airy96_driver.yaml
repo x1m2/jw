@@ -20,7 +20,7 @@ lidar:
 
       min_distance: 0.2            #  Minimum distance of point cloud
       max_distance: 200            #  Maximum distance of point cloud (Note that: 200 normally, 300 for RSEMX)
-      use_lidar_clock: true        #  true--Use the lidar clock as the message timestamp
+      use_lidar_clock: false        #  true--Use the lidar clock as the message timestamp
                                    #  false-- Use the system clock as the timestamp
       dense_points: false          #  true: discard NAN points; false: reserve NAN points
       
@@ -53,7 +53,7 @@ lidar:
 
       min_distance: 0.2
       max_distance: 200
-      use_lidar_clock: true
+      use_lidar_clock: false
       dense_points: false
 
       ts_first_point: true

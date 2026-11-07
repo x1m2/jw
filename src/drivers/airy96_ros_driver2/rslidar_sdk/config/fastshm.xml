@@ -31,7 +31,7 @@
 
     </data_reader>
 
-    <data_writer profile_name="/rslidar_points">
+    <data_writer profile_name="/rslidar_front/points">
 
         <qos>
             <publishMode>
@@ -47,7 +47,35 @@
 
     </data_writer>
 
-    <data_reader profile_name="/rslidar_points">
+    <data_reader profile_name="/rslidar_front/points">
+
+        <qos>
+            <data_sharing>
+                <kind>AUTOMATIC</kind>
+            </data_sharing>
+        </qos>
+
+        <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+
+    </data_reader>
+
+    <data_writer profile_name="/rslidar_rear/points">
+
+        <qos>
+            <publishMode>
+                <kind>ASYNCHRONOUS</kind>
+            </publishMode>
+
+            <data_sharing>
+                <kind>AUTOMATIC</kind>
+            </data_sharing>
+        </qos>
+
+        <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
+
+    </data_writer>
+
+    <data_reader profile_name="/rslidar_rear/points">
 
         <qos>
             <data_sharing>
