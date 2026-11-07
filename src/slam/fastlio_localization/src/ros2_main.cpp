@@ -50,15 +50,24 @@ void FastlioLocalizationNode::publish_cloud_world(
         &pubLaserCloudFull,
     PointCloudType::Ptr laserCloud, const state_ikfom &state,
     const double &lidar_end_time) {
+  Timer publish_timer;
   PointCloudType::Ptr laserCloudWorld(
       new PointCloudType(laserCloud->size(), 1));
   pointcloudLidarToWorld(laserCloud, laserCloudWorld, state);
   publish_cloud(pubLaserCloudFull, laserCloudWorld, lidar_end_time, map_frame);
+  const double publish_ms = publish_timer.elapsedStart();
+  if (publish_ms > 50.0) {
+    RCLCPP_WARN(get_logger(),
+                "[CLOUD_WORLD_PUBLISH_TIME_WARN] total=%.1f ms, points=%zu",
+                publish_ms, laserCloud->size());
+  }
 }
 
 void FastlioLocalizationNode::publish_cloud_body(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
     PointCloudType::Ptr cloud, const double &lidar_end_time) {
+  if (publisher->get_subscription_count() == 0) return;
+
   PointCloudType::Ptr cloud_body(new PointCloudType());
   pcl::transformPointCloud(*cloud, *cloud_body, T_base_lidar);
   publish_cloud(publisher, cloud_body, lidar_end_time, baselink_frame);
@@ -193,6 +202,9 @@ void FastlioLocalizationNode::publish_module_status(bool level) {
 void FastlioLocalizationNode::publish_imu_odometry(
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubImuOdom,
     const state_ikfom &state, const double &imu_time) {
+  const bool has_subscribers = pubImuOdom->get_subscription_count() != 0;
+  if (!has_subscribers && !imu_tf_broadcast) return;
+
   QD baselink_rot;
   V3D baselink_pos;
   compute_baselink_pose(state, baselink_rot, baselink_pos);
@@ -204,18 +216,22 @@ void FastlioLocalizationNode::publish_imu_odometry(
         baselink_pos.x(), baselink_pos.y(), baselink_pos.z());
   }
 
-  nav_msgs::msg::Odometry imuOdom;
-  imuOdom.header.frame_id = map_frame;
-  imuOdom.child_frame_id = baselink_frame;
-  imuOdom.header.stamp = rclcpp::Time(imu_time * 1e9);
-  set_posestamp(imuOdom.pose, baselink_rot, baselink_pos);
-  pubImuOdom->publish(imuOdom);
+  if (has_subscribers) {
+    nav_msgs::msg::Odometry imuOdom;
+    imuOdom.header.frame_id = map_frame;
+    imuOdom.child_frame_id = baselink_frame;
+    imuOdom.header.stamp = rclcpp::Time(imu_time * 1e9);
+    set_posestamp(imuOdom.pose, baselink_rot, baselink_pos);
+    pubImuOdom->publish(imuOdom);
+  }
   if (imu_tf_broadcast) publish_tf(baselink_rot, baselink_pos, imu_time);
 }
 
 void FastlioLocalizationNode::publish_imu_path(
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath, const QD &rot,
     const V3D &pos, const double &lidar_end_time) {
+  if (pubPath->get_subscription_count() == 0) return;
+
   static geometry_msgs::msg::PoseStamped msg_body_pose;
   set_posestamp(msg_body_pose, rot, pos);
   msg_body_pose.header.stamp = rclcpp::Time(lidar_end_time * 1e9);

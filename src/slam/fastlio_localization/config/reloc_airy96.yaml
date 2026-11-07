@@ -19,10 +19,10 @@ fastlio_localization:
         frontend_type: 0                    # frontend type
 
         # fastlio
-        point_skip_num: 4
+        point_skip_num: 6
         space_down_sample: true
         surf_frame_ds_res: 0.2
-        max_iteration: 5
+        max_iteration: 3
         ikdtree_resolution: 0.2
         lidar_model_search_range: 5.
         lidar_meas_cov: 0.001
