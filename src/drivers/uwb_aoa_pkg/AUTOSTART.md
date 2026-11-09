@@ -44,3 +44,11 @@ sudo systemctl disable --now uwb-aoa.service
 
 启动脚本只加载环境并启动节点，不执行编译。
 手动启动时需事先具备串口读写权限。
+
+卸载服务（停止节点、取消开机自启并删除服务配置）：
+
+```bash
+bash /home/jw/uwb_ws/src/uwb_aoa_pkg/uninstall_uwb_service.sh
+```
+
+卸载脚本会自动通过 sudo 提权，可重复执行；保留工作区及编译产物。

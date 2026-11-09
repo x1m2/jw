@@ -28,9 +28,8 @@ User=$run_user
 SupplementaryGroups=dialout
 WorkingDirectory=$script_dir
 Environment="ROS_DISTRO=${ROS_DISTRO:-humble}"
-# Privileged setup is restricted to the selected serial device.
-ExecStartPre=+/usr/bin/chgrp dialout /dev/ttyFT232
-ExecStartPre=+/usr/bin/chmod 660 /dev/ttyFT232
+# Prefer ttyUSB0, then ttyUSB1; retry startup if neither device exists.
+ExecStartPre=+/bin/bash -c 'for device in /dev/ttyUSB0 /dev/ttyUSB1; do if [[ -c "\$\$device" ]]; then /usr/bin/chgrp dialout "\$\$device" && /usr/bin/chmod 660 "\$\$device"; exit \$\$?; fi; done; echo "No UWB serial device found: /dev/ttyUSB0 or /dev/ttyUSB1" >&2; exit 1'
 ExecStart=/bin/bash "$script_dir/start_libAoa_robot.sh"
 Restart=on-failure
 RestartSec=5
