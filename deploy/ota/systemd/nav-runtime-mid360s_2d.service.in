@@ -1,10 +1,14 @@
 [Unit]
-Description=Navigation Runtime (MID360s 2D / Pure Pursuit)
+Description=Navigation Runtime (MID360s 2D / Terrain Filter / Costmap / Pure Pursuit)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+# Share one log session across failure retries; clear it after clean shutdown.
+RuntimeDirectory=nav-runtime-mid360s-2d
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
 
 # Run permission setup as root, including the map conversion helper.
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/lidar/livox_ros_driver2_node"
@@ -31,7 +35,11 @@ Group=@RUN_GROUP@
 Environment="HOME=@RUN_HOME@"
 Environment="OTA_ROOT=@OTA_ROOT@"
 WorkingDirectory=@OTA_ROOT@
+# Run the same preflight as manual startup after permissions are prepared.
+ExecStartPre=/bin/bash "@START_SCRIPT@" --check
 ExecStart=/bin/bash "@START_SCRIPT@"
+TimeoutStartSec=90
+ExecStopPost=/bin/bash "@START_SCRIPT@" --finish-session
 
 Restart=on-failure
 RestartSec=5
