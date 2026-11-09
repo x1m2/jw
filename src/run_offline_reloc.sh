@@ -6,7 +6,7 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MAP_DIR="${MAP_DIR:-${WORKSPACE_DIR}/map}"
 BAG_DIR=''
 SAVER="${SAVER:-${WORKSPACE_DIR}/../3rdparty/3d_bbs/test/build/saver}"
-ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/robot_param.yaml}"
+ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-}"
 LOG_ROOT="${LOG_ROOT:-${WORKSPACE_DIR}/log/offline_reloc}"
 SCAN_INDEX="${SCAN_INDEX:-100}"
 PLAY_RATE="${PLAY_RATE:-0.5}"
@@ -58,12 +58,14 @@ done
 case "${LIDAR_TYPE}" in
     airy)
         CONFIG_FILE=reloc_airy96.yaml
+        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p3_airy96.yaml}"
         LIDAR_TOPIC=/rslidar_points
         IMU_TOPIC=/rslidar_imu_data
         CLOUD_MSG_TYPE=sensor_msgs/msg/PointCloud2
         ;;
     mid360)
         CONFIG_FILE=reloc_mid360s.yaml
+        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p2.5_mid360s.yaml}"
         LIDAR_TOPIC=/livox/lidar
         IMU_TOPIC=/livox/imu
         CLOUD_MSG_TYPE=livox_ros_driver2/msg/CustomMsg

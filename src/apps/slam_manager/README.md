@@ -269,9 +269,11 @@ A -> B为map_connection时：
 task/region_obstacle_stop/<region_id>.yaml
 ```
 
-文件只允许覆盖`hard_stop_distance`、`slowdown_distance`、
-`obstacle_ratio_threshold`、`linear_velocity_factor`和
-`angular_velocity_factor`。文件不存在时使用`obstacle_stop.yaml`默认值。
+文件只允许覆盖`linear_velocity_factor`、`angular_velocity_factor`及
+`zones.front/rear/left/right`中的`stop_distance`、`slowdown_distance`和
+`obstacle_cell_threshold`；左右区仅支持停车，不允许设置`slowdown_distance`。
+文件不存在时使用所选机型的`obstacle_stop_p2.5_mid360s.yaml`或
+`obstacle_stop_p3_airy96.yaml`默认值。旧版区域停障YAML需要迁移到上述格式。
 `slam_manager`只校验区域ID、类型、几何和区域参数，不读取停障YAML；
 `obstacle_stop`启动时根据运行时拓扑中的区域ID直接读取并校验对应YAML，
 再根据机器人实时`map`位姿切换配置。已存在但内容非法的YAML会使停障Worker

@@ -12,6 +12,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(imu_stair_detector REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -25,6 +26,8 @@ find_package(yaml-cpp REQUIRED)
 add_executable(obstacle_stop_node
   src/obstacle_stop_node.cpp
   src/obstacle_stop.cpp
+  src/obstacle_stop_detection.cpp
+  src/obstacle_stop_visualization.cpp
   src/region_profile_loader.cpp
 )
 
@@ -42,6 +45,7 @@ ament_target_dependencies(obstacle_stop_node
   visualization_msgs
 )
 target_link_libraries(obstacle_stop_node
+  imu_stair_detector::imu_stair_detector
   Eigen3::Eigen
   nlohmann_json::nlohmann_json
   yaml-cpp
@@ -55,5 +59,14 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(obstacle_stop_geometry_test
+    test/obstacle_stop_geometry_test.cpp
+    src/region_profile_loader.cpp)
+  target_include_directories(obstacle_stop_geometry_test PRIVATE include)
+  target_link_libraries(obstacle_stop_geometry_test yaml-cpp)
+endif()
 
 ament_package()

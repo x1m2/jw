@@ -12,12 +12,12 @@ from launch_ros.substitutions import FindPackageShare
 def find_robot_param(package_share):
     current = os.path.abspath(package_share)
     while True:
-        candidate = os.path.join(current, 'src', 'config', 'robot_param.yaml')
+        candidate = os.path.join(current, 'src', 'config', 'p2.5_mid360s.yaml')
         if os.path.isfile(candidate):
             return candidate
         parent = os.path.dirname(current)
         if parent == current:
-            raise FileNotFoundError('Cannot find src/config/robot_param.yaml')
+            raise FileNotFoundError('Cannot find src/config/p2.5_mid360s.yaml')
         current = parent
 
 

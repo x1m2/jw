@@ -41,7 +41,7 @@ contains the P2 robot calibration.
 ros2 launch fastlio_localization run_launch.py \
   config_file:=reloc_airy96.yaml \
   map_path:=/path/to/map \
-  robot_param_file:=/path/to/airy_robot_param.yaml
+  robot_param_file:=/path/to/p3_airy96.yaml
 ros2 bag play /path/to/airy96_fastlio_20250604_222402 --rate 0.5
 ```
 
@@ -49,3 +49,12 @@ Check `/reloc_success` for successful relocalization and
 `/pose_stamped_localization` for the continuing pose output. The Airy
 `extrinsic_T/R` in the profile came from the mapping profile and must match
 the sensor that recorded the bag.
+
+## 机型参数与首次定位
+
+公共机器人参数分为 `src/config/p2.5_mid360s.yaml` 和
+`src/config/p3_airy96.yaml`，`robot_param_file` 可覆盖默认 MID360s 文件。
+使用 Airy 配置时须同时选择 P3 参数；离线重定位脚本按雷达类型自动选择。
+首次重定位成功后清除重定位期间的扫描缓存，避免定位结果因回放旧数据而延迟。
+日志记录输入延迟和位姿延迟，并对输入、回调和点云发布耗时超阈值的情况告警。
+本体点云、IMU里程计及IMU轨迹在无订阅且不需广播TF时跳过相应发布处理。

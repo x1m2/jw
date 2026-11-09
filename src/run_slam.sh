@@ -57,11 +57,13 @@ readonly AIRY_FASTDDS_PROFILE="${AIRY_SDK_DIR}/config/fastshm.xml"
 case "${LIDAR_TYPE}" in
     mid360)
         readonly FASTLIO_CONFIG="mapping_mid360s.yaml"
+        readonly ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p2.5_mid360s.yaml}"
         readonly PGO_CONFIG="pgo_mid360s.yaml"
         readonly LIDAR_DRIVER_NAME="Livox ROS Driver2"
         ;;
     airy)
         readonly FASTLIO_CONFIG="mapping_airy96.yaml"
+        readonly ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p3_airy96.yaml}"
         readonly PGO_CONFIG="pgo_airy96.yaml"
         readonly LIDAR_DRIVER_NAME="Airy96 ROS Driver"
         ;;
@@ -435,7 +437,7 @@ fi
 
 start_bg FASTLIO_PID "FAST-LIO" "${FASTLIO_LOG_FILE}" 3 \
     ros2 launch fast_lio mapping.launch.py fast_lio_use_rviz:=false \
-    config_file:="${FASTLIO_CONFIG}"
+    config_file:="${FASTLIO_CONFIG}" robot_param_file:="${ROBOT_PARAM_FILE}"
 
 start_bg PGO_PID "PGO SC" "${PGO_LOG_FILE}" 1 \
     ros2 launch pgo_sc run.launch.py pgo_use_rviz:=true data_dir:="${DATA_DIR}" \

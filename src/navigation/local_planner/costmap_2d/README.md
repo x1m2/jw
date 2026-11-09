@@ -73,8 +73,8 @@ rostopic echo /costmap
 - `lidar_frame`: 雷达坐标系 (默认: "livox_frame")
 
 ### 雷达外参与投影参数
-- `lidar_to_base_T`: `robot_param.yaml` 中的雷达位置 `[x, y, z]`，单位 m
-- `lidar_to_base_R`: `robot_param.yaml` 中的 `[roll, pitch, yaw]`，单位 rad
+- `lidar_to_base_T`: 机型参数 YAML（`p2.5_mid360s.yaml` / `p3_airy96.yaml`） 中的雷达位置 `[x, y, z]`，单位 m
+- `lidar_to_base_R`: 机型参数 YAML（`p2.5_mid360s.yaml` / `p3_airy96.yaml`） 中的 `[roll, pitch, yaw]`，单位 rad
 - `min_height/max_height`: 在 `base_link` 中保留的点云高度
 - `angle_min/angle_max/angle_increment`: 内部二维射线角度范围和分辨率
 - `range_min/range_max`: 点云有效距离范围

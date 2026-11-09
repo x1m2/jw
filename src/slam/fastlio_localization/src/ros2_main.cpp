@@ -50,15 +50,24 @@ void FastlioLocalizationNode::publish_cloud_world(
         &pubLaserCloudFull,
     PointCloudType::Ptr laserCloud, const state_ikfom &state,
     const double &lidar_end_time) {
+  Timer publish_timer;
   PointCloudType::Ptr laserCloudWorld(
       new PointCloudType(laserCloud->size(), 1));
   pointcloudLidarToWorld(laserCloud, laserCloudWorld, state);
   publish_cloud(pubLaserCloudFull, laserCloudWorld, lidar_end_time, map_frame);
+  const double publish_ms = publish_timer.elapsedStart();
+  if (publish_ms > 50.0) {
+    RCLCPP_WARN(get_logger(),
+                "[CLOUD_WORLD_PUBLISH_TIME_WARN] total=%.1f ms, points=%zu",
+                publish_ms, laserCloud->size());
+  }
 }
 
 void FastlioLocalizationNode::publish_cloud_body(
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &publisher,
     PointCloudType::Ptr cloud, const double &lidar_end_time) {
+  if (publisher->get_subscription_count() == 0) return;
+
   PointCloudType::Ptr cloud_body(new PointCloudType());
   pcl::transformPointCloud(*cloud, *cloud_body, T_base_lidar);
   publish_cloud(publisher, cloud_body, lidar_end_time, baselink_frame);
@@ -136,6 +145,9 @@ void FastlioLocalizationNode::publish_geometry_msgs(
       "%.5f, %.5f)",
       baselink_pos.x(), baselink_pos.y(), baselink_pos.z(), RAD2DEG(rpy.x()),
       RAD2DEG(rpy.y()), RAD2DEG(rpy.z()));
+  pose_delay_ms =
+      (now().seconds() - rclcpp::Time(robotPose.header.stamp).seconds()) *
+      1000.0;
   pub_robot_pose->publish(robotPose);
 
   slam_manager_interfaces::msg::LocalizationPose app_pose;
@@ -165,6 +177,9 @@ void FastlioLocalizationNode::publish_odometry(
   odomAftMapped.child_frame_id = baselink_frame;
   odomAftMapped.header.stamp = rclcpp::Time(lidar_end_time * 1e9);
   set_posestamp(odomAftMapped.pose, baselink_rot, baselink_pos);
+  pose_delay_ms =
+      (now().seconds() - rclcpp::Time(odomAftMapped.header.stamp).seconds()) *
+      1000.0;
   pubLidarOdom->publish(odomAftMapped);
   if (lidar_tf_broadcast)
     publish_tf(baselink_rot, baselink_pos, lidar_end_time);
@@ -187,6 +202,9 @@ void FastlioLocalizationNode::publish_module_status(bool level) {
 void FastlioLocalizationNode::publish_imu_odometry(
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubImuOdom,
     const state_ikfom &state, const double &imu_time) {
+  const bool has_subscribers = pubImuOdom->get_subscription_count() != 0;
+  if (!has_subscribers && !imu_tf_broadcast) return;
+
   QD baselink_rot;
   V3D baselink_pos;
   compute_baselink_pose(state, baselink_rot, baselink_pos);
@@ -198,18 +216,22 @@ void FastlioLocalizationNode::publish_imu_odometry(
         baselink_pos.x(), baselink_pos.y(), baselink_pos.z());
   }
 
-  nav_msgs::msg::Odometry imuOdom;
-  imuOdom.header.frame_id = map_frame;
-  imuOdom.child_frame_id = baselink_frame;
-  imuOdom.header.stamp = rclcpp::Time(imu_time * 1e9);
-  set_posestamp(imuOdom.pose, baselink_rot, baselink_pos);
-  pubImuOdom->publish(imuOdom);
+  if (has_subscribers) {
+    nav_msgs::msg::Odometry imuOdom;
+    imuOdom.header.frame_id = map_frame;
+    imuOdom.child_frame_id = baselink_frame;
+    imuOdom.header.stamp = rclcpp::Time(imu_time * 1e9);
+    set_posestamp(imuOdom.pose, baselink_rot, baselink_pos);
+    pubImuOdom->publish(imuOdom);
+  }
   if (imu_tf_broadcast) publish_tf(baselink_rot, baselink_pos, imu_time);
 }
 
 void FastlioLocalizationNode::publish_imu_path(
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath, const QD &rot,
     const V3D &pos, const double &lidar_end_time) {
+  if (pubPath->get_subscription_count() == 0) return;
+
   static geometry_msgs::msg::PoseStamped msg_body_pose;
   set_posestamp(msg_body_pose, rot, pos);
   msg_body_pose.header.stamp = rclcpp::Time(lidar_end_time * 1e9);
@@ -312,11 +334,10 @@ void FastlioLocalizationNode::sensor_data_process() {
 
       PointCloudType::Ptr cur_scan(new PointCloudType);
       *cur_scan = *slam.frontend->measures->lidar;
-      const V3D mean_acc =
-          System::mean_acceleration(*slam.frontend->measures);
+      const V3D mean_acc = System::mean_acceleration(*slam.frontend->measures);
       const double lidar_beg_time = slam.frontend->measures->lidar_beg_time;
-      slam.relocalization_thread = std::thread(
-          [this, cur_scan, lidar_beg_time, mean_acc]() {
+      slam.relocalization_thread =
+          std::thread([this, cur_scan, lidar_beg_time, mean_acc]() {
             if (slam.run_relocalization(cur_scan, lidar_beg_time, mean_acc)) {
               // Report completion even when offline playback is paused.
               publish_module_status(true);
@@ -333,7 +354,18 @@ void FastlioLocalizationNode::sensor_data_process() {
   }
 
 #ifdef MEASURES_BUFFER
+  if (first_relocalization) {
+    first_relocalization = false;
+    RCLCPP_INFO(
+        get_logger(),
+        "[RELOCALIZATION_CACHE] first success, clear measures_cache.size=%zu",
+        measures_cache.size());
+    measures_cache.clear();
+  }
   if (!measures_cache.empty()) {
+    RCLCPP_INFO(get_logger(),
+                "[RELOCALIZATION_CACHE] measures_cache.size=%zu before replay",
+                measures_cache.size());
     measures_cache.emplace_back(std::make_shared<MeasureCollection>());
     *measures_cache.back() = *slam.frontend->measures;
 
@@ -342,13 +374,10 @@ void FastlioLocalizationNode::sensor_data_process() {
 
       QD baselink_rot;
       V3D baselink_pos;
+      const double input_delay_ms =
+          (now().seconds() - slam.frontend->measures->lidar_end_time) * 1000.0;
       if (slam.run()) {
         const auto &state = slam.frontend->get_state();
-        LOG_INFO(
-            "location valid. feats_down = %d, match_score = %.3f, "
-            "cost time = %.1fms.",
-            slam.frontend->loger.feats_down_size,
-            slam.frontend->get_match_score(), slam.frontend->loger.total_time);
         // slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
         /******* Publish odometry *******/
@@ -383,6 +412,13 @@ void FastlioLocalizationNode::sensor_data_process() {
             publish_cloud(pubLaserCloudFull, slam.frontend->feats_down_world,
                           slam.frontend->measures->lidar_end_time, map_frame);
         }
+        LOG_INFO(
+            "location valid. feats_down = %d, match_score = %.3f, "
+            "cost time = %.1fms. "
+            "input_delay = %.1fms. pose_delay = %.1fms.",
+            slam.frontend->loger.feats_down_size,
+            slam.frontend->get_match_score(), slam.frontend->loger.total_time,
+            input_delay_ms, pose_delay_ms);
       } else {
         LOG_ERROR("location invalid!");
 #ifdef WORK
@@ -411,13 +447,10 @@ void FastlioLocalizationNode::sensor_data_process() {
   LOG_DEBUG("run fastlio");
   QD baselink_rot;
   V3D baselink_pos;
+  const double input_delay_ms =
+      (now().seconds() - slam.frontend->measures->lidar_end_time) * 1000.0;
   if (slam.run()) {
     const auto &state = slam.frontend->get_state();
-    LOG_INFO(
-        "location valid. feats_down = %d, match_score = %.3f, "
-        "cost time = %.1fms.",
-        slam.frontend->loger.feats_down_size, slam.frontend->get_match_score(),
-        slam.frontend->loger.total_time);
     // slam.frontend->loger.print_pose(state, "cur_imu_pose");
 
     if (last_pose_record) {
@@ -461,6 +494,12 @@ void FastlioLocalizationNode::sensor_data_process() {
         publish_cloud(pubLaserCloudFull, slam.frontend->feats_down_world,
                       slam.frontend->lidar_end_time, map_frame);
     }
+    LOG_INFO(
+        "location valid. feats_down = %d, match_score = %.3f, "
+        "cost time = %.1fms. "
+        "input_delay = %.1fms. pose_delay = %.1fms.",
+        slam.frontend->loger.feats_down_size, slam.frontend->get_match_score(),
+        slam.frontend->loger.total_time, input_delay_ms, pose_delay_ms);
   } else {
     LOG_ERROR("location invalid!");
 #ifdef WORK
@@ -481,13 +520,20 @@ void FastlioLocalizationNode::sensor_data_process() {
 
 void FastlioLocalizationNode::standard_pcl_cbk(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+  Timer callback_timer;
+  const double lidar_entry_delay_ms =
+      (now().seconds() - rclcpp::Time(msg->header.stamp).seconds()) * 1000.0;
+  if (lidar_entry_delay_ms > 200.0) {
+    RCLCPP_WARN(get_logger(),
+                "[LIDAR_ENTRY_DELAY_WARN] lidar_entry_delay=%.1f ms",
+                lidar_entry_delay_ms);
+  }
   static double last_time = 0;
   check_time_interval(
       last_time, msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9,
       1.0 / slam.frontend->lidar->scan_rate, "lidar_time_interval");
   LOG_DEBUG("lidar_handler");
 
-  Timer timer;
   pcl::PointCloud<ouster_ros::Point> pl_orig_oust;
   pcl::PointCloud<velodyne_ros::Point> pl_orig_velo;
   PointCloudType::Ptr scan(new PointCloudType());
@@ -519,6 +565,12 @@ void FastlioLocalizationNode::standard_pcl_cbk(
               get_logger(),
               "Airy requires x/y/z/intensity(float32), ring(uint16), "
               "timestamp(float64) PointCloud2 fields");
+          const double callback_ms = callback_timer.elapsedStart();
+          if (callback_ms > 100.0) {
+            RCLCPP_WARN(get_logger(),
+                        "[LIDAR_CALLBACK_TIME_WARN] total=%.1f ms",
+                        callback_ms);
+          }
           return;
         }
       }
@@ -529,6 +581,11 @@ void FastlioLocalizationNode::standard_pcl_cbk(
            !std::isfinite(pl_orig_velo.points.back().timestamp) ||
            pl_orig_velo.points.back().timestamp <= 0.0)) {
         RCLCPP_ERROR_ONCE(get_logger(), "Airy point timestamps are invalid");
+        const double callback_ms = callback_timer.elapsedStart();
+        if (callback_ms > 100.0) {
+          RCLCPP_WARN(get_logger(), "[LIDAR_CALLBACK_TIME_WARN] total=%.1f ms",
+                      callback_ms);
+        }
         return;
       }
       slam.frontend->lidar->velodyne_handler(pl_orig_velo, scan);
@@ -544,16 +601,28 @@ void FastlioLocalizationNode::standard_pcl_cbk(
       msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9, scan);
   LOG_DEBUG("lidar_process");
   sensor_data_process();
+  const double callback_ms = callback_timer.elapsedStart();
+  if (callback_ms > 100.0) {
+    RCLCPP_WARN(get_logger(), "[LIDAR_CALLBACK_TIME_WARN] total=%.1f ms",
+                callback_ms);
+  }
 }
 
 void FastlioLocalizationNode::livox_pcl_cbk(
     const livox_ros_driver2::msg::CustomMsg::SharedPtr msg) {
+  Timer callback_timer;
+  const double lidar_entry_delay_ms =
+      (now().seconds() - rclcpp::Time(msg->header.stamp).seconds()) * 1000.0;
+  if (lidar_entry_delay_ms > 200.0) {
+    RCLCPP_WARN(get_logger(),
+                "[LIDAR_ENTRY_DELAY_WARN] lidar_entry_delay=%.1f ms",
+                lidar_entry_delay_ms);
+  }
   static double last_time = 0;
   check_time_interval(
       last_time, msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9,
       1.0 / slam.frontend->lidar->scan_rate, "lidar_time_interval");
 
-  Timer timer;
   auto plsize = msg->point_num;
   PointCloudType::Ptr scan(new PointCloudType());
   PointCloudType::Ptr pl_orig(new PointCloudType());
@@ -577,6 +646,11 @@ void FastlioLocalizationNode::livox_pcl_cbk(
   slam.frontend->cache_pointcloud_data(
       msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9, scan);
   sensor_data_process();
+  const double callback_ms = callback_timer.elapsedStart();
+  if (callback_ms > 100.0) {
+    RCLCPP_WARN(get_logger(), "[LIDAR_CALLBACK_TIME_WARN] total=%.1f ms",
+                callback_ms);
+  }
 }
 
 void FastlioLocalizationNode::imu_cbk(
@@ -652,8 +726,7 @@ void FastlioLocalizationNode::initialPoseCallback(
 
   // T_map_imu = T_map_base * T_base_lidar * inverse(T_imu_lidar).
   Eigen::Matrix4d imu_pose_matrix = Eigen::Matrix4d::Identity();
-  imu_pose_matrix.topLeftCorner<3, 3>() =
-      quat.normalized().toRotationMatrix();
+  imu_pose_matrix.topLeftCorner<3, 3>() = quat.normalized().toRotationMatrix();
   imu_pose_matrix.topRightCorner<3, 1>() =
       Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
   imu_pose_matrix *= T_base_lidar;

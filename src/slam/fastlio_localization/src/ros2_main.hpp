@@ -100,6 +100,8 @@ class FastlioLocalizationNode : public rclcpp::Node {
   bool imu_tf_broadcast{false};
   bool use_gnss{false};
   std::atomic_bool stopping{false};
+  double pose_delay_ms{0.0};
+  bool first_relocalization{true};
 
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr
       sub_pcl1;
