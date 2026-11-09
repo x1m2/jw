@@ -1,5 +1,5 @@
 [Unit]
-Description=Navigation Runtime (MID360s)
+Description=Navigation Runtime (MID360s 3D / SCAN Planner)
 After=network-online.target
 Wants=network-online.target
 

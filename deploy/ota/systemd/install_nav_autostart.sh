@@ -2,11 +2,11 @@
 
 set -euo pipefail
 
-# Select the radar with the first argument: airy or mid360s.
+# Select the runtime profile: airy, mid360s_3d or mid360s_2d.
 LIDAR_TYPE="${1:-}"
 case "$LIDAR_TYPE" in
-  airy|mid360s) shift ;;
-  *) echo "Usage: bash $0 {airy|mid360s} [运行用户名] [OTA目录]" >&2; exit 1 ;;
+  airy|mid360s_3d|mid360s_2d) shift ;;
+  *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [运行用户名] [OTA目录]" >&2; exit 1 ;;
 esac
 if [[ $# -gt 2 ]]; then
   echo "[ERROR] 参数过多" >&2
@@ -97,7 +97,7 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 
 echo "[DONE] 已安装并启用：$SERVICE_NAME"
-echo "[INFO] 雷达类型：$LIDAR_TYPE"
+echo "[INFO] 启动方案：$LIDAR_TYPE"
 echo "[INFO] 运行用户：$RUN_USER"
 echo "[INFO] 启动脚本：$START_SCRIPT"
 echo "[INFO] 下次开机将自动启动"

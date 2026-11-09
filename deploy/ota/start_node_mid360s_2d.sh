@@ -1,4 +1,5 @@
 #!/bin/bash
+# MID360s 2D navigation: OTA main terrain_filter, costmap_2d and pure_pursuit.
 
 set -u
 CHECK_ONLY=false
@@ -38,13 +39,11 @@ NAV_DIR="$OTA_ROOT/nav/pack/content"
 MANAGER_DIR="$OTA_ROOT/slam_manager/pack/content"
 
 LIVOX_CONFIG="$SLAM_DIR/config/MID360s_driver.yaml"
-SLAM_FASTDDS_CONFIG="$SLAM_DIR/config/fastshm.xml"
 MAPPING_CONFIG="$SLAM_DIR/config/mapping_mid360s.yaml"
 LIVOX_JSON_CONFIG="$SLAM_DIR/config/MID360s_config.json"
-NAV_FASTDDS_CONFIG="$NAV_DIR/config/fastshm.xml"
 LOCALIZATION_CONFIG="$SLAM_DIR/config/reloc_mid360s.yaml"
 
-ROBOT_PARAM_CONFIG="$MANAGER_DIR/config/p2.5_mid360s.yaml"
+ROBOT_PARAM_CONFIG="$MANAGER_DIR/config/robot_param.yaml"
 NAV_SERVER_DIR="$MANAGER_DIR/nav_server"
 NAV_SERVER_CONFIG="$MANAGER_DIR/config/server.yaml"
 
@@ -66,10 +65,9 @@ set -u
 # remaining SLAM runtime libraries.
 export LD_LIBRARY_PATH="$SLAM_DIR/lib:$NAV_DIR/lib:$MANAGER_DIR/lib:/opt/ros/humble/lib:${LD_LIBRARY_PATH:-}"
 
-# MID360s uses Fast DDS and loads its XML profile before any ROS 2 process starts.
+# OTA main does not ship Fast DDS XML profiles; use the middleware defaults.
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTRTPS_DEFAULT_PROFILES_FILE="$SLAM_FASTDDS_CONFIG"
-export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+unset FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE RMW_FASTRTPS_USE_QOS_FROM_XML
 
 # ==================================================
 # Node binaries
@@ -82,7 +80,9 @@ BINARIES=(
 
   "$NAV_DIR/global_path_planner/global_path_planner_node"
   "$NAV_DIR/path_smoother/path_smoother_node"
-  "$NAV_DIR/scan_planner/scan_planner_node"
+  "$NAV_DIR/terrain_filter/terrain_filter_node"
+  "$NAV_DIR/costmap_2d/costmap_2d_node"
+  "$NAV_DIR/pure_pursuit/pure_pursuit_node"
   "$NAV_DIR/obstacle_stop/obstacle_stop_node"
 
   "$MANAGER_DIR/slam_manager/slam_manager_node"
@@ -95,10 +95,8 @@ BINARIES=(
 # ==================================================
 CONFIG_FILES=(
   "$LIVOX_CONFIG"
-  "$SLAM_FASTDDS_CONFIG"
   "$MAPPING_CONFIG"
   "$LIVOX_JSON_CONFIG"
-  "$NAV_FASTDDS_CONFIG"
   "$LOCALIZATION_CONFIG"
   "$ROBOT_PARAM_CONFIG"
   "$NAV_SERVER_CONFIG"
@@ -106,8 +104,10 @@ CONFIG_FILES=(
   "$SLAM_DIR/config/pgo_mid360s.yaml"
   "$NAV_DIR/config/global_path_planner_params.yaml"
   "$NAV_DIR/config/path_smoother.yaml"
-  "$NAV_DIR/config/scan_planner_params.yaml"
-  "$NAV_DIR/config/obstacle_stop_p2.5_mid360s.yaml"
+  "$NAV_DIR/config/terrain_filter.yaml"
+  "$NAV_DIR/config/costmap_2d.yaml"
+  "$NAV_DIR/config/pure_pursuit_params.yaml"
+  "$NAV_DIR/config/obstacle_stop.yaml"
 )
 
 # ==================================================
@@ -188,7 +188,9 @@ NODE_PATTERNS=(
   "fastlio_localization_node"
   "global_path_planner_node"
   "path_smoother_node"
-  "scan_planner_node"
+  "terrain_filter_node"
+  "costmap_2d_node"
+  "pure_pursuit_node"
   "obstacle_stop_node"
   "slam_manager_node"
   "nav_server_node"
@@ -203,7 +205,7 @@ stop_nodes()
   echo "[STOP] stopping runtime nodes..."
   echo "========================================"
 
-  for node in "${NODE_PATTERNS[@]}"; do
+  for node in "${NODE_PATTERNS[@]}" scan_planner_node; do
     if pgrep -f "$node" >/dev/null 2>&1; then
       echo "[STOP] SIGINT: $node"
       pkill -INT -f "$node" 2>/dev/null || true
@@ -212,7 +214,7 @@ stop_nodes()
 
   sleep 3
 
-  for node in "${NODE_PATTERNS[@]}"; do
+  for node in "${NODE_PATTERNS[@]}" scan_planner_node; do
     if pgrep -f "$node" >/dev/null 2>&1; then
       echo "[STOP] SIGTERM: $node"
       pkill -TERM -f "$node" 2>/dev/null || true
@@ -221,7 +223,7 @@ stop_nodes()
 
   sleep 2
 
-  for node in "${NODE_PATTERNS[@]}"; do
+  for node in "${NODE_PATTERNS[@]}" scan_planner_node; do
     if pgrep -f "$node" >/dev/null 2>&1; then
       echo "[STOP] SIGKILL: $node"
       pkill -KILL -f "$node" 2>/dev/null || true
@@ -392,15 +394,41 @@ stdbuf -oL -eL \
 sleep 1
 
 # ==================================================
-# SCAN Planner
+# Terrain Filter
 # ==================================================
-echo "[START] scan_planner"
+echo "[START] terrain_filter"
 
 stdbuf -oL -eL \
-  "$NAV_DIR/scan_planner/scan_planner_node" \
+  "$NAV_DIR/terrain_filter/terrain_filter_node" \
   --ros-args \
-  --params-file "$NAV_DIR/config/scan_planner_params.yaml" \
-  2>&1 | tee -a "$LOG_DIR/scan_planner.log" &
+  --params-file "$NAV_DIR/config/terrain_filter.yaml" \
+  2>&1 | tee -a "$LOG_DIR/terrain_filter.log" &
+
+sleep 1
+
+# ==================================================
+# Costmap 2D
+# ==================================================
+echo "[START] costmap_2d"
+
+stdbuf -oL -eL \
+  "$NAV_DIR/costmap_2d/costmap_2d_node" \
+  --ros-args \
+  --params-file "$NAV_DIR/config/costmap_2d.yaml" \
+  2>&1 | tee -a "$LOG_DIR/costmap_2d.log" &
+
+sleep 1
+
+# ==================================================
+# Pure Pursuit
+# ==================================================
+echo "[START] pure_pursuit"
+
+stdbuf -oL -eL \
+  "$NAV_DIR/pure_pursuit/pure_pursuit_node" \
+  --ros-args \
+  --params-file "$NAV_DIR/config/pure_pursuit_params.yaml" \
+  2>&1 | tee -a "$LOG_DIR/pure_pursuit.log" &
 
 sleep 1
 
@@ -409,11 +437,10 @@ sleep 1
 # ==================================================
 echo "[START] obstacle_stop"
 
-env FASTRTPS_DEFAULT_PROFILES_FILE="$NAV_FASTDDS_CONFIG" \
-  stdbuf -oL -eL \
+stdbuf -oL -eL \
   "$NAV_DIR/obstacle_stop/obstacle_stop_node" \
   --ros-args \
-  --params-file "$NAV_DIR/config/obstacle_stop_p2.5_mid360s.yaml" \
+  --params-file "$NAV_DIR/config/obstacle_stop.yaml" \
   --params-file "$ROBOT_PARAM_CONFIG" \
   2>&1 | tee -a "$LOG_DIR/obstacle_stop.log" &
 
