@@ -110,7 +110,10 @@ APP拼接地图时，只需将已经转换到统一`map`坐标系的PCD保存为
 服务响应通过`[NAVIGATION_MODE]`日志记录，设置`mode: 1`失败时不会启动导航Worker。
 暂停导航成功后同样发送一次`mode: 0`；继续导航时先发送一次`mode: 1`，成功后
 才恢复Pure Pursuit速度输出。继续失败时会回退发送`mode: 0`。配置
-`navigation.enable_set_mode: false`可统一禁用上述`/SetMode`调用。
+`navigation.enable_set_mode: false`会同时禁用`/SetMode`调用和`/GetState`检查，
+包括导航与UWB跟随启动/恢复前的状态检查，以及运行和暂停期间的状态轮询；
+不再因底层姿态状态或`/GetState`不可用而阻止启动、触发姿态停障或暂停。
+此参数在启动时读取，修改后需重启`slam_manager`；默认`true`保留上述行为。
 
 `navigation.default_edge_policy`提供全局默认边策略：
 `obstacle_avoidance_enabled`和`obstacle_avoidance_distance_m`。

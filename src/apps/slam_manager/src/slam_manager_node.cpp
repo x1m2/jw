@@ -216,9 +216,13 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       "/ble_follow_cmd", rclcpp::QoS(10).reliable(),
       std::bind(&SlamManagerNode::uwbFollowCommandCallback, this,
                 std::placeholders::_1), uwb_command_options);
-  robot_state_timer_ = create_wall_timer(
-      kRobotStatePollPeriod, std::bind(&SlamManagerNode::pollRobotState, this),
-      robot_control_callback_group_);
+  if (enable_set_mode_) {
+    robot_state_timer_ = create_wall_timer(
+        kRobotStatePollPeriod, std::bind(&SlamManagerNode::pollRobotState, this),
+        robot_control_callback_group_);
+  } else {
+    setPostureStop(false);
+  }
 
   // 协议2.10～2.13：Runtime统一对APP发布位姿、实时点云、关键帧和运行状态。
   runtime_state_pub_ = create_publisher<RuntimeState>(
@@ -1862,6 +1866,10 @@ void SlamManagerNode::handleNavigateToPoseAccepted(
 }
 
 bool SlamManagerNode::robotStateAllowsNavigation(std::string &message) {
+  if (!enable_set_mode_) {
+    message = "GetState check disabled by navigation.enable_set_mode";
+    return true;
+  }
   const auto timeout = std::chrono::duration<double>(kRobotStateTimeoutSec);
   if (!get_robot_state_client_->wait_for_service(timeout)) {
     message = std::string("robot state service '") + kRobotStateServiceName +
