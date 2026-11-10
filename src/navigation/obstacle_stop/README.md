@@ -59,13 +59,17 @@ stop内部车体坐标系固定为`base_link`，不提供`base_frame`参数。
 |---|---|---|---|
 | front | 前雷达外参原点X/Y | +X | robot_width |
 | rear | 后雷达外参原点X/Y | -X | robot_width |
-| left | 车体左侧Y=robot_width/2，X=0 | +Y | robot_length |
-| right | 车体右侧Y=-robot_width/2，X=0 | -Y | robot_length |
+| left | 车体左侧Y=robot_width/2 | +Y | 自动补齐前后停止区外沿，至少覆盖车长 |
+| right | 车体右侧Y=-robot_width/2 | -Y | 自动补齐前后停止区外沿，至少覆盖车长 |
 
 每个方向的检测起点在代码中固定为0，`stop_distance`为从基准向外延伸的停止区距离，
 `slowdown_distance`为接在停止区外侧的减速区厚度，单位m。
-前后区宽度直接使用实际车宽，左右区长度直接使用实际车长，不附加安全余量；
-左右检测起点从实际车体边缘计算。
+前后区宽度直接使用实际车宽；左右区厚度分别由对应的`stop_distance`配置，
+左右检测起点从实际车体边缘计算。左右区前端取车头边界与已启用前停止区外沿
+`front_lidar_x + zones.front.stop_distance`的较大值，后端取车尾边界与已启用后停止区外沿
+`rear_lidar_x - zones.rear.stop_distance`的较小值，补齐四角。未启用的前/后区不参与
+该端外沿计算，该端保留车身边界。减速区不参与长度计算。区域配置切换时自动重算，
+检测与可视化使用相同边界。例如P3默认左右区X范围为[-0.77, 0.77]m，长度1.54m。
 默认前后停止区从对应雷达原点延伸0~30cm，减速区接在外侧30~50cm；左右停止区距车侧0~10cm，在功能上仅有停止区，不支持减速区及其配置参数。
 高度按`base_link`中的`min_height`到`max_height`判断，不叠加雷达安装高度。
 栅格按格心归属区域，边界精度受栅格分辨率影响；停止/减速公共边界只归减速区。
