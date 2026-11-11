@@ -15,7 +15,7 @@ bash deploy/ota/start_node_mid360s_2d.sh
 方案说明：
 
 - `mid360s_3d`：原 `start_node_mid360s.sh`，使用 scan planner 和 Fast DDS XML 配置。
-- `mid360s_2d`：对应 OTA `nav/test/auto-start_2d`，使用 `terrain_filter + costmap_2d + pure_pursuit`，停障配置为 `obstacle_stop.yaml`；各节点共用 SLAM 的 `fastshm.xml`。
+- `mid360s_2d`：对应 OTA `nav/test/auto-start_2d`，使用 `terrain_filter + costmap_2d + pure_pursuit`，停障配置为 `obstacle_stop_p2.5_mid360s.yaml`；各节点共用 SLAM 的 `fastshm.xml`。
 - `airy`：Airy 雷达方案。
 
 默认 OTA 目录为 `/home/jw/ota`；可通过 `OTA_ROOT=/路径` 指定。加 `--check` 只检查文件，不启动节点。
@@ -105,3 +105,5 @@ OTA_ROOT=/home/jw/ota bash deploy/ota/update_ota_from_install.sh /home/jw/robot_
 - 2D 启动需要 Python 3 与 PyYAML（ROS 2 环境通常已提供）。脚本将 `server.yaml` 中 `/robotfs` 的数据、日志和模块路径映射为部署路径，在数据目录的 `.runtime/` 下生成权限为 600 的 `server_mid360s_2d.yaml`（不放入日志导出目录）。原文件保留；参数规则仍引用原配置目录，参数修改继续写入 OTA 的真实 YAML。
 
 - 2D 服务的一次运行使用一个日志目录，失败后的 systemd 自动重试继续追加到同一目录。`supervisor.log` 记录每次启动尝试和退出原因，节点日志内也有尝试时间标记；正常停止或重启服务后，下次启动创建新目录。直接手动执行脚本则每次创建新目录。已有历史目录保留，不会自动删除。此行为需要重新安装更新后的 systemd 模板。
+
+- S01 的 MID360s 2D 停障使用 `obstacle_stop_p2.5_mid360s.yaml` 和 `p2.5_mid360s.yaml`。前方停止/减速厚度从雷达原点起算，左右停止距离从车身侧边起算；后方未启用，左右仅停车。旧区域的 `hard_stop_distance` / 占比阈值不能直接换算为方向栅格阈值，需在新版客户端恢复默认后重新设置。客户端和服务端需同步更新。
