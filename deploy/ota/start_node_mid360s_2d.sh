@@ -82,7 +82,7 @@ CONFIG_FILES=(
   "$MAPPING_CONFIG" "$LOCALIZATION_CONFIG" "$ROBOT_PARAM_CONFIG"
   "$SLAM_DIR/config/pgo_mid360s.yaml"
   "$NAV_DIR/config/terrain_filter.yaml"
-  "$NAV_DIR/config/obstacle_stop.yaml"
+  "$NAV_DIR/config/obstacle_stop_p2.5_mid360s.yaml"
   "$NAV_DIR/config/costmap_2d.yaml"
   "$NAV_DIR/config/global_path_planner_params.yaml"
   "$NAV_DIR/config/path_smoother.yaml"
@@ -292,7 +292,7 @@ start_node localization "$SLAM_LIB_PATH" "$SLAM_DIR/localization/fastlio_localiz
 start_node terrain_filter "$NAV_LIB_PATH" "$NAV_DIR/terrain_filter/terrain_filter_node" \
   --ros-args --params-file "$NAV_DIR/config/terrain_filter.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node obstacle_stop "$NAV_LIB_PATH" "$NAV_DIR/obstacle_stop/obstacle_stop_node" \
-  --ros-args --params-file "$NAV_DIR/config/obstacle_stop.yaml" --params-file "$ROBOT_PARAM_CONFIG"
+  --ros-args --params-file "$NAV_DIR/config/obstacle_stop_p2.5_mid360s.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node costmap_2d "$NAV_LIB_PATH" "$NAV_DIR/costmap_2d/costmap_2d_node" \
   --ros-args --params-file "$NAV_DIR/config/costmap_2d.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node global_path_planner "$NAV_LIB_PATH" "$NAV_DIR/global_path_planner/global_path_planner_node" \
