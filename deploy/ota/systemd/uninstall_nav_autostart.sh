@@ -17,8 +17,10 @@ if [ "$LOAD_STATE" != "not-found" ] || [ -e "$SERVICE_FILE" ] || [ -L "$SERVICE_
   systemctl disable "$SERVICE_NAME"
 fi
 
+# Remove the fixed restart grant installed with this service.
+rm -f -- /etc/sudoers.d/nav-runtime-restart
 rm -f -- "$SERVICE_FILE"
 systemctl daemon-reload
 
 echo "[DONE] 已停止并卸载：$SERVICE_NAME"
-echo "[INFO] 已取消开机启动；OTA 程序、配置和运行数据已保留"
+echo "[INFO] 已取消开机启动及客户端重启授权；OTA 程序、配置和运行数据已保留"

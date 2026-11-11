@@ -31,6 +31,37 @@ sudo bash deploy/ota/systemd/install_nav_autostart.sh mid360s_2d
 ```
 
 默认使用 sudo 调用者及其主目录下的 `ota`。自定义时在雷达参数后加 `用户名 OTA目录`。
+安装器同时为运行用户配置客户端免密重启权限，三个方案共用此流程。
+板端需要安装 `sudo`（包含 `visudo`）；权限校验失败会中止安装。
+授权文件为 `/etc/sudoers.d/nav-runtime-restart`，仅允许固定命令：
+
+```bash
+/usr/bin/systemctl --no-block restart nav-runtime.service
+```
+
+授权不包含其他服务或任意命令；服务仍按指定用户运行。重复安装时替换原运行用户的授权，
+运行用户为 root 时无需授权并清理旧规则。安装器不会立即启动或重启服务。
+
+已有板子只补装重启权限时，先确认服务的实际运行用户：
+
+```bash
+systemctl show nav-runtime.service --property=User --value
+# 以下 jw 替换为上面输出的用户
+sudo bash deploy/ota/systemd/install_runtime_restart_permission.sh jw
+```
+
+检查配置或权限，不实际重启：
+
+```bash
+bash deploy/ota/systemd/install_runtime_restart_permission.sh --check jw
+# 以下命令以服务运行用户执行
+sudo -n -l -- /usr/bin/systemctl --no-block restart nav-runtime.service
+```
+
+`--check` 仅检查待生成规则的语法；第二条命令检查当前已安装的授权。
+首次安装或补装授权需要管理员权限，以后通过客户端重启无需输入密码。
+卸载自启动时同步移除上述授权，保留 OTA 程序和数据。
+
 安装后执行：
 
 ```bash

@@ -16,6 +16,7 @@ SERVICE_NAME="nav-runtime.service"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_FILE="$SCRIPT_DIR/nav-runtime-${LIDAR_TYPE}.service.in"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
+PERMISSION_INSTALLER="$SCRIPT_DIR/install_runtime_restart_permission.sh"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "[ERROR] 请使用 sudo 执行：sudo bash $0 $LIDAR_TYPE [运行用户名] [OTA目录]"
@@ -76,6 +77,13 @@ if ! runuser -u "$RUN_USER" -- test -x "$OTA_ROOT"; then
   exit 1
 fi
 
+# Validate permission dependencies and policy before changing the installed unit.
+if [[ ! -f "$PERMISSION_INSTALLER" ]]; then
+  echo "[ERROR] 重启权限安装脚本不存在：$PERMISSION_INSTALLER" >&2
+  exit 1
+fi
+bash "$PERMISSION_INSTALLER" --check "$RUN_USER"
+
 TEMP_SERVICE="$(mktemp)"
 trap 'rm -f "$TEMP_SERVICE"' EXIT
 
@@ -91,6 +99,8 @@ sed \
   -e "s|@START_SCRIPT@|$(escape_sed_replacement "$START_SCRIPT")|g" \
   "$TEMPLATE_FILE" > "$TEMP_SERVICE"
 
+# Use exactly the same user as User= in the rendered service. Abort on failure.
+bash "$PERMISSION_INSTALLER" "$RUN_USER"
 install -m 0644 "$TEMP_SERVICE" "$SERVICE_FILE"
 
 systemctl daemon-reload
@@ -100,6 +110,7 @@ echo "[DONE] 已安装并启用：$SERVICE_NAME"
 echo "[INFO] 启动方案：$LIDAR_TYPE"
 echo "[INFO] 运行用户：$RUN_USER"
 echo "[INFO] 启动脚本：$START_SCRIPT"
+echo "[INFO] 客户端重启权限已就绪"
 echo "[INFO] 下次开机将自动启动"
 echo "[INFO] 立即启动或应用更新：sudo systemctl restart $SERVICE_NAME"
 echo "[INFO] 查看状态：sudo systemctl status $SERVICE_NAME"
