@@ -19,7 +19,7 @@ fastlio_localization:
         frontend_type: 0                    # frontend type
 
         # fastlio
-        point_skip_num: 6
+        point_skip_num: 4
         space_down_sample: true
         surf_frame_ds_res: 0.2
         max_iteration: 3
