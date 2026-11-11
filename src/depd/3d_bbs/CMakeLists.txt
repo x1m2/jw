@@ -1,67 +1,49 @@
-cmake_minimum_required(VERSION 3.5)
-project(bbs3d)
+cmake_minimum_required(VERSION 3.16)
+project(bbs3d LANGUAGES CXX)
 
-## find thirdparty/Eigen or Eigen3 package
-option(USE_THIRDPARTY_EIGEN "Include thirdparty eigen" OFF)
-file(GLOB entries "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/Eigen/*")
-list(LENGTH entries num_entries)
-message(STATUS "num_entries in thirdparty/Eigen: ${num_entries}")
-if(num_entries EQUAL 0)
-  find_package(Eigen3 REQUIRED)
-else()
-  set(USE_THIRDPARTY_EIGEN ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
+option(BUILD_OPENCL "Build the dense OpenCL backend" ON)
+option(BUILD_BBS_TEST_TOOLS "Build standalone localization and voxel map tools" ON)
 
-## find OpenMP
-find_package(OpenMP)
-if (OPENMP_FOUND)
-  set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-endif()
+find_package(Eigen3 REQUIRED)
+find_package(OpenMP REQUIRED)
+find_package(Boost REQUIRED COMPONENTS filesystem system)
 
-## find CUDA
-option(BUILD_CUDA "Build GPU ver" ON)
-if (BUILD_CUDA)
-  find_package(CUDA REQUIRED)
-  include_directories(${CUDA_INCLUDE_DIRS})
-  link_directories(${CUDA_LIBRARY_DIRS})
-endif()
-
-# Common include directories
-if(USE_THIRDPARTY_EIGEN)
-  include_directories(thirdparty/Eigen)
-  message(STATUS "Use thirdparty Eigen")
-else()
-  include_directories(${EIGEN3_INCLUDE_DIR})
-  message(STATUS "Use EIGEN3_INCLUDE_DIR")
-endif()
-
-include_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}/bbs3d/include
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/bbs3d/include>
-  $<INSTALL_INTERFACE:include>
-)
-
-add_library(cpu_bbs3d
-  SHARED
+add_library(cpu_bbs3d SHARED
   bbs3d/src/cpu_bbs3d/bbs3d.cpp
   bbs3d/src/cpu_bbs3d/voxelmaps.cpp
-  bbs3d/src/cpu_bbs3d/voxelmaps_io.cpp
-)
+  bbs3d/src/cpu_bbs3d/voxelmaps_io.cpp)
+target_include_directories(cpu_bbs3d PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/bbs3d/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(cpu_bbs3d PUBLIC cxx_std_17)
+target_link_libraries(cpu_bbs3d PUBLIC Eigen3::Eigen OpenMP::OpenMP_CXX
+  PRIVATE Boost::filesystem Boost::system)
+install(TARGETS cpu_bbs3d LIBRARY DESTINATION lib)
+install(DIRECTORY bbs3d/include/ DESTINATION include PATTERN opencl_bbs3d EXCLUDE)
 
-install(TARGETS cpu_bbs3d DESTINATION lib)
+if(BUILD_OPENCL)
+  if(EXISTS "/usr/hobot/lib/libOpenCL.so")
+    set(OpenCL_LIBRARY "/usr/hobot/lib/libOpenCL.so" CACHE FILEPATH "OpenCL runtime")
+  endif()
+  find_package(OpenCL REQUIRED)
+  set(kernel_dir "${CMAKE_CURRENT_SOURCE_DIR}/bbs3d/src/opencl_bbs3d")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${kernel_dir}/score.cl")
+  file(READ "${kernel_dir}/score.cl" DENSE_SCORE_CL)
+  configure_file("${kernel_dir}/score_source.hpp.in" generated/score_source.hpp @ONLY)
 
-if(BUILD_CUDA)
-  cuda_add_library(gpu_bbs3d
-    SHARED 
-    bbs3d/src/gpu_bbs3d/bbs3d.cu
-    bbs3d/src/gpu_bbs3d/calc_score.cu
-    bbs3d/src/gpu_bbs3d/voxelmaps.cu
-    bbs3d/src/gpu_bbs3d/stream_manager/check_error.cu
-    bbs3d/src/gpu_bbs3d/voxelmaps_io.cu
-  )
-
-  install(TARGETS gpu_bbs3d DESTINATION lib)
+  add_library(opencl_bbs3d SHARED bbs3d/src/opencl_bbs3d/bbs3d.cpp)
+  target_include_directories(opencl_bbs3d PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  target_link_libraries(opencl_bbs3d PUBLIC cpu_bbs3d PRIVATE OpenCL::OpenCL)
+  get_filename_component(opencl_runtime_dir "${OpenCL_LIBRARY}" DIRECTORY)
+  set_target_properties(opencl_bbs3d PROPERTIES
+    INSTALL_RPATH "$ORIGIN;${opencl_runtime_dir}")
+  install(TARGETS opencl_bbs3d LIBRARY DESTINATION lib)
+  install(DIRECTORY bbs3d/include/opencl_bbs3d DESTINATION include)
 endif()
 
-install(DIRECTORY bbs3d/include/ DESTINATION include)
+if(BUILD_BBS_TEST_TOOLS)
+  add_subdirectory(test)
+endif()

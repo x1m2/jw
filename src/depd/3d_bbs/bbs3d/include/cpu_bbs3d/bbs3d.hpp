@@ -19,6 +19,7 @@ struct AngularInfo {
 };
 
 class BBS3D {
+  friend struct BbsBenchmarkAccess;
 public:
   BBS3D();
   ~BBS3D();
