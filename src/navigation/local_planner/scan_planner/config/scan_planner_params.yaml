@@ -62,10 +62,10 @@
     manager.feasibility_tolerance: 0.5
     manager.planning_horizon: 3.5
     optimization.lambda_smooth: 1.0
-    optimization.lambda_collision: 1.0
+    optimization.lambda_collision: 2.0
     optimization.lambda_feasibility: 0.1
     optimization.lambda_fitness: 1.0
-    optimization.dist0: 0.2
+    optimization.dist0: 0.3
     optimization.max_vel: 0.75
     optimization.max_acc: 0.5
     optimization.order: 3
