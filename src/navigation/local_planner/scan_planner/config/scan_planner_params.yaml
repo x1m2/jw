@@ -55,7 +55,7 @@
     grid_map.skip_pixel: 2
     grid_map.visualization_interval: 1.0 # 仅显示限频，原版内部建图定时器仍为 50 ms。
 
-    manager.max_vel: 0.75
+    manager.max_vel: 1.0
     manager.max_acc: 0.5
     manager.max_jerk: 4.0
     manager.control_points_distance: 0.2
@@ -66,7 +66,7 @@
     optimization.lambda_feasibility: 0.1
     optimization.lambda_fitness: 1.0
     optimization.dist0: 0.3
-    optimization.max_vel: 0.75
+    optimization.max_vel: 1.0
     optimization.max_acc: 0.5
     optimization.order: 3
     optimization.vel_tolerance: 1.0
@@ -79,17 +79,17 @@
     closed_loop.kp_yaw: 1.5
     closed_loop.cross_track_gain: 0.6 # 横向误差转向增益，单位 (rad/s)/m；0 关闭。
     closed_loop.cross_track_max_wz: 0.15 # 附加纠偏角速度上限 rad/s，不替代原朝向控制限幅。
-    closed_loop.max_vx: 0.75
+    closed_loop.max_vx: 1.0 # 最大前后线速度，单位 m/s。
     closed_loop.max_vy: 0.0 # 禁止横向速度，Twist.linear.y 始终为 0。
-    closed_loop.max_vyaw: 1.0
+    closed_loop.max_vyaw: 1.0 # 最大角速度，单位 rad/s；代码硬上限为 1.0。
     closed_loop.odom_timeout: 0.5
 
     # 平台任务适配：真实位置到达后停止平移，再调整目标朝向并反馈 /nav_state。
-    closed_loop.finish_dist: 0.1
+    closed_loop.finish_dist: 0.1 # 到点位置容差，按 XY 平面距离判断，单位 m。
     closed_loop.terminal_enter_dist: 0.5
     closed_loop.terminal_max_vx: 0.3
     closed_loop.terminal_min_vx: 0.12 # XY未达标时的最低线速度幅值，仍受最大速度及朝向限制。
     closed_loop.terminal_max_wz: 0.45
     closed_loop.final_yaw_gain: 0.9
     closed_loop.final_yaw_min_wz: 0.35
-    closed_loop.yaw_tolerance: 0.26
+    closed_loop.yaw_tolerance: 0.26 # 到点航向容差，单位 rad；0.26 约为 14.9°。
