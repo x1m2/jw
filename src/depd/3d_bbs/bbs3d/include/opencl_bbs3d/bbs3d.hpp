@@ -12,6 +12,7 @@ class Scorer;
 struct SearchOptions {
  bool use_opencl=false;
  bool verify_gpu=false;
+ bool fallback_cpu=true;
  size_t batch_size=10000;
  size_t gpu_min_batch=1;
  size_t max_queue=0; // 0 matches the original CUDA implementation: no fixed queue cap

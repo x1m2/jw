@@ -55,6 +55,21 @@ targets=()
 missing=0
 identical=0
 
+# The bundled BBS build installs these beside the localization package. They
+# may not exist in an older OTA payload, so replacement-only scanning misses them.
+for filename in libcpu_bbs3d.so libopencl_bbs3d.so; do
+  source="$INSTALL_DIR/fastlio_localization/lib/$filename"
+  target="$OTA_ROOT/slam/pack/content/lib/$filename"
+  if [[ -f "$source" && ! -e "$target" ]]; then
+    if [[ -L "$target" ]]; then
+      echo "[ERROR] Refusing to overwrite OTA symlink: $target" >&2
+      exit 1
+    fi
+    sources+=("$source")
+    targets+=("$target")
+  fi
+done
+
 # Build the complete replacement list before copying. Multiple source matches
 # must contain identical bytes, otherwise stop without changing any payload.
 for module in nav slam slam_manager; do
@@ -80,9 +95,21 @@ for module in nav slam slam_manager; do
         # fi
         ;;
       lib)
-        while IFS= read -r -d '' candidate; do
-          candidates+=("$candidate")
-        done < <(find -L "$INSTALL_DIR" -type f -path '*/lib/*' -name "$filename" -print0)
+        # Match the BBS pair linked into this localization build, even if a
+        # separately installed bbs3d package contains another build of the libs.
+        case "$filename" in
+          libcpu_bbs3d.so|libopencl_bbs3d.so)
+            candidate="$INSTALL_DIR/fastlio_localization/lib/$filename"
+            if [[ -f "$candidate" ]]; then
+              candidates+=("$candidate")
+            fi
+            ;;
+        esac
+        if [[ ${#candidates[@]} -eq 0 ]]; then
+          while IFS= read -r -d '' candidate; do
+            candidates+=("$candidate")
+          done < <(find -L "$INSTALL_DIR" -type f -path '*/lib/*' -name "$filename" -print0)
+        fi
         ;;
       *)
         case "$component" in
@@ -137,9 +164,14 @@ for ((i=0; i<${#targets[@]}; i++)); do
   if ! "$DRY_RUN"; then
     # Keep the old inode valid for running binaries and loaded shared libraries.
     # Same-directory rename installs the complete file without ETXTBSY/truncation.
+    mkdir -p -- "$(dirname -- "${targets[i]}")"
     copy_target="$(mktemp "${targets[i]}.update.XXXXXX")"
     cp -- "${sources[i]}" "$copy_target"
-    chmod --reference="${targets[i]}" "$copy_target"
+    if [[ -e "${targets[i]}" ]]; then
+      chmod --reference="${targets[i]}" "$copy_target"
+    else
+      chmod 644 "$copy_target"
+    fi
     mv -fT -- "$copy_target" "${targets[i]}"
     copy_target=""
   fi

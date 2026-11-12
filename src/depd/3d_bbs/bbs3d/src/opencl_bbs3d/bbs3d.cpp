@@ -8,6 +8,8 @@
 namespace oclbbs {
 class ScoreMismatch:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 void CudaStyleSearch::cpu_scores(std::vector<Transform>& ts,size_t first,size_t count,const std::vector<cpu::AngularInfo>& angles,SearchResult& result){
+  if(options_.use_opencl && !options_.fallback_cpu)
+    throw std::runtime_error("OpenCL scoring unavailable and CPU fallback is disabled");
   double start=clock_ms();int threads=Access::threads(cpu_);
 #pragma omp parallel for num_threads(threads)
   for(int i=0;i<int(count);++i){auto& t=ts[first+i];t.score=Access::score(cpu_,t,angles[t.level],points_);}
