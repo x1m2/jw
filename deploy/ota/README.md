@@ -2,6 +2,10 @@
 
 以下命令在 `robot_ws` 根目录执行。程序保留在 OTA 目录的 `nav`、`slam`、`slam_manager` 中。
 
+`update_ota_from_install.sh` 仅更新 3D SCAN 部署及其公共组件；跳过旧 2D 的
+`terrain_filter`、`costmap_2d`、`pure_pursuit` 和 `uwb_follow_planner` 程序及专用库。
+搜索 XML 和动态库来源时也排除这些旧包。已有 2D 文件不会被删除。
+
 `/home/jw/ota/data/slam_data/current_runtime_log.txt` 按从旧到新保存最近五次
 运行的日志目录，每行带编号，最后一行标记“最新”。编号按保留的记录重新从 1 排起。
 同一会话的自动重试不重复占用记录；兼容已有的单行纯路径格式。
