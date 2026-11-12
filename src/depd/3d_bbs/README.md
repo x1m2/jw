@@ -80,6 +80,21 @@ For more information, you can check [docker_start.md](./docker/docker_start.md)
 
 ## 🌟 3D-BBS core source code
 ### Build and Install
+
+生成用于 OpenCL 重定位的地图转换程序（依赖 Eigen3、OpenMP、Boost 和 OpenCL 开发库）：
+
+```bash
+cd src/depd/3d_bbs
+./build_saver.sh
+./build/voxelmaps_saver /path/to/pcd_directory 1.0 6
+```
+
+脚本生成 `build/voxelmaps_saver`、`build/libcpu_bbs3d.so` 和
+`build/libopencl_bbs3d.so`，不编译 `opencl_test`，不执行系统安装。
+`voxelmaps_saver` 与 miao 分支同名，是独立命令行工具，地图生成仍在 CPU 上执行，生成的地图供 CPU/OpenCL
+重定位共用；分辨率和层级应与定位配置一致。可通过 `BUILD_JOBS=4` 设置并行数，
+通过 `BBS_BUILD_DIR=/path/to/build` 设置构建目录；额外参数传给 CMake。
+
 ```shell script
 # Note: If you are using Eigen3 below 3.4.0, git clone with --recursive
 git clone https://github.com/KOKIAOKI/3d_bbs.git
