@@ -29,7 +29,7 @@
 namespace slam_manager {
 
 struct TaskEdgePolicy {
-  double linear_velocity{0.5};
+  double linear_velocity{0.7};
   double angular_velocity{0.5};
   int8_t motion_direction{1};
   bool obstacle_stop_enabled{true};
