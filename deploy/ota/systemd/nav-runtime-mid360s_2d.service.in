@@ -1,0 +1,53 @@
+[Unit]
+Description=Navigation Runtime (MID360s 2D / Terrain Filter / Costmap / Pure Pursuit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Share one log session across failure retries; clear it after clean shutdown.
+RuntimeDirectory=nav-runtime-mid360s-2d
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
+
+# Run permission setup as root, including the map conversion helper.
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/lidar/livox_ros_driver2_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/fastlio_localization_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/voxelmaps_saver"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/mapping/fastlio_mapping_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/pgo_sc/pgo_sc_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/global_path_planner/global_path_planner_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/obstacle_stop/obstacle_stop_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/path_smoother/path_smoother_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/terrain_filter/terrain_filter_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/costmap_2d/costmap_2d_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/nav/pack/content/pure_pursuit/pure_pursuit_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam_manager/pack/content/nav_server/nav_server_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam_manager/pack/content/slam_manager/slam_manager_node"
+
+ExecStartPre=+/usr/bin/mkdir -p "/home/jw/ota/data/slam_data/log/runtime"
+# Keep the entire data tree writable by the runtime user, including data itself.
+ExecStartPre=+/usr/bin/chown -R @RUN_USER@:@RUN_GROUP@ "/home/jw/ota/data"
+ExecStartPre=+/usr/bin/chmod -R u+rwX,g+rwX,o+rX "/home/jw/ota/data"
+
+User=@RUN_USER@
+Group=@RUN_GROUP@
+Environment="HOME=@RUN_HOME@"
+Environment="OTA_ROOT=@OTA_ROOT@"
+WorkingDirectory=@OTA_ROOT@
+# Run the same preflight as manual startup after permissions are prepared.
+ExecStartPre=/bin/bash "@START_SCRIPT@" --check
+ExecStart=/bin/bash "@START_SCRIPT@"
+TimeoutStartSec=90
+ExecStopPost=/bin/bash "@START_SCRIPT@" --finish-session
+
+Restart=on-failure
+RestartSec=5
+# Let the shell handle graceful node shutdown first.
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

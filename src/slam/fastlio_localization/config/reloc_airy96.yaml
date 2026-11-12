@@ -22,7 +22,7 @@ fastlio_localization:
         point_skip_num: 4
         space_down_sample: true
         surf_frame_ds_res: 0.2
-        max_iteration: 5
+        max_iteration: 3
         ikdtree_resolution: 0.2
         lidar_model_search_range: 5.
         lidar_meas_cov: 0.001
@@ -103,6 +103,11 @@ fastlio_localization:
         ## Timeout [msec]
         # Enter the number as int
         bbs3d_timeout_msec: 0 # off: 0
+        # GPU scores BBS candidates; initialization/precision failures may use CPU.
+        bbs3d_backend: opencl # cpu / opencl
+        bbs3d_opencl_batch_size: 10000
+        bbs3d_opencl_fallback_cpu: true
+        bbs3d_opencl_verify: false
 
         ## Final align (evaluate the error)
         bbs3d_use_gicp: false

@@ -27,23 +27,23 @@
         sources: [front]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 5
       rear:
         enabled: false
         sources: [rear]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 5
       left:
         enabled: true
         sources: [front]
         stop_distance: 0.10
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 5
       right:
         enabled: true
         sources: [front]
         stop_distance: 0.10
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 5
 
     linear_velocity_factor: 0.40
     angular_velocity_factor: 1.0

@@ -1,5 +1,8 @@
 # uwb_follow_planner
 
+> 当前整机 UWB 跟随暂不可用：SCAN 适配已撤销，旧 PP 及其地图依赖未恢复。
+> 以下保留原有规划器说明；Manager 拒绝开始跟随，独立跟随脚本直接退出。
+
 Generates a dynamic person-following `PathWithPolicy` from LibAoa UWB
 range/bearing measurements and FAST-LIO2 mapping odometry.
 

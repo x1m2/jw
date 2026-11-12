@@ -1,5 +1,4 @@
 #include <rclcpp/rclcpp.hpp>
-#include <stdexcept>
 
 #include "system/System.hpp"
 
@@ -113,6 +112,10 @@ inline void load_parameters(rclcpp::Node::SharedPtr &node, System &slam,
     node->declare_parameter("bbs3d_max_scan_range", 100.0);
     node->declare_parameter("bbs3d_timeout_msec", 0);
     node->declare_parameter("bbs3d_use_gicp", false);
+    node->declare_parameter("bbs3d_backend", "opencl");
+    node->declare_parameter<int64_t>("bbs3d_opencl_batch_size", 10000);
+    node->declare_parameter("bbs3d_opencl_fallback_cpu", true);
+    node->declare_parameter("bbs3d_opencl_verify", false);
 
     bbs3d_option.tar_path = slam.map_path;
     node->get_parameter("bbs3d_min_level_res", bbs3d_option.min_level_res);
@@ -129,6 +132,10 @@ inline void load_parameters(rclcpp::Node::SharedPtr &node, System &slam,
     node->get_parameter("bbs3d_max_scan_range", bbs3d_option.max_scan_range);
     node->get_parameter("bbs3d_timeout_msec", bbs3d_option.timeout_msec);
     node->get_parameter("bbs3d_use_gicp", bbs3d_option.use_gicp);
+    node->get_parameter("bbs3d_backend", bbs3d_option.backend);
+    node->get_parameter("bbs3d_opencl_batch_size", bbs3d_option.opencl_batch_size);
+    node->get_parameter("bbs3d_opencl_fallback_cpu", bbs3d_option.opencl_fallback_cpu);
+    node->get_parameter("bbs3d_opencl_verify", bbs3d_option.opencl_verify);
     slam.relocalization->bbs3d.load_config(bbs3d_option);
 
     BnbOptions match_option;

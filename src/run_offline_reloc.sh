@@ -58,14 +58,14 @@ done
 case "${LIDAR_TYPE}" in
     airy)
         CONFIG_FILE=reloc_airy96.yaml
-        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p3_airy96.yaml}"
+        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/P3_airy96.yaml}"
         LIDAR_TOPIC=/rslidar_points
         IMU_TOPIC=/rslidar_imu_data
         CLOUD_MSG_TYPE=sensor_msgs/msg/PointCloud2
         ;;
     mid360)
         CONFIG_FILE=reloc_mid360s.yaml
-        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/p2.5_mid360s.yaml}"
+        ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/P2.5_mid360s.yaml}"
         LIDAR_TOPIC=/livox/lidar
         IMU_TOPIC=/livox/imu
         CLOUD_MSG_TYPE=livox_ros_driver2/msg/CustomMsg

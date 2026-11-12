@@ -41,7 +41,7 @@ contains the P2 robot calibration.
 ros2 launch fastlio_localization run_launch.py \
   config_file:=reloc_airy96.yaml \
   map_path:=/path/to/map \
-  robot_param_file:=/path/to/p3_airy96.yaml
+  robot_param_file:=/path/to/P3_airy96.yaml
 ros2 bag play /path/to/airy96_fastlio_20250604_222402 --rate 0.5
 ```
 
@@ -50,11 +50,50 @@ Check `/reloc_success` for successful relocalization and
 `extrinsic_T/R` in the profile came from the mapping profile and must match
 the sensor that recorded the bag.
 
-## 机型参数与首次定位
+## BBS OpenCL 后端
 
-公共机器人参数分为 `src/config/p2.5_mid360s.yaml` 和
-`src/config/p3_airy96.yaml`，`robot_param_file` 可覆盖默认 MID360s 文件。
-使用 Airy 配置时须同时选择 P3 参数；离线重定位脚本按雷达类型自动选择。
-首次重定位成功后清除重定位期间的扫描缓存，避免定位结果因回放旧数据而延迟。
-日志记录输入延迟和位姿延迟，并对输入、回调和点云发布耗时超阈值的情况告警。
-本体点云、IMU里程计及IMU轨迹在无订阅且不需广播TF时跳过相应发布处理。
+定位节点保持原来的名称、Manager/Worker 控制、重定位成功后的缓存清理、
+重力对齐及 NDT/GICP 精配准流程。只替换 BBS 粗定位中的候选搜索/评分后端。
+
+默认 `ENABLE_OPENCL_BBS=ON`，编译时从 `src/depd/3d_bbs` 同时构建 CPU 和
+OpenCL 库，不依赖机器上旧版的 BBS 安装。需要 Eigen3、OpenMP、Boost 和
+OpenCL 开发文件；机器人还需要厂商 OpenCL GPU 驱动。
+仅编译原 CPU 版本时可传 `-DENABLE_OPENCL_BBS=OFF`。
+
+Airy/MID360s 的定位 YAML 提供：
+
+```yaml
+bbs3d_backend: opencl                # cpu / opencl；缺省优先请求 OpenCL
+bbs3d_opencl_batch_size: 10000        # 1..65536
+bbs3d_opencl_fallback_cpu: true
+bbs3d_opencl_verify: false           # 对比验证时逐候选核对 CPU/GPU 评分，额外耗时
+```
+
+加载地图时初始化 GPU 地图一次，每轮重定位只更新源点云。GPU 地图的稠密
+占据数组仍受库内 128 MiB 上限及设备单次分配限制约束。
+初始化、GPU 运行或输入精度条件不满足时，允许回退则使用 CPU 并打印原因；
+禁止回退时初始化失败会阻止算法启动，运行阶段失败则本轮 BBS 返回失败。
+超时或匹配分数不足按原失败路径处理，不另起一轮 CPU 搜索重置超时。
+`bbs3d_timeout_msec` 沿用现有参数；批处理搜索在批次间检查超时，不是硬实时截止。
+
+`[BBS_RUNTIME]` 显示加载时的后端和 GPU 地图大小，`[BBS_SEARCH_STATS]`
+显示本轮实际使用的后端、搜索/内核耗时和 GPU 候选数。
+只看到 `requested=opencl` 不代表使用了 GPU，需检查 `active` 和 `gpu_candidates`。
+保留原 `input_delay`、`pose_delay` 等定位日志，不读取 miao 实验脚本的环境变量，
+也不引入点云抓取后退出或离线 bag 回放逻辑。
+
+构建示例（在已加载 ROS 和本工作区依赖的终端）：
+
+```bash
+colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=ON
+```
+
+OTA 更新脚本会补充 `install/fastlio_localization/lib/` 中新增的
+`libcpu_bbs3d.so`、`libopencl_bbs3d.so` 到 SLAM 的 `lib/`。
+OpenCL 系统运行库和厂商驱动使用板端现有安装，不从开发机复制。
+节点启用 OpenCL 编译后即依赖 OpenCL 动态库；若动态加载器无法加载它，
+进程尚未启动，不能使用程序内的 CPU 回退。无 OpenCL 运行库的设备应部署 CPU 构建。
+更新脚本仍保留 OTA YAML，需要在实际部署配置中核对上述参数。
+现有地图转换工具 `saver` 的部署路径保持不变。
+
+GPU 加速效果和厂商内核正确性需要在目标板使用同一地图和点云复测。

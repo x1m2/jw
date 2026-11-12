@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+      robot_model: "P2.5"
+      lidar_model: "MID360S"
+
+      # P2.5 MID360s机器人外形尺寸，单位m。
+      robot_width: 0.60
+      robot_length: 1.10
+
+      # 雷达输入；stop的zones通过front/rear名称引用。
+      lidars:
+        front:
+          enabled: true
+          topic: "/livox/lidar"
+          frame: "livox_frame"
+        rear:
+          enabled: false
+
+      # MID360s雷达坐标系在base_link中的位姿。
+      lidar_to_base_T: [0.28, 0.0, 0.10]      # [x, y, z]
+      lidar_to_base_R: [0.0, 0.363, 0.0]      # [roll, pitch, yaw]

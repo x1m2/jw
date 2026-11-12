@@ -31,6 +31,15 @@ colcon build --symlink-install \
 source install/setup.bash
 ```
 
+source /opt/ros/humble/setup.bash && \
+colcon build --symlink-install \
+  --cmake-args \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DQUATRO_TBB=ON \
+    -DROS_EDITION=ROS2 \
+    -DHUMBLE_ROS=humble && \
+source install/setup.bash
+
 ## 目录结构
 
 ```text

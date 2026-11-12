@@ -22,20 +22,23 @@ void ObstacleStop::initializeGridLookup() {
     const auto &zone = config_.zones[i];
     if (!zone.enabled) continue;
     auto &runtime = zone_runtime_[i];
-    const double ox = i == 0U ? lidar_to_base_.translation().x() :
-                      i == 1U ? rear_lidar_to_base_.translation().x() : 0.0;
-    const double oy = i == 0U ? lidar_to_base_.translation().y() :
-                      i == 1U ? rear_lidar_to_base_.translation().y() :
-                      (i == 2U ? 1.0 : -1.0) * config_.robot_width * 0.5;
-    const double span = i < 2U ? config_.robot_width : config_.robot_length;
-    runtime.hard_box = zoneRectangle(i, ox, oy, 0.0, zone.stop_distance, span);
     if (i < 2U) {
+      const auto &origin = i == 0U ? lidar_to_base_.translation()
+                                   : rear_lidar_to_base_.translation();
+      runtime.hard_box = zoneRectangle(i, origin.x(), origin.y(), 0.0,
+                                       zone.stop_distance, config_.robot_width);
       runtime.slow.emplace();
-      runtime.slow->box = zoneRectangle(i, ox, oy, zone.stop_distance,
-                                         *zone.slowdown_distance, span);
+      runtime.slow->box = zoneRectangle(i, origin.x(), origin.y(),
+          zone.stop_distance, *zone.slowdown_distance, config_.robot_width);
+      runtime.display_box = zoneRectangle(i, origin.x(), origin.y(), 0.0,
+          zone.stop_distance + *zone.slowdown_distance, config_.robot_width);
+    } else {
+      runtime.hard_box = sideStopRectangle(
+          i, config_.robot_width, config_.robot_length, zone.stop_distance,
+          config_.zones[0], config_.zones[1],
+          lidar_to_base_.translation().x(), rear_lidar_to_base_.translation().x());
+      runtime.display_box = runtime.hard_box;
     }
-    runtime.display_box = zoneRectangle(i, ox, oy, 0.0,
-                                         zone.stop_distance + zone.slowdown_distance.value_or(0.0), span);
     for (int my = 0; my < config_.grid_height; ++my) {
       const double y = (my - config_.grid_height * 0.5 + 0.5) * config_.grid_resolution;
       for (int mx = 0; mx < config_.grid_width; ++mx) {

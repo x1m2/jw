@@ -62,14 +62,12 @@ mkdir -p "${NAV_LOG_DIR}" "${RELOCALIZATION_DIR}"
 
 RELOCALIZATION_EXIT_CODE_FILE="${RELOCALIZATION_DIR}/relocalization_exit_code.txt"
 RELOCALIZATION_SUCCESS_FILE="${RELOCALIZATION_DIR}/relocalization_success.txt"
-NAVIGATION_CONFIRM_FILE="${RELOCALIZATION_DIR}/navigation_confirm.txt"
 SLAM_MANAGER_DIR="$(dirname "${DATA_DIR}")"
 WAIT_SCRIPT="${SLAM_MANAGER_DIR}/wait_reloc_success_$$.py"
 
 rm -f \
     "${RELOCALIZATION_EXIT_CODE_FILE}" \
     "${RELOCALIZATION_SUCCESS_FILE}" \
-    "${NAVIGATION_CONFIRM_FILE}" \
     "${WAIT_SCRIPT}"
 
 log_time() {
@@ -91,12 +89,10 @@ LOCALIZATION_PID=""
 WAIT_PID=""
 
 # 导航阶段节点 PID
-COSTMAP_PID=""
 GLOBAL_PLANNER_PID=""
 PATH_SMOOTHER_PID=""
-PURE_PURSUIT_PID=""
+SCAN_PLANNER_PID=""
 OBSTACLE_STOP_PID=""
-# TERRAIN_FILTER_PID=""
 TARGET_POINTS_VISUALIZER_PID=""
 NAVIGATION_STATE_MACHINE_PID=""
 
@@ -273,7 +269,7 @@ if wait "${WAIT_PID}"; then
     WAIT_PID=""
     rm -f "${WAIT_SCRIPT}"
     write_relocalization_result 0 1
-    info "重定位成功，等待 GUI 确认当前位置和朝向"
+    info "重定位成功，自动启动导航"
 else
     WAIT_PID=""
     rm -f "${WAIT_SCRIPT}"
@@ -283,25 +279,7 @@ else
     exit 1
 fi
 
-# GUI 读取上面的结果后弹出人工确认框，再写入 navigation_confirm.txt。
-CONFIRM_TIMEOUT_SEC=300
-CONFIRM_WAITED_SEC=0
-while [ ! -f "${NAVIGATION_CONFIRM_FILE}" ]; do
-    sleep 1
-    CONFIRM_WAITED_SEC=$((CONFIRM_WAITED_SEC + 1))
-    if [ "${CONFIRM_WAITED_SEC}" -ge "${CONFIRM_TIMEOUT_SEC}" ]; then
-        err "等待 GUI 确认重定位结果超时"
-        exit 1
-    fi
-done
-
-CONFIRM_VALUE="$(tr -d '[:space:]' < "${NAVIGATION_CONFIRM_FILE}")"
-if [ "${CONFIRM_VALUE}" != "1" ]; then
-    warn "用户未确认重定位结果，取消启动导航"
-    exit 1
-fi
-
-info "用户已确认重定位结果，开始启动导航节点"
+info "收到 /reloc_success=true，开始启动导航节点"
 
 # ==================================================
 # 启动导航节点
@@ -310,10 +288,6 @@ info "用户已确认重定位结果，开始启动导航节点"
 start_bg OBSTACLE_STOP_PID "obstacle_stop" \
     "${NAV_LOG_DIR}/obstacle_stop_$(log_time).log" 1 \
     ros2 launch obstacle_stop obstacle_stop.launch.py
-
-start_bg COSTMAP_PID "costmap_2d" \
-    "${NAV_LOG_DIR}/costmap_2d_$(log_time).log" 1 \
-    ros2 launch costmap_2d costmap_2d.launch.py
 
 start_bg GLOBAL_PLANNER_PID "global_path_planner" \
     "${NAV_LOG_DIR}/global_path_planner_$(log_time).log" 1 \
@@ -324,13 +298,17 @@ start_bg PATH_SMOOTHER_PID "path_smoother" \
     "${NAV_LOG_DIR}/path_smoother_$(log_time).log" 1 \
     ros2 launch path_smoother path_smoother.launch.py
 
-start_bg PURE_PURSUIT_PID "pure_pursuit" \
-    "${NAV_LOG_DIR}/pure_pursuit_$(log_time).log" 1 \
-    ros2 launch pure_pursuit pure_pursuit.launch.py
+start_bg SCAN_PLANNER_PID "scan_planner" \
+    "${NAV_LOG_DIR}/scan_planner_$(log_time).log" 1 \
+    ros2 launch scan_planner scan_planner.launch.py
 
-# start_bg TERRAIN_FILTER_PID "terrain_filter" \
-#     "${NAV_LOG_DIR}/terrain_filter_$(log_time).log" 3 \
-#     ros2 launch terrain_filter terrain_filter.launch.py
+if ! scan_start_reply="$(timeout 15s ros2 service call \
+    /scan_planner_worker/set_state slam_manager_interfaces/srv/SetWorkerState \
+    '{command: 1, session_id: 1}' 2>&1)" || \
+    [[ "${scan_start_reply}" != *"success=True"* ]]; then
+    err "启动 SCAN 失败: ${scan_start_reply}"
+    exit 1
+fi
 
 start_bg TARGET_POINTS_VISUALIZER_PID "target_points_visualizer" \
     "${NAV_LOG_DIR}/target_points_visualizer_$(log_time).log" 1 \
@@ -344,7 +322,7 @@ start_bg NAVIGATION_STATE_MACHINE_PID "navigation_state_machine" \
 
 # ==================================================
 # 导航保持运行：
-# run_nav.sh 统一负责重定位、人工确认后的导航启动和后台节点清理。
+# run_nav.sh 统一负责重定位成功后的导航启动和后台节点清理。
 # 该脚本保留旧的独立导航状态机流程；正式APP流程由SlamManager Action控制。
 # ==================================================
 info "导航后台节点已启动"

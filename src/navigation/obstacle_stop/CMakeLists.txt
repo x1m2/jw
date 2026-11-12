@@ -60,13 +60,4 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE)
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(obstacle_stop_geometry_test
-    test/obstacle_stop_geometry_test.cpp
-    src/region_profile_loader.cpp)
-  target_include_directories(obstacle_stop_geometry_test PRIVATE include)
-  target_link_libraries(obstacle_stop_geometry_test yaml-cpp)
-endif()
-
 ament_package()

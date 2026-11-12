@@ -1,0 +1,18 @@
+/**:
+  ros__parameters:
+      robot_model: "S01"
+      lidar_model: "MID360S"
+   #S01机型配置
+      robot_width: 0.6
+      robot_length: 0.70
+      lidar_to_base_T: [0.30, 0.0, 0.15]
+      lidar_to_base_R: [-0.027, 0.54, 0.0]
+
+      # 四区域stop直接使用MID360原始点云；车体尺寸和外参保留S01参数。
+      lidars:
+        front:
+          enabled: true
+          topic: "/livox/lidar"
+          frame: "livox_frame"
+        rear:
+          enabled: false

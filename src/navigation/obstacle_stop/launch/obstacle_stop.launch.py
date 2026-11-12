@@ -11,11 +11,11 @@ from launch_ros.actions import Node
 MODEL_FILES = {
     'p2.5_mid360s': (
         'obstacle_stop_p2.5_mid360s.yaml',
-        'p2.5_mid360s.yaml',
+        'P2.5_mid360s.yaml',
     ),
     'p3_airy96': (
         'obstacle_stop_p3_airy96.yaml',
-        'p3_airy96.yaml',
+        'P3_airy96.yaml',
     ),
 }
 
@@ -44,9 +44,7 @@ def launch_setup(context, package_share):
 
     obstacle_file, robot_file = MODEL_FILES[robot_model]
     config_file = os.path.join(package_share, 'config', obstacle_file)
-    robot_param_file = LaunchConfiguration('robot_param_file').perform(context)
-    if not robot_param_file:
-        robot_param_file = find_robot_param(package_share, robot_file)
+    robot_param_file = find_robot_param(package_share, robot_file)
 
     overrides = {
         'runtime_profile': LaunchConfiguration(
@@ -70,11 +68,6 @@ def generate_launch_description():
             'robot_model',
             default_value='p2.5_mid360s',
             description='Robot model: p2.5_mid360s or p3_airy96',
-        ),
-        DeclareLaunchArgument(
-            'robot_param_file',
-            default_value='',
-            description='Override the selected model dimensions and LiDAR extrinsics',
         ),
         DeclareLaunchArgument(
             'runtime_profile',

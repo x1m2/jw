@@ -77,6 +77,12 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
                                        "/pose_stamped_localization");
   this->declare_parameter<double>("connection_distance_threshold", 5.0);
   this->declare_parameter<double>("interpolation_spacing_m", 0.2);
+  this->declare_parameter<double>("path_z_offset", 0.2);
+  this->declare_parameter<bool>("path_interpolation.enable", true);
+  this->declare_parameter<double>("path_interpolation.z_threshold", 0.5);
+  this->declare_parameter<int>("path_interpolation.insert_count", 2);
+  this->declare_parameter<double>("path_interpolation.start_offset", 1.0);
+  this->declare_parameter<double>("path_interpolation.end_offset", 1.0);
 
   this->declare_parameter<bool>("enable_direct_connection", true);
   this->declare_parameter<double>("direct_connection_threshold", 3.0);
@@ -99,6 +105,28 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions &options)
   this->get_parameter("connection_distance_threshold",
                       connection_distance_threshold_);
   this->get_parameter("interpolation_spacing_m", interpolation_spacing_m_);
+  this->get_parameter("path_z_offset", path_z_offset_);
+  if (!std::isfinite(path_z_offset_)) {
+    throw std::invalid_argument("path_z_offset must be finite");
+  }
+  this->get_parameter("path_interpolation.enable", path_interpolation_enable_);
+  this->get_parameter("path_interpolation.z_threshold",
+                      path_interpolation_z_threshold_);
+  this->get_parameter("path_interpolation.insert_count",
+                      path_interpolation_insert_count_);
+  this->get_parameter("path_interpolation.start_offset",
+                      path_interpolation_start_offset_);
+  this->get_parameter("path_interpolation.end_offset",
+                      path_interpolation_end_offset_);
+  if (!std::isfinite(path_interpolation_z_threshold_) ||
+      path_interpolation_z_threshold_ < 0.0 ||
+      path_interpolation_insert_count_ < 0 ||
+      !std::isfinite(path_interpolation_start_offset_) ||
+      path_interpolation_start_offset_ < 0.0 ||
+      !std::isfinite(path_interpolation_end_offset_) ||
+      path_interpolation_end_offset_ < 0.0) {
+    throw std::invalid_argument("Invalid path_interpolation parameters");
+  }
   this->get_parameter("enable_direct_connection", enable_direct_connection_);
   this->get_parameter("direct_connection_threshold",
                       direct_connection_threshold_);
@@ -169,7 +197,7 @@ bool GlobalPathPlanner::initialize() {
   replan_request_pub_ = create_publisher<std_msgs::msg::Header>(
       "/navigation/global_replan_request", rclcpp::QoS(10).reliable());
   paused_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "/pure_pursuit/paused", rclcpp::QoS(1).reliable().transient_local(),
+      "/scan_planner/paused", rclcpp::QoS(1).reliable().transient_local(),
       [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
         const bool was_paused = navigation_paused_;
         navigation_paused_ = msg->data;
@@ -673,6 +701,10 @@ void GlobalPathPlanner::planAndPublish() {
       get_clock()->get_clock_type());
   global_path.header.stamp = stamp;
   last_published_path_stamp_ = stamp.nanoseconds();
+  // 发布前统一偏移路径高度，0 表示保留原始高度。
+  for (auto &pose : global_path.poses) {
+    pose.pose.position.z += path_z_offset_;
+  }
   active_path_ = global_path;
   global_path_pub_->publish(global_path);
   navigation_interfaces::msg::PathWithPolicy path_with_policy;
@@ -1323,23 +1355,89 @@ navigation_interfaces::msg::EdgePolicy GlobalPathPlanner::applyRegionPolicy(
   return policy;
 }
 
+std::vector<double> GlobalPathPlanner::interpolationRatios(
+    const geometry_msgs::msg::Point &start,
+    const geometry_msgs::msg::Point &end, std::size_t intervals,
+    bool insert_waypoints) {
+  std::vector<double> ratios;
+  for (std::size_t i = 0; i <= intervals; ++i) {
+    ratios.push_back(static_cast<double>(i) / intervals);
+  }
+  const double dz = std::abs(end.z - start.z);
+  if (insert_waypoints && path_interpolation_enable_ &&
+      dz > path_interpolation_z_threshold_ &&
+      path_interpolation_insert_count_ > 0) {
+    // 只按原始边生成途经点，不递归处理插入点，也不修改拓扑节点。
+    const std::size_t parts =
+        static_cast<std::size_t>(path_interpolation_insert_count_) + 1U;
+    for (std::size_t i = 1; i < parts; ++i) {
+      ratios.push_back(static_cast<double>(i) / parts);
+    }
+    std::sort(ratios.begin(), ratios.end());
+    ratios.erase(std::unique(ratios.begin(), ratios.end(),
+                             [](double a, double b) {
+                               return std::abs(a - b) < 1e-12;
+                             }), ratios.end());
+    RCLCPP_INFO(get_logger(),
+                "[path_interpolation] dz=%.3f threshold=%.3f requested=%d added=%zu",
+                dz, path_interpolation_z_threshold_,
+                path_interpolation_insert_count_, ratios.size() - intervals - 1U);
+  }
+  return ratios;
+}
+
 std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolatePath(
     const geometry_msgs::msg::Point &start,
     const geometry_msgs::msg::Point &end) {
   std::vector<geometry_msgs::msg::Point> points;
-  const std::size_t intervals = std::max<std::size_t>(
-      1U, static_cast<std::size_t>(std::ceil(calculateDistance(start, end) /
-                                             interpolation_spacing_m_)));
-  points.reserve(intervals + 1U);
-  for (std::size_t i = 0; i <= intervals; ++i) {
-    const double t = static_cast<double>(i) / intervals;
-
-    geometry_msgs::msg::Point point;
-    point.x = start.x + t * (end.x - start.x);
-    point.y = start.y + t * (end.y - start.y);
-    point.z = start.z + t * (end.z - start.z);
-
-    points.push_back(point);
+  std::vector<geometry_msgs::msg::Point> anchors{start};
+  if (path_interpolation_enable_ && path_interpolation_insert_count_ == 2 &&
+      std::abs(end.z - start.z) > path_interpolation_z_threshold_) {
+    const double length_xy = std::hypot(end.x - start.x, end.y - start.y);
+    if (length_xy > path_interpolation_start_offset_ +
+                        path_interpolation_end_offset_ + 1e-6) {
+      auto first = start;
+      auto second = end;
+      const double start_ratio = path_interpolation_start_offset_ / length_xy;
+      const double end_ratio = path_interpolation_end_offset_ / length_xy;
+      first.x += start_ratio * (end.x - start.x);
+      first.y += start_ratio * (end.y - start.y);
+      second.x += end_ratio * (start.x - end.x);
+      second.y += end_ratio * (start.y - end.y);
+      if (path_interpolation_start_offset_ > 0.0) anchors.push_back(first);
+      if (path_interpolation_end_offset_ > 0.0) anchors.push_back(second);
+      RCLCPP_INFO(get_logger(),
+                  "[path_interpolation] profile=platform_ramp length_xy=%.3f "
+                  "first=(%.3f,%.3f,%.3f) second=(%.3f,%.3f,%.3f)",
+                  length_xy, first.x, first.y, first.z,
+                  second.x, second.y, second.z);
+    } else {
+      RCLCPP_WARN(get_logger(),
+                  "[path_interpolation] profile=linear reason=short_edge "
+                  "length_xy=%.3f required=%.3f",
+                  length_xy, path_interpolation_start_offset_ +
+                                 path_interpolation_end_offset_);
+    }
+  }
+  anchors.push_back(end);
+  points.push_back(start);
+  for (std::size_t k = 1; k < anchors.size(); ++k) {
+    const auto &from = anchors[k - 1U];
+    const auto &to = anchors[k];
+    const std::size_t intervals = std::max<std::size_t>(
+        1U, static_cast<std::size_t>(std::ceil(calculateDistance(from, to) /
+                                               interpolation_spacing_m_)));
+    const auto ratios = interpolationRatios(from, to, intervals,
+                                            anchors.size() == 2U);
+    for (std::size_t i = 1; i + 1U < ratios.size(); ++i) {
+      const double t = ratios[i];
+      geometry_msgs::msg::Point point;
+      point.x = from.x + t * (to.x - from.x);
+      point.y = from.y + t * (to.y - from.y);
+      point.z = from.z + t * (to.z - from.z);
+      points.push_back(point);
+    }
+    points.push_back(to);
   }
 
   return points;
@@ -1373,10 +1471,11 @@ std::vector<geometry_msgs::msg::Point> GlobalPathPlanner::interpolateBezierPath(
   const std::size_t intervals = std::max<std::size_t>(
       1U,
       static_cast<std::size_t>(std::ceil(length / interpolation_spacing_m_)));
-  points.reserve(intervals + 1U);
+  const auto ratios = interpolationRatios(start, end, intervals);
+  points.reserve(ratios.size());
   points.push_back(start);
-  for (std::size_t i = 1; i < intervals; ++i) {
-    const double target = length * static_cast<double>(i) / intervals;
+  for (std::size_t i = 1; i + 1U < ratios.size(); ++i) {
+    const double target = length * ratios[i];
     const auto upper = std::lower_bound(cumulative_length.begin(),
                                         cumulative_length.end(), target);
     const std::size_t upper_index =

@@ -5,6 +5,10 @@
 
 ## UWB 跟随（独立于巡检导航）
 
+当前 UWB 跟随暂不可用：SCAN 适配已撤销，旧 PP 及 costmap_2d、terrain_filter
+未恢复。Manager 拒绝 `/ble_follow_cmd=0`，独立跟随脚本也会直接退出。
+下文保留原有跟随协议说明，不代表当前版本可以运行该链路。
+
 Manager 订阅 `/ble_follow_cmd`（`std_msgs/msg/Int8`）：`0` 首次启动或
 暂停后恢复、`1` 暂停、`2` 停止。重复的 `1` 保持暂停，只有 `0` 会恢复。
 重复的开始/停止指令是幂等的。UWB 串口驱动保持原有发布值；若直接将其
@@ -272,11 +276,10 @@ A -> B为map_connection时：
 task/region_obstacle_stop/<region_id>.yaml
 ```
 
-文件只允许覆盖`linear_velocity_factor`、`angular_velocity_factor`及
-`zones.front/rear/left/right`中的`stop_distance`、`slowdown_distance`和
-`obstacle_cell_threshold`；左右区仅支持停车，不允许设置`slowdown_distance`。
-文件不存在时使用所选机型的`obstacle_stop_p2.5_mid360s.yaml`或
-`obstacle_stop_p3_airy96.yaml`默认值。旧版区域停障YAML需要迁移到上述格式。
+文件允许在`zones.front/rear/left/right`下覆盖`stop_distance`和
+`obstacle_cell_threshold`，前后区域还支持`slowdown_distance`；
+顶层允许覆盖`linear_velocity_factor`和`angular_velocity_factor`。
+文件不存在时使用启动时对应机型YAML的默认值。
 `slam_manager`只校验区域ID、类型、几何和区域参数，不读取停障YAML；
 `obstacle_stop`启动时根据运行时拓扑中的区域ID直接读取并校验对应YAML，
 再根据机器人实时`map`位姿切换配置。已存在但内容非法的YAML会使停障Worker

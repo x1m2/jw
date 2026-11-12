@@ -102,6 +102,11 @@ fastlio_localization:
         ## Timeout [msec]
         # Enter the number as int
         bbs3d_timeout_msec: 0 # off: 0
+        # GPU scores BBS candidates; initialization/precision failures may use CPU.
+        bbs3d_backend: opencl # cpu / opencl
+        bbs3d_opencl_batch_size: 10000
+        bbs3d_opencl_fallback_cpu: true
+        bbs3d_opencl_verify: false
 
         ## Final align (evaluate the error)
         bbs3d_use_gicp: false

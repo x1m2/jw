@@ -39,7 +39,7 @@ ros2 launch woodox_imu_bridge woodox_imu_bridge.launch.py
 
 ```bash
 ros2 run woodox_imu_bridge woodox_imu_bridge_node --ros-args \
-  --params-file src/drivers/woodox_imu_bridge/config/params.yaml
+  --params-file src/drivers/woodox_imu_bridge/config/woodox_imu_bridge.yaml
 ```
 
 检查输出：

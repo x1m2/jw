@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr char kDenseScoreSource[] = R"BBSCL(@DENSE_SCORE_CL@)BBSCL";
