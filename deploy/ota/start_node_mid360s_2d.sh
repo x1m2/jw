@@ -93,7 +93,7 @@ CONFIG_FILES=(
 )
 
 check_error=0
-for binary in "${BINARIES[@]}" "$SLAM_DIR/localization/saver"; do
+for binary in "${BINARIES[@]}" "$SLAM_DIR/localization/voxelmaps_saver"; do
   if [[ ! -f "$binary" || ! -x "$binary" ]]; then
     echo "[ERROR] executable missing or not executable: $binary" >&2
     check_error=1
@@ -303,7 +303,7 @@ start_node pure_pursuit "$NAV_LIB_PATH" "$NAV_DIR/pure_pursuit/pure_pursuit_node
   --ros-args --params-file "$NAV_DIR/config/pure_pursuit_params.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node slam_manager "$MANAGER_LIB_PATH" "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
-  -p map_storage.root_directory:="$DATA_ROOT" -p localization.bbs.saver_executable:="$SLAM_DIR/localization/saver"
+  -p map_storage.root_directory:="$DATA_ROOT" -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver"
 start_node nav_server_console "$MANAGER_LIB_PATH" "$MANAGER_DIR/nav_server/nav_server_node" \
   "$NAV_SERVER_CONFIG"
 

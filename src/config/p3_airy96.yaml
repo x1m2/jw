@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+      robot_model: "P3"
+      lidar_model: "AIRY96"
+
       # P3 Airy96机器人外形尺寸，单位m。
       robot_width: 0.60
       robot_length: 1.10

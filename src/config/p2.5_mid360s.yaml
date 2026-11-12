@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+      robot_model: "P2.5"
+      lidar_model: "MID360S"
+
       # P2.5 MID360s机器人外形尺寸，单位m。
       robot_width: 0.60
       robot_length: 1.10

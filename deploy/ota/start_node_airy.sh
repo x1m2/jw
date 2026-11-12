@@ -90,7 +90,7 @@ BINARIES=(
 
   "$MANAGER_DIR/slam_manager/slam_manager_node"
   "$NAV_SERVER_DIR/nav_server_node"
-  "$SLAM_DIR/localization/saver"
+  "$SLAM_DIR/localization/voxelmaps_saver"
 )
 
 # ==================================================
@@ -455,7 +455,7 @@ stdbuf -oL -eL \
   "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args \
   --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
-  -p localization.bbs.saver_executable:="$SLAM_DIR/localization/saver" \
+  -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver" \
   2>&1 | tee -a "$LOG_DIR/slam_manager.log" &
 
 sleep 2
