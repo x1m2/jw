@@ -2,6 +2,11 @@
 
 以下命令在 `robot_ws` 根目录执行。程序保留在 OTA 目录的 `nav`、`slam`、`slam_manager` 中。
 
+`/home/jw/ota/data/slam_data/current_runtime_log.txt` 按从旧到新保存最近五次
+运行的日志目录，每行带编号，最后一行标记“最新”。编号按保留的记录重新从 1 排起。
+同一会话的自动重试不重复占用记录；兼容已有的单行纯路径格式。
+这里只限制路径记录条数，历史日志目录不会自动删除。
+
 BBS 库统一由 `3d_bbs` 构建：CPU 板先运行 `./src/depd/3d_bbs/build_cpu.sh`，
 OpenCL 板先运行 `./src/depd/3d_bbs/build_opencl.sh`。定位包仅链接已安装的库，
 分别使用 `-DENABLE_OPENCL_BBS=OFF/ON` 编译。

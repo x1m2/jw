@@ -292,13 +292,34 @@ if [ ! -w "$ROS_LOG_DIR" ]; then
   exit 1
 fi
 
-if ! printf '%s\n' "$LOG_DIR" > "$RUNTIME_LOG_PATH_FILE"; then
-  echo "[ERROR] cannot write runtime log path file:"
-  echo "        $RUNTIME_LOG_PATH_FILE"
+# Keep five distinct sessions, oldest first; retries of the same session reuse its entry.
+RUNTIME_LOG_HISTORY_SOURCE="$RUNTIME_LOG_PATH_FILE"
+if [[ ! -f "$RUNTIME_LOG_HISTORY_SOURCE" ]]; then
+  RUNTIME_LOG_HISTORY_SOURCE=/dev/null
+fi
+RUNTIME_LOG_HISTORY_TEMP="$(mktemp "${RUNTIME_LOG_PATH_FILE}.XXXXXX")" || exit 1
+if ! awk -v latest="$LOG_DIR" '
+  {
+    path = $0
+    sub(/^\[[^]]*\][[:space:]]*/, "", path)
+    if (path != "" && path != latest) paths[++count] = path
+  }
+  END {
+    paths[++count] = latest
+    first = count > 5 ? count - 4 : 1
+    for (i = first; i <= count; ++i) {
+      label = i == count ? " 最新" : ""
+      printf "[第%d次%s] %s\n", i - first + 1, label, paths[i]
+    }
+  }
+' "$RUNTIME_LOG_HISTORY_SOURCE" > "$RUNTIME_LOG_HISTORY_TEMP" ||
+   ! chmod 664 "$RUNTIME_LOG_HISTORY_TEMP" ||
+   ! mv -f -- "$RUNTIME_LOG_HISTORY_TEMP" "$RUNTIME_LOG_PATH_FILE"; then
+  rm -f -- "$RUNTIME_LOG_HISTORY_TEMP"
+  echo "[ERROR] cannot update runtime log history: $RUNTIME_LOG_PATH_FILE" >&2
   exit 1
 fi
-
-chmod 664 "$RUNTIME_LOG_PATH_FILE" 2>/dev/null || true
+unset RUNTIME_LOG_HISTORY_SOURCE RUNTIME_LOG_HISTORY_TEMP
 export ROS_LOG_DIR
 
 echo "========================================"
