@@ -14,7 +14,7 @@ slam_manager:
       stop_timeout_sec: 10.0
       # load_map每次都运行该工具，基于当前globalmap.pcd重新生成voxelmaps_coords。
       bbs:
-        saver_executable: "/robotfs/app/module/slam/localization/saver"
+        saver_executable: "/robotfs/app/module/slam/localization/voxelmaps_saver"
         min_level_resolution: 0.5
         max_level: 6
         generation_timeout_sec: 120.0

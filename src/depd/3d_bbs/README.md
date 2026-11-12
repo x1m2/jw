@@ -81,19 +81,32 @@ For more information, you can check [docker_start.md](./docker/docker_start.md)
 ## 🌟 3D-BBS core source code
 ### Build and Install
 
-生成用于 OpenCL 重定位的地图转换程序（依赖 Eigen3、OpenMP、Boost 和 OpenCL 开发库）：
+在工作区根目录选择一种后端构建；两个脚本都生成 `voxelmaps_saver`，不需要再进入 `test` 单独编译：
 
 ```bash
-cd src/depd/3d_bbs
-./build_saver.sh
-./build/voxelmaps_saver /path/to/pcd_directory 1.0 6
+# CPU 板子：只生成 CPU 库和地图转换工具，不依赖 OpenCL。
+./src/depd/3d_bbs/build_cpu.sh
+colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=OFF
+
+# OpenCL 板子：生成配套的 CPU/OpenCL 库和地图转换工具。
+./src/depd/3d_bbs/build_opencl.sh
+colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=ON
+
+./install/bbs3d/bin/voxelmaps_saver /path/to/pcd_directory 1.0 6
 ```
 
-脚本生成 `build/voxelmaps_saver`、`build/libcpu_bbs3d.so` 和
-`build/libopencl_bbs3d.so`，不编译 `opencl_test`，不执行系统安装。
-`voxelmaps_saver` 与 miao 分支同名，是独立命令行工具，地图生成仍在 CPU 上执行，生成的地图供 CPU/OpenCL
-重定位共用；分辨率和层级应与定位配置一致。可通过 `BUILD_JOBS=4` 设置并行数，
-通过 `BBS_BUILD_DIR=/path/to/build` 设置构建目录；额外参数传给 CMake。
+默认安装到工作区 `install/bbs3d`，包含 `lib/libcpu_bbs3d.so`、
+`bin/voxelmaps_saver` 和 CMake 包配置；OpenCL 构建额外包含
+`lib/libopencl_bbs3d.so`。定位包通过 `find_package(bbs3d CONFIG)` 链接这些库，
+不再重复编译或安装 BBS 库。两个脚本使用独立构建目录 `build_cpu/` 和 `build_opencl/`，
+不会编译 `opencl_test`，无需 sudo。CPU 依赖 Eigen3、OpenMP、Boost；OpenCL
+额外需要 OpenCL 开发库和板端 GPU 驱动。运行时分别设置 `bbs3d_backend: cpu/opencl`。
+
+地图生成仍在 CPU 执行，CPU/OpenCL 共用地图格式，分辨率和层级应与定位配置一致。
+可设置 `BUILD_JOBS`、`BBS_BUILD_DIR`、`BBS_INSTALL_DIR`；自定义安装位置时，
+定位编译加 `-DBBS3D_ROOT=/安装目录`，OTA 更新设置同一个 `BBS_INSTALL_DIR`。
+CPU/OpenCL 构建切换时如需保留两套产物，应分别指定不同安装目录。
+额外参数传给 CMake；脚本固定所选后端和工具开关。
 
 ```shell script
 # Note: If you are using Eigen3 below 3.4.0, git clone with --recursive
@@ -111,7 +124,7 @@ sudo make install
 
 - CPU ver. only
 ```shell script
-cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_CUDA=OFF
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_OPENCL=OFF
 make -j
 sudo make install
 ```

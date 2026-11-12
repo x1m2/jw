@@ -50,26 +50,14 @@ find_package(OpenMP QUIET)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}   ${OpenMP_C_FLAGS}")
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
-
-set(BUILD_CUDA OFF)
-option(ENABLE_OPENCL_BBS "Build the bundled OpenCL BBS backend" ON)
-if(ENABLE_OPENCL_BBS)
-  # Build CPU and OpenCL together to avoid mixing installed BBS versions.
-  set(BUILD_OPENCL ON)
-  set(BUILD_BBS_TEST_TOOLS OFF)
-  add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../depd/3d_bbs"
-    "${CMAKE_CURRENT_BINARY_DIR}/bbs3d")
-endif()
-if (BUILD_CUDA)
-  add_definitions(-DUSE_CUDA)
-  find_package(gpu_bbs3d REQUIRED)
-  find_package(CUDA REQUIRED)
-  include_directories(${CUDA_INCLUDE_DIRS})
-  link_directories(${CUDA_LIBRARY_DIRS})
-elseif(NOT ENABLE_OPENCL_BBS)
-  find_package(cpu_bbs3d REQUIRED)
-  include_directories(BEFORE ${cpu_bbs3d_INCLUDE_DIRS})
+option(ENABLE_OPENCL_BBS "Link the installed OpenCL BBS backend" ON)
+# Both backends come from one 3d_bbs installation; never build a second copy.
+set(BBS3D_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../install/bbs3d"
+  CACHE PATH "3d_bbs installation prefix")
+set(bbs3d_DIR "${BBS3D_ROOT}/lib/cmake/bbs3d")
+find_package(bbs3d CONFIG REQUIRED PATHS "${bbs3d_DIR}" NO_DEFAULT_PATH)
+if(ENABLE_OPENCL_BBS AND NOT TARGET bbs3d::opencl_bbs3d)
+  message(FATAL_ERROR "Installed 3d_bbs has no OpenCL backend. Run build_opencl.sh, or set ENABLE_OPENCL_BBS=OFF for CPU.")
 endif()
 
 find_package(Eigen3 REQUIRED)
@@ -126,15 +114,15 @@ add_executable(fastlio_localization_node
 target_link_libraries(fastlio_localization_node stdc++fs ${PCL_LIBRARIES})
 if(ENABLE_OPENCL_BBS)
   target_compile_definitions(fastlio_localization_node PRIVATE BBS_ENABLE_OPENCL=1)
-  target_link_libraries(fastlio_localization_node opencl_bbs3d)
-elseif(BUILD_CUDA)
-  target_link_libraries(fastlio_localization_node ${gpu_bbs3d_LIBRARY})
+  target_link_libraries(fastlio_localization_node bbs3d::opencl_bbs3d)
 else()
-  target_link_libraries(fastlio_localization_node ${cpu_bbs3d_LIBRARY})
+  target_link_libraries(fastlio_localization_node bbs3d::cpu_bbs3d)
 endif()
 ament_target_dependencies(fastlio_localization_node
   rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 slam_manager_interfaces
   slam_manager)
+set_target_properties(fastlio_localization_node PROPERTIES
+  INSTALL_RPATH "$ORIGIN/../lib;${bbs3d_LIBRARY_DIR}")
 
 install(TARGETS fastlio_localization_node
   DESTINATION lib/${PROJECT_NAME}

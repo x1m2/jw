@@ -18,6 +18,7 @@ usage() {
   echo "Usage: bash $0 [install_directory] [--dry-run]"
   echo "Default install directory: /home/jw/robot_ws/install"
   echo "OTA directory: $OTA_ROOT (override with OTA_ROOT=/path/to/ota)"
+  echo "BBS prefix: install_directory/bbs3d (override with BBS_INSTALL_DIR=/path/to/bbs3d)"
 }
 
 for arg in "$@"; do
@@ -38,6 +39,7 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
   exit 1
 fi
 INSTALL_DIR="$(cd -- "$INSTALL_DIR" && pwd)"
+BBS_INSTALL_DIR="${BBS_INSTALL_DIR:-$INSTALL_DIR/bbs3d}"
 if [[ ! -d "$OTA_ROOT" ]]; then
   echo "[ERROR] OTA directory not found: $OTA_ROOT" >&2
   exit 1
@@ -55,11 +57,15 @@ targets=()
 missing=0
 identical=0
 
-# The bundled BBS build installs these beside the localization package. They
-# may not exist in an older OTA payload, so replacement-only scanning misses them.
-for filename in libcpu_bbs3d.so libopencl_bbs3d.so; do
-  source="$INSTALL_DIR/fastlio_localization/lib/$filename"
-  target="$OTA_ROOT/slam/pack/content/lib/$filename"
+# BBS is built once by 3d_bbs. Also add its map converter to older OTA payloads.
+for relative in lib/libcpu_bbs3d.so lib/libopencl_bbs3d.so localization/voxelmaps_saver; do
+  filename="${relative##*/}"
+  if [[ "$filename" == voxelmaps_saver ]]; then
+    source="$BBS_INSTALL_DIR/bin/$filename"
+  else
+    source="$BBS_INSTALL_DIR/lib/$filename"
+  fi
+  target="$OTA_ROOT/slam/pack/content/$relative"
   if [[ -f "$source" && ! -e "$target" ]]; then
     if [[ -L "$target" ]]; then
       echo "[ERROR] Refusing to overwrite OTA symlink: $target" >&2
@@ -95,17 +101,16 @@ for module in nav slam slam_manager; do
         # fi
         ;;
       lib)
-        # Match the BBS pair linked into this localization build, even if a
-        # separately installed bbs3d package contains another build of the libs.
+        # Never substitute an old copy from fastlio_localization or another package.
         case "$filename" in
           libcpu_bbs3d.so|libopencl_bbs3d.so)
-            candidate="$INSTALL_DIR/fastlio_localization/lib/$filename"
+            candidate="$BBS_INSTALL_DIR/lib/$filename"
             if [[ -f "$candidate" ]]; then
               candidates+=("$candidate")
             fi
             ;;
         esac
-        if [[ ${#candidates[@]} -eq 0 ]]; then
+        if [[ ${#candidates[@]} -eq 0 && "$filename" != libcpu_bbs3d.so && "$filename" != libopencl_bbs3d.so ]]; then
           while IFS= read -r -d '' candidate; do
             candidates+=("$candidate")
           done < <(find -L "$INSTALL_DIR" -type f -path '*/lib/*' -name "$filename" -print0)
@@ -125,7 +130,11 @@ for module in nav slam slam_manager; do
             ;;
           *) package="$component" ;;
         esac
-        candidate="$INSTALL_DIR/$package/lib/$package/$filename"
+        if [[ "$component" == localization && "$filename" == voxelmaps_saver ]]; then
+          candidate="$BBS_INSTALL_DIR/bin/$filename"
+        else
+          candidate="$INSTALL_DIR/$package/lib/$package/$filename"
+        fi
         if [[ -f "$candidate" ]]; then candidates+=("$candidate"); fi
         ;;
     esac
@@ -169,6 +178,8 @@ for ((i=0; i<${#targets[@]}; i++)); do
     cp -- "${sources[i]}" "$copy_target"
     if [[ -e "${targets[i]}" ]]; then
       chmod --reference="${targets[i]}" "$copy_target"
+    elif [[ -x "${sources[i]}" ]]; then
+      chmod 755 "$copy_target"
     else
       chmod 644 "$copy_target"
     fi

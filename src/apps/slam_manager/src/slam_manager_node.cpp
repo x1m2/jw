@@ -112,7 +112,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
 
   const auto bbs_saver_executable = declare_parameter<std::string>(
       "localization.bbs.saver_executable",
-      "/home/jw-zkl/robotics_platform/3rdparty/3d_bbs/test/build/saver");
+      "/robotfs/app/module/slam/localization/voxelmaps_saver");
   const auto bbs_min_level_resolution =
       declare_parameter<double>("localization.bbs.min_level_resolution", 0.5);
   const auto bbs_max_level =

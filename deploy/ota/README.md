@@ -2,6 +2,13 @@
 
 以下命令在 `robot_ws` 根目录执行。程序保留在 OTA 目录的 `nav`、`slam`、`slam_manager` 中。
 
+BBS 库统一由 `3d_bbs` 构建：CPU 板先运行 `./src/depd/3d_bbs/build_cpu.sh`，
+OpenCL 板先运行 `./src/depd/3d_bbs/build_opencl.sh`。定位包仅链接已安装的库，
+分别使用 `-DENABLE_OPENCL_BBS=OFF/ON` 编译。
+更新脚本默认从 `install/bbs3d/lib/` 获取 BBS 库，从
+`install/bbs3d/bin/voxelmaps_saver` 获取地图转换工具；自定义前缀通过
+`BBS_INSTALL_DIR=/安装目录` 指定。新工具会补充到 `slam/pack/content/localization/voxelmaps_saver`。
+
 ## 手动启动
 
 按导航方案选择一个：

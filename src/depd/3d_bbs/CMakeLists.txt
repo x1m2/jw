@@ -6,6 +6,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 option(BUILD_OPENCL "Build the dense OpenCL backend" ON)
 option(BUILD_BBS_TEST_TOOLS "Build standalone localization and voxel map tools" ON)
+option(BUILD_BBS_OPENCL_TEST "Build the standalone OpenCL benchmark" OFF)
+include(CMakePackageConfigHelpers)
 
 find_package(Eigen3 REQUIRED)
 find_package(OpenMP REQUIRED)
@@ -21,7 +23,8 @@ target_include_directories(cpu_bbs3d PUBLIC
 target_compile_features(cpu_bbs3d PUBLIC cxx_std_17)
 target_link_libraries(cpu_bbs3d PUBLIC Eigen3::Eigen OpenMP::OpenMP_CXX
   PRIVATE Boost::filesystem Boost::system)
-install(TARGETS cpu_bbs3d LIBRARY DESTINATION lib)
+set_target_properties(cpu_bbs3d PROPERTIES INSTALL_RPATH "$ORIGIN")
+install(TARGETS cpu_bbs3d EXPORT bbs3dTargets LIBRARY DESTINATION lib)
 install(DIRECTORY bbs3d/include/ DESTINATION include PATTERN opencl_bbs3d EXCLUDE)
 
 if(BUILD_OPENCL)
@@ -40,9 +43,16 @@ if(BUILD_OPENCL)
   get_filename_component(opencl_runtime_dir "${OpenCL_LIBRARY}" DIRECTORY)
   set_target_properties(opencl_bbs3d PROPERTIES
     INSTALL_RPATH "$ORIGIN;${opencl_runtime_dir}")
-  install(TARGETS opencl_bbs3d LIBRARY DESTINATION lib)
+  install(TARGETS opencl_bbs3d EXPORT bbs3dTargets LIBRARY DESTINATION lib)
   install(DIRECTORY bbs3d/include/opencl_bbs3d DESTINATION include)
 endif()
+
+configure_package_config_file(cmake/bbs3dConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/bbs3dConfig.cmake"
+  INSTALL_DESTINATION lib/cmake/bbs3d)
+install(EXPORT bbs3dTargets NAMESPACE bbs3d:: DESTINATION lib/cmake/bbs3d)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/bbs3dConfig.cmake"
+  DESTINATION lib/cmake/bbs3d)
 
 if(BUILD_BBS_TEST_TOOLS)
   add_subdirectory(test)

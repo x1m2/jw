@@ -55,10 +55,11 @@ the sensor that recorded the bag.
 定位节点保持原来的名称、Manager/Worker 控制、重定位成功后的缓存清理、
 重力对齐及 NDT/GICP 精配准流程。只替换 BBS 粗定位中的候选搜索/评分后端。
 
-默认 `ENABLE_OPENCL_BBS=ON`，编译时从 `src/depd/3d_bbs` 同时构建 CPU 和
-OpenCL 库，不依赖机器上旧版的 BBS 安装。需要 Eigen3、OpenMP、Boost 和
-OpenCL 开发文件；机器人还需要厂商 OpenCL GPU 驱动。
-仅编译原 CPU 版本时可传 `-DENABLE_OPENCL_BBS=OFF`。
+默认 `ENABLE_OPENCL_BBS=ON`，链接由 `src/depd/3d_bbs/build_opencl.sh`
+预先构建并安装的配套 CPU/OpenCL 库；定位包本身不再生成 BBS 库。
+CPU 板子先运行 `build_cpu.sh`，然后传 `-DENABLE_OPENCL_BBS=OFF` 编译定位。
+默认库安装目录是工作区 `install/bbs3d`，自定义目录使用 `-DBBS3D_ROOT=/安装目录`。
+OpenCL 板子需要厂商 GPU 驱动，CPU 构建不依赖 OpenCL。
 
 Airy/MID360s 的定位 YAML 提供：
 
@@ -85,15 +86,16 @@ bbs3d_opencl_verify: false           # 对比验证时逐候选核对 CPU/GPU �
 构建示例（在已加载 ROS 和本工作区依赖的终端）：
 
 ```bash
+./src/depd/3d_bbs/build_opencl.sh
 colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=ON
 ```
 
-OTA 更新脚本会补充 `install/fastlio_localization/lib/` 中新增的
-`libcpu_bbs3d.so`、`libopencl_bbs3d.so` 到 SLAM 的 `lib/`。
+OTA 更新脚本从 `install/bbs3d/lib/` 复制 BBS 库到 SLAM 的 `lib/`，
+并从 `install/bbs3d/bin/` 部署 `voxelmaps_saver`。自定义安装目录使用 `BBS_INSTALL_DIR`。
 OpenCL 系统运行库和厂商驱动使用板端现有安装，不从开发机复制。
 节点启用 OpenCL 编译后即依赖 OpenCL 动态库；若动态加载器无法加载它，
 进程尚未启动，不能使用程序内的 CPU 回退。无 OpenCL 运行库的设备应部署 CPU 构建。
 更新脚本仍保留 OTA YAML，需要在实际部署配置中核对上述参数。
-现有地图转换工具 `saver` 的部署路径保持不变。
+地图转换工具部署路径为 `localization/voxelmaps_saver`。
 
 GPU 加速效果和厂商内核正确性需要在目标板使用同一地图和点云复测。

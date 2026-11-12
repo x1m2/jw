@@ -4,6 +4,18 @@ ROS 2 机器人建图、定位、导航和任务控制工作空间。
 
 ## 编译方式
 
+先按板子构建一次 BBS 库和地图转换工具：
+
+```bash
+# CPU 板子
+./src/depd/3d_bbs/build_cpu.sh
+# OpenCL 板子改用：./src/depd/3d_bbs/build_opencl.sh
+```
+
+默认安装到 `install/bbs3d`。后续编译定位包只链接这份库；CPU 板子须在
+`colcon build` 的 `--cmake-args` 中加入 `-DENABLE_OPENCL_BBS=OFF`。
+全工作区构建若包含 `bbs3d`，CPU 板子还需加 `-DBUILD_OPENCL=OFF`。
+
 先单独编译 Quatro：
 
 ```bash
