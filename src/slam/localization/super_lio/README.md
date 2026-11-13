@@ -76,7 +76,7 @@ Scan Context 需要至少 10 个轨迹点和对应描述子；其他模式只需
 - `path_en`、`scan_publish_en`、`dense_publish_en`、`lidar_tf_broadcast`、`imu_tf_broadcast` 控制输出。
 - `/lio/odom` 保留 IMU 位姿输出，供调试使用。
 
-可执行文件 `relocation_node` 使用与 FAST-LIO 相同的 `ManagedWorker` 协议。
+可执行文件 `super_lio_localization_node` 使用与 FAST-LIO 相同的 `ManagedWorker` 协议。
 launch 默认 `runtime_profile:=test`，自动启动算法；`platform` 模式等待 START。
 服务为 `/super_lio_localization_worker/set_state`，支持地图路径、手动初值模式、重定位 profile 和 session 启停，
 不提供地图保存操作。停止时等待后台任务结束。
