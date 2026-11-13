@@ -1,0 +1,92 @@
+/**:
+  ros__parameters:
+    # ---------------------------------------------------------------------------
+    # Relocalization-only overrides. Loaded ON TOP of a robot config by
+    #   ros2 launch super_lio localization.py config:=livox_360.yaml
+    #
+    # The LIO / sensor / extrinsic block intentionally lives in the robot yaml
+    # only: duplicating it here silently drifts out of sync with the parameter
+    # types declared in ROSWrapper::setupParams() (this file used to carry a
+    # stale copy with e.g. `lio.sensor.filter_rate: 3.0` instead of `3`).
+    # ---------------------------------------------------------------------------
+
+    # ---- prior map consumed by the LIO frontend (ivox_), relative to super_lio root ----
+    lio.map.save_map: false
+    lio.map.save_map_dir: "map"
+    lio.map.map_name: "map.pcd"
+    lio.map.ds_size: 0.3
+    lio.map.save_interval: 500
+
+    lio.localization.update_map: false
+
+    # ======================== relocalization ========================
+    # false => localization mode: init_system_mode() is skipped, so the
+    # keyframe/scancontext directories are never recreated and no loop-closure
+    # thread is started.
+    official.system_mode: false
+
+    # Directory holding the artifacts written by the MAPPING run:
+    #   globalmap.pcd  trajectory.pcd  keyframe/  scancontext/  voxelmaps_coords/
+    # Empty => <super_lio_pkg>/PCD/. e.g. "/home/h/mid360_out"
+    official.map_path: "/home/will/tmp/out_bag/"
+
+    # bbs3d         : global search without any prior pose (recommended)
+    # scan_context  : needs scancontext/*.scd + trajectory.pcd
+    # manually_set  : only uses /initialpose
+    # Any source failure degrades to manually_set automatically.
+    relocalization.algorithm_type: "bbs3d"
+    relocalization.use_gnss: false
+    # Must publish nav_msgs/Odometry in the map frame (position + orientation).
+    relocalization.gnss_topic: "/gnss/odom"
+    # Build <map_path>/voxelmaps_coords/ on the fly when it is missing.
+    relocalization.voxelmap_auto_build: true
+
+    # ---- 3D-BBS global search (CPU / OpenMP) ----
+    bbs3d.min_level_res: 0.5      # 0.5 indoor, 1.0 outdoor (coarser = faster)
+    bbs3d.max_level: 6
+    # The gravity-aligned roll/pitch prior is added on top of this window at
+    # runtime; keep the window a little wider than the IMU/leveling residual.
+    bbs3d.min_rpy: [-0.04,-0.04, 0.0]
+    bbs3d.max_rpy: [0.04,0.04, 6.28]
+    bbs3d.score_threshold_percentage: 0.9
+    bbs3d.num_threads: 6          # OpenMP threads for the scoring pass
+    bbs3d.tar_leaf_size: 0.1      # unused when loading prebuilt voxelmaps_coords/
+    bbs3d.src_leaf_size: 2.0      # downsample of the query scan (0 = off)
+    bbs3d.min_scan_range: 0.0
+    bbs3d.max_scan_range: 100.0
+    bbs3d.timeout_msec: 0         # 0 = no timeout
+    bbs3d.use_gicp: false
+
+    # ---- BnB3D window refinement ----
+    # This is only a coarse window search; NDT/GICP refine afterwards. The
+    # values below match the reference project's mid360 outdoor tuning. Making
+    # them finer (e.g. depth 5 / 0.1 deg / filter 0.1) explodes the search space
+    # and can take minutes per attempt.
+    bnb3d.linear_xy_window_size: 8.0
+    bnb3d.linear_z_window_size: 0.5
+    bnb3d.angular_search_window: 30.0        # degree
+    # NOTE: pc_resolutions.size() must be >= bnb_depth (asserted in bnb3d.h)
+    bnb3d.pc_resolutions: [0.3, 0.5, 0.8]
+    bnb3d.bnb_depth: 3
+    bnb3d.min_score: 0.1
+    bnb3d.enough_score: 0.8
+    bnb3d.min_xy_resolution: 0.2
+    bnb3d.min_z_resolution: 0.1
+    bnb3d.min_angular_resolution: 5.0        # degree
+    bnb3d.filter_size_scan: 2.0
+    bnb3d.debug_mode: false
+
+    # ---- NDT / GICP fine alignment ----
+    ndt.step_size: 0.1
+    ndt.resolution: 1.0
+    gicp.use_gicp: true
+    gicp.filter_range: 80.0
+    gicp.downsample: 0.2
+    gicp.search_radius: 0.5
+    gicp.teps: 0.001
+    gicp.feps: 0.001
+    gicp.fitness_score: 0.3
+
+    # ---- output ----
+    # Echo the current world->base_link pose to the terminal at ~1 Hz (debug).
+    publish.print_pose: true

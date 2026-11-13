@@ -1,0 +1,113 @@
+/**:
+  ros__parameters:
+    lio.map.save_map: false
+    lio.map.if_filter: true
+    lio.map.save_map_dir: "map"
+    lio.map.map_name: "map.pcd"
+    lio.map.ds_size: 0.25
+    lio.map.save_interval: 500
+
+    lio.ros.lidar_topic: "/rslidar_points"
+    lio.ros.imu_topic: "/rslidar_imu_data"
+
+    lio.sensor.lidar_type: 2
+    lio.sensor.blind: 2.0
+    lio.sensor.maxrange: 100.0
+    lio.sensor.filter_rate: 3
+    lio.sensor.enable_downsample: true
+    lio.sensor.voxel_fliter_size: 0.5
+    lio.sensor.gravity_norm: 9.7946
+    lio.sensor.imu_na: 0.1
+    lio.sensor.imu_ng: 0.1
+    lio.sensor.imu_nba: 0.0001
+    lio.sensor.imu_nbg: 0.0001
+
+    lio.extrinsic.lidar_imu: [0.0042, -0.015, 0.011, 
+                              0.0371031, -0.999192, 0.0154193,
+                              -0.999305, -0.037043, 0.00416679,
+                              -0.00359224, -0.0155632, -0.999872]
+    lio.extrinsic.odom_robo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    lio.hash_map.hash_capacity: 2000000
+    lio.hash_map.vox_resolution: 0.5
+
+    lio.kf.kf_max_iterations: 4
+    lio.kf.kf_align_gravity: true
+    lio.kf.kf_quit_eps: 0.001
+
+    lio.output.robot: true
+    lio.output.map: true
+    lio.output.dense: true
+    lio.output.pub_step: 1
+
+    lio.eva.timer: true
+
+    backend:
+      keyframe_add_dist_threshold: 1.
+      # keyframe_add_dist_threshold: 2.5
+      keyframe_add_angle_threshold: 0.2
+      recontruct_kdtree: true
+      ikdtree_reconstruct_keyframe_num: 10
+      ikdtree_reconstruct_downsamp_size: 0.1
+
+      # for add GNSS factor
+      lla: [31.4200590, 120.6394099, 14.790]
+      numsv: 20
+      rtk_age: 30.
+      gpsCovThreshold: [0.05, 0.05, 0.1, 0.05, 0.05, 0.05]
+      pose_cov_threshold: 0.
+      gnss_weight: [1.0, 1.0, 0.1]
+      gnssValidInterval: 0.1
+      useGpsElevation: true
+
+      # for loop closure
+      loop_closure_interval: 300
+      loop_closure_enable_flag: true
+      loop_keyframe_num_thld: 50
+      loop_closure_search_radius: 15.
+      loop_closure_keyframe_interval: 100
+      keyframe_search_num: 20
+      loop_closure_fitness_use_adaptability: false
+      loop_closure_fitness_score_thld_min: 0.1
+      loop_closure_fitness_score_thld_max: 0.5
+      icp_downsamp_size: 0.1
+      manually_loop_vaild_period: [0., 1.]
+      odom_loop_vaild_period: [0., 100000.]
+      scancontext_loop_vaild_period: [0., 1.]
+
+      # z axis constraint
+      gtsam_ground_constraint_enable: false
+      update_height: false
+      add_height_factor_threshold: 0.2
+      loop_closure_height_thld: 3.
+
+      # lidar -> gnss
+      extrinsic_gnss_T: [ 0., 0., 0. ]
+      extrinsic_gnss_R: [ 1., 0., 0., 
+                          0., 1., 0., 
+                          0., 0., 1. ]
+
+    scan_context:
+      lidar_height: 2.183
+      sc_dist_thres: 0.13
+
+    publish:
+      showOptimizedPose: true
+      globalMapVisualizationSearchRadius: 1000. 
+      globalMapVisualizationPoseDensity: 3. 
+      globalMapVisualizationLeafSize: 0.2
+      path_en:  true
+      scan_publish_en:  true       # false: close all the point cloud output
+      dense_publish_en: false       # false: low down the points number in a global-frame point clouds scan.
+
+    official:
+      save_globalmap_en: true
+      save_resolution: 0.2
+      save_keyframe_en: false
+      save_keyframe_descriptor_en: false
+      # map_path: "/home/will/data/test_mapping/mapping1"
+
+      save_pgm: false
+      pgm_resolution: 0.05
+      min_z: 0.0
+      max_z: 1.0
