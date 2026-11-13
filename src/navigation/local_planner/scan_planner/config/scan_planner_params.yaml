@@ -59,7 +59,7 @@
       visualization_interval: 1.0 # 仅显示限频，原版内部建图定时器仍为 50 ms。
 
     manager:
-      max_vel: 1.0
+      max_vel: 0.7
       max_acc: 0.5
       max_jerk: 4.0
       control_points_distance: 0.2
@@ -71,7 +71,7 @@
       lambda_feasibility: 0.1
       lambda_fitness: 1.0
       dist0: 0.3
-      max_vel: 1.0
+      max_vel: 0.7
       max_acc: 0.5
       order: 3
       vel_tolerance: 1.0
@@ -85,7 +85,7 @@
       kp_yaw: 1.5
       cross_track_gain: 0.6 # 横向误差转向增益，单位 (rad/s)/m；0 关闭。
       cross_track_max_wz: 0.15 # 附加纠偏角速度上限 rad/s，不替代原朝向控制限幅。
-      max_vx: 1.0 # 最大前后线速度，单位 m/s。
+      max_vx: 0.7 # 最大前后线速度，单位 m/s。
       max_vy: 0.0 # 禁止横向速度，Twist.linear.y 始终为 0。
       max_vyaw: 1.0 # 最大角速度，单位 rad/s；代码硬上限为 1.0。
       odom_timeout: 0.5
