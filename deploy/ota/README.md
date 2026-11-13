@@ -30,9 +30,9 @@ bash deploy/ota/start_node_mid360s_2d.sh
 
 方案说明：
 
-- `mid360s_3d`：原 `start_node_mid360s.sh`，使用 scan planner 和 Fast DDS XML 配置。
-- `mid360s_2d`：对应 OTA `nav/test/auto-start_2d`，使用 `terrain_filter + costmap_2d + pure_pursuit`，停障配置为 `obstacle_stop_p2.5_mid360s.yaml`；各节点共用 SLAM 的 `fastshm.xml`。
-- `airy`：Airy 雷达方案。
+- `mid360s_3d`：原 `start_node_mid360s.sh`，使用 scan planner 和 Fast DDS 默认配置，不依赖 `fastshm.xml`。
+- `mid360s_2d`：对应 OTA `nav/test/auto-start_2d`，使用 `terrain_filter + costmap_2d + pure_pursuit`，停障配置为 `obstacle_stop_p2.5_mid360s.yaml`；使用 Fast DDS 默认配置，不依赖 `fastshm.xml`。
+- `airy`：Airy 雷达方案，检查并加载 `slam`、`nav` 中的 `fastshm.xml`。
 
 默认 OTA 目录为 `/home/jw/ota`；可通过 `OTA_ROOT=/路径` 指定。加 `--check` 只检查文件，不启动节点。
 

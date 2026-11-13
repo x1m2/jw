@@ -59,7 +59,6 @@ LIVOX_CONFIG="$SLAM_DIR/config/MID360s_driver.yaml"
 LIVOX_JSON_CONFIG="$SLAM_DIR/config/MID360s_config.json"
 MAPPING_CONFIG="$SLAM_DIR/config/mapping_mid360s.yaml"
 LOCALIZATION_CONFIG="$SLAM_DIR/config/reloc_mid360s.yaml"
-DDS_CONFIG="$SLAM_DIR/config/fastshm.xml"
 
 # Every process is a driver or a ManagedWorker. Manager starts the algorithms
 # through set_state services when the APP requests mapping/localization/navigation.
@@ -78,7 +77,7 @@ BINARIES=(
   "$MANAGER_DIR/nav_server/nav_server_node"
 )
 CONFIG_FILES=(
-  "$LIVOX_CONFIG" "$LIVOX_JSON_CONFIG" "$DDS_CONFIG"
+  "$LIVOX_CONFIG" "$LIVOX_JSON_CONFIG"
   "$MAPPING_CONFIG" "$LOCALIZATION_CONFIG" "$ROBOT_PARAM_CONFIG"
   "$SLAM_DIR/config/pgo_mid360s.yaml"
   "$NAV_DIR/config/terrain_filter.yaml"
@@ -181,10 +180,10 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-# All modules share the SLAM profile, including 2D nav which has no XML of its own.
-unset FASTDDS_DEFAULT_PROFILES_FILE
-export FASTRTPS_DEFAULT_PROFILES_FILE="$DDS_CONFIG"
-export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+# MID360s uses Fast DDS defaults without an XML profile. Clear any Airy
+# profile inherited from the environment before starting runtime processes.
+unset FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE
+unset RMW_FASTRTPS_USE_QOS_FROM_XML
 # Resolve each module's own libraries first; avoid loading 3D message libraries
 # from SLAM ahead of the 2D navigation module's libraries.
 ROS_LIB_PATH="/opt/ros/humble/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -294,7 +293,7 @@ done
 exec > >(tee -a "$LOG_DIR/supervisor.log" 9>&-) 2>&1
 echo "[ATTEMPT] $(date '+%Y-%m-%d %H:%M:%S') supervisor PID=$$"
 echo "[LOG] $LOG_DIR"
-echo "[DDS] $FASTRTPS_DEFAULT_PROFILES_FILE"
+echo "[DDS] RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION (default profiles)"
 start_node() {
   local name="$1" lib_path="$2" binary="$3"
   shift 3

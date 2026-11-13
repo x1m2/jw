@@ -39,10 +39,8 @@ NAV_DIR="$OTA_ROOT/nav/pack/content"
 MANAGER_DIR="$OTA_ROOT/slam_manager/pack/content"
 
 LIVOX_CONFIG="$SLAM_DIR/config/MID360s_driver.yaml"
-SLAM_FASTDDS_CONFIG="$SLAM_DIR/config/fastshm.xml"
 MAPPING_CONFIG="$SLAM_DIR/config/mapping_mid360s.yaml"
 LIVOX_JSON_CONFIG="$SLAM_DIR/config/MID360s_config.json"
-NAV_FASTDDS_CONFIG="$NAV_DIR/config/fastshm.xml"
 LOCALIZATION_CONFIG="$SLAM_DIR/config/reloc_mid360s.yaml"
 
 ROBOT_PARAM_CONFIG="$MANAGER_DIR/config/p2.5_mid360s.yaml"
@@ -63,14 +61,14 @@ if ! source /opt/ros/humble/setup.bash; then
 fi
 set -u
 
-# rslidar_msg libraries are deployed into SLAM_DIR/lib together with the
-# remaining SLAM runtime libraries.
+# Resolve the MID360s runtime libraries from the deployed modules.
 export LD_LIBRARY_PATH="$SLAM_DIR/lib:$NAV_DIR/lib:$MANAGER_DIR/lib:/opt/ros/humble/lib:${LD_LIBRARY_PATH:-}"
 
-# MID360s uses Fast DDS and loads its XML profile before any ROS 2 process starts.
+# MID360s uses Fast DDS defaults without an XML profile. Clear any Airy
+# profile inherited from the environment before starting runtime processes.
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTRTPS_DEFAULT_PROFILES_FILE="$SLAM_FASTDDS_CONFIG"
-export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+unset FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE
+unset RMW_FASTRTPS_USE_QOS_FROM_XML
 
 # ==================================================
 # Node binaries
@@ -96,10 +94,8 @@ BINARIES=(
 # ==================================================
 CONFIG_FILES=(
   "$LIVOX_CONFIG"
-  "$SLAM_FASTDDS_CONFIG"
   "$MAPPING_CONFIG"
   "$LIVOX_JSON_CONFIG"
-  "$NAV_FASTDDS_CONFIG"
   "$LOCALIZATION_CONFIG"
   "$ROBOT_PARAM_CONFIG"
   "$NAV_SERVER_CONFIG"
@@ -431,8 +427,7 @@ sleep 1
 # ==================================================
 echo "[START] obstacle_stop"
 
-env FASTRTPS_DEFAULT_PROFILES_FILE="$NAV_FASTDDS_CONFIG" \
-  stdbuf -oL -eL \
+stdbuf -oL -eL \
   "$NAV_DIR/obstacle_stop/obstacle_stop_node" \
   --ros-args \
   --params-file "$NAV_DIR/config/obstacle_stop_p2.5_mid360s.yaml" \
