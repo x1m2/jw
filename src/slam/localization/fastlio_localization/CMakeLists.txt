@@ -52,7 +52,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}   ${OpenMP_C_FLAGS}")
 
 option(ENABLE_OPENCL_BBS "Link the installed OpenCL BBS backend" ON)
 # Both backends come from one 3d_bbs installation; never build a second copy.
-set(BBS3D_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../install/bbs3d"
+set(BBS3D_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../install/bbs3d"
   CACHE PATH "3d_bbs installation prefix")
 set(bbs3d_DIR "${BBS3D_ROOT}/lib/cmake/bbs3d")
 find_package(bbs3d CONFIG REQUIRED PATHS "${bbs3d_DIR}" NO_DEFAULT_PATH)
