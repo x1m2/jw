@@ -189,7 +189,6 @@ public:
   void insert(const Points& cloud_world, bool init_map = false);
   void printInfo() const;
   void getMap(std::vector<float>&) const;
-  void saveMap() const;    // TODO:
   void resetMap(const std::vector<float>&);
   void clear();
 
@@ -448,51 +447,6 @@ void OctVoxMap<Point, Scalar>::resetMap(const std::vector<float>& input){
 
   reset_map_ = true;
   reset_map_count_ = 10;
-}
-
-
-template<typename Point, typename Scalar>
-void OctVoxMap<Point, Scalar>::saveMap() const {
-
-  const std::string g_root_dir = std::string(ROOT);
-  std::string filename = g_root_dir + "map/OctVoxMap.pcd";
-
-  if (std::filesystem::exists(filename)) {
-    std::filesystem::remove(filename);
-    std::cout << "Removed existing file: " << filename << std::endl;
-  }
-
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-  size_t total_points = data_.size() * 8;
-  
-  cloud->points.reserve(total_points);
-  
-  for (const auto& voxel_pair : data_) {
-    const OctVoxType& voxel = voxel_pair.second;
-    for(uint8_t i = 0; i < 8; ++i) {
-      pcl::PointXYZ pcl_point;
-      Point point;
-      if (!voxel.getPoint(i, point)) continue;
-      pcl_point.x = static_cast<float>(point.x());
-      pcl_point.y = static_cast<float>(point.y());
-      pcl_point.z = static_cast<float>(point.z());
-      cloud->points.push_back(pcl_point);
-    }
-  }
-  
-  cloud->width = cloud->points.size();
-  cloud->height = 1;
-  cloud->is_dense = true;
-  
-  int result = pcl::io::savePCDFileBinary(filename, *cloud);
-  
-  if (result == 0) {
-    std::cout << "Successfully saved " << cloud->points.size() 
-              << " points to " << filename << " (binary format)" << std::endl;
-  } else {
-    std::cerr << "Error saving point cloud to " << filename << std::endl;
-    throw std::runtime_error("Failed to save PCD file: " + filename);
-  }
 }
 
 

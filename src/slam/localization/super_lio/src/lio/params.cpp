@@ -9,17 +9,10 @@ namespace LI2Sup{
 
   const std::string g_root_dir = std::string(ROOT);
   std::atomic<bool> g_flag_run = true; 
-  bool g_flg_map_init = true;
 
   /// evaluation
   bool g_time_eva = false;
 
-  bool   g_save_map;
-  bool   g_if_filter; 
-  string g_save_map_dir;
-  string g_map_name;
-  float  g_map_ds_size;
-  int    g_pcd_save_interval;
   
   string g_imu_topic;
   string g_lidar_topic;
@@ -59,6 +52,5 @@ namespace LI2Sup{
   ResidualType g_residual_type = PROB;
 
   /// for localization
-  bool g_update_map = false;
 
 }

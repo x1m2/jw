@@ -27,30 +27,23 @@ namespace LI2Sup{
 class SuperLIO{
 public:
   SuperLIO(){};
-  ~SuperLIO(){};
+  virtual ~SuperLIO() = default;
 
   void setROSWrapper(const ROSWrapper::Ptr& wrapper){
     data_wrapper_ = wrapper;
   }
-  virtual void init();
+  virtual void init() = 0;
   virtual bool process();
-  void saveMap();
   void printTimeRecord();
 
 protected:
   void stateWaitKFInit();
-  void stateWaitMapInit();
   void stateProcess();
-  virtual bool kf_init();
-  virtual bool map_init();
+  virtual bool kf_init() = 0;
   void Propagation_Undistort();
   void DownSample();
   void Observe();
-  virtual bool RunBackend();
-  virtual void UpdateMap();
-  virtual void Output();
-  void caceData();
-  void ProcessCaceMap();
+  virtual void Output() = 0;
 
   using StateFn = void (SuperLIO::*)();
   using OctVoxMapType = OctVoxMap<BASIC::V3, BASIC::scalar>;
@@ -67,10 +60,9 @@ protected:
   std::vector<DynamicState> propagate_states_;
   BASIC::CloudPtr scan_undistort_full_;
   BASIC::CloudPtr ds_undistort_;
-  BASIC::CloudPtr point_map_, world_pc_, ds_world_;
+  BASIC::CloudPtr point_map_;
   int frame_num_ = 0;
   BASIC::SE3 sys_init_pose_;
-  BASIC::SE3 last_pose_;
 
   std::size_t effect_knn_num_ = 0;
   BASIC::VV3 points_world_v3_, points_body_v3_;
@@ -79,7 +71,6 @@ protected:
   std::vector<int> effect_knn_idxs_;
   std::vector<std::pair<BASIC::M6, BASIC::V6>> H_R_;
   std::vector<std::array<double, 4>> abcd_vec_;
-  int pcd_index_ = -1;
 
   Timer time_record_;
 };

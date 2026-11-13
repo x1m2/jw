@@ -20,10 +20,8 @@
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <visualization_msgs/msg/marker.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <visualization_msgs/msg/marker_array.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 
@@ -65,15 +63,6 @@ public:
   void pub_cloud_world(const BASIC::CloudPtr& pc, double time);
 
   void pub_processing_time(double time, double current_time, double mean_time, double std_time);
-
-  void PublishKeyframeTrajectory(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath,
-                                 const pcl::PointCloud<PointXYZIRPYT> &trajectory);
-
-  void VisualizeLoopClosureConstraints(rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr &pubLoopConstraintEdge,
-                                       const unordered_map<int, int> &loop_constraint_records,
-                                       const pcl::PointCloud<PointXYZIRPYT>::Ptr keyframe_pose6d);
-
-  void saveMap();
 
   void set_global_map(const BASIC::CloudPtr& global_map);
 
@@ -132,9 +121,6 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_cloud_world_;
 
-public:
-  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path2_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_loopConstraint_edge_;
 };
 
 } // namespace END.

@@ -26,9 +26,6 @@ private:
   };
 
   bool kf_init() override;
-  bool map_init() override;
-  bool RunBackend() override;
-  void UpdateMap() override;
   void Output() override;
 
 private:

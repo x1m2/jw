@@ -26,17 +26,10 @@ namespace LI2Sup{
   
   extern const std::string g_root_dir;
   extern std::atomic<bool> g_flag_run;
-  extern bool g_flg_map_init;
 
   /// evaluation
   extern bool g_time_eva;
 
-  extern bool g_save_map;
-  extern bool g_if_filter;
-  extern std::string g_map_name;
-  extern std::string g_save_map_dir;
-  extern float g_map_ds_size;
-  extern int   g_pcd_save_interval;
   
   extern std::string g_imu_topic;
   extern std::string g_lidar_topic;
@@ -82,8 +75,6 @@ namespace LI2Sup{
   extern ResidualType g_residual_type;
 
 
-  /// for localization
-  extern bool g_update_map;
 
 }
 

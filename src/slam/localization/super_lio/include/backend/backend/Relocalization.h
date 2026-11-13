@@ -14,7 +14,7 @@
 #include <pcl/filters/impl/voxel_grid.hpp>
 #include <pcl/kdtree/impl/kdtree_flann.hpp>
 #include "backend/Header.h"
-#include "GnssProcessor.h"
+#include "GnssPose.h"
 #include "backend/global_localization/bnb3d.h"
 #include "backend/global_localization/bbs3d/bbs3d.h"
 #include "backend/global_localization/scancontext/Scancontext.h"
@@ -40,7 +40,6 @@ public:
     void set_bnb3d_param(const BnbOptions &match_option, const Pose &lidar_pose);
     void set_ndt_param(const double &_step_size, const double &_resolution);
     void set_gicp_param(bool _use_gicp, const double &filter_range, const double &gicp_ds, const double &search_radi, const double &tep, const double &fep, const double &fit_score);
-    void add_keyframe_descriptor(const PointCloudType::Ptr thiskeyframe, const std::string &path);
     void get_pose_score(const Eigen::Matrix4d &imu_pose, const PointCloudType::Ptr &scan, double &bnb_score, double &ndt_score);
 
     std::string algorithm_type = "UNKNOW";

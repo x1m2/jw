@@ -301,27 +301,6 @@ namespace ScanContext
      *
      * @param[in] _scan_down
      */
-    void SCManager::makeAndSaveScancontextAndKeys(pcl::PointCloud<SCPointType> &_scan_down)
-    {
-        // Step 1. 对输入点云计算Scan-Context矩阵
-        Eigen::MatrixXd sc = makeScancontext(_scan_down); // v1
-
-        // Step 2. 使用计算的Scan-Context矩阵，计算ring-key和sector-key
-        Eigen::MatrixXd ringkey = makeRingkeyFromScancontext(sc);     // ring-key旋转不变
-        Eigen::MatrixXd sectorkey = makeSectorkeyFromScancontext(sc); // sector-key旋转变化
-        // 把ring-key的Eigen向量，转成std::vector的数据格式
-        // 最终就是使用ring-key在历史帧中查询相同的ring-key来得到候选匹配，然后计算Scan-Context距离
-        std::vector<float> polarcontext_invkey_vec = eig2stdvec(ringkey);
-
-        // Step 3. 把这帧的数据存到类成员变量中，即存到数据库中
-        polarcontexts_.push_back(sc);
-        polarcontext_invkeys_.push_back(ringkey);
-        polarcontext_vkeys_.push_back(sectorkey);
-        polarcontext_invkeys_mat_.push_back(polarcontext_invkey_vec);
-
-        // cout <<polarcontext_vkeys_.size() << endl;
-
-    } // SCManager::makeAndSaveScancontextAndKeys
 
     std::pair<int, float> SCManager::detectClosestKeyframeID(int num_exclude_recent, const std::vector<float> &curr_key, Eigen::MatrixXd &curr_desc)
     {
@@ -423,37 +402,7 @@ namespace ScanContext
         return result;
     }
 
-    /**
-     * @brief 检测闭环对，就是检测数据库中最新的那个点云帧和历史上所有帧之间的回环关系
-     *
-     * @return std::pair<int, float>
-     */
-    std::pair<int, float> SCManager::detectLoopClosureID(int num_exclude_recent)
-    {
-        auto curr_key = polarcontext_invkeys_mat_.back(); // current observation (query)
-        auto curr_desc = polarcontexts_.back();           // current observation (query)
 
-        return detectClosestKeyframeID(num_exclude_recent, curr_key, curr_desc);
-    } // SCManager::detectLoopClosureID
-
-    void SCManager::saveCurrentSCD(const std::string &save_path, int num_digits, const std::string &delimiter)
-    {
-        const auto &curr_scd = polarcontexts_.back();
-        std::ostringstream out;
-        out << std::internal << std::setfill('0') << std::setw(num_digits) << polarcontexts_.size() - 1;
-        std::string curr_scd_node_idx = out.str();
-
-        // delimiter: ", " or " " etc.
-        int precision = 3; // or Eigen::FullPrecision, but SCD does not require such accruate precisions so 3 is enough.
-        const static Eigen::IOFormat the_format(precision, Eigen::DontAlignCols, delimiter, "\n");
-
-        std::ofstream file(save_path + "/" + curr_scd_node_idx + ".scd");
-        if (file.is_open())
-        {
-            file << curr_scd.format(the_format);
-            file.close();
-        }
-    }
 
     void SCManager::loadPriorSCD(const std::string &path, int num_digits, int num_keyframe)
     {

@@ -42,7 +42,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
 message(STATUS "[super_lio] cores=${N} MP_PROC_NUM=${MP_PROC_NUM} BNB_PROC_NUM=${BNB_PROC_NUM} OpenMP_CXX_FLAGS='${OpenMP_CXX_FLAGS}'")
 
-set(BUILD_CUDA ON)
+option(BUILD_CUDA "Build the optional CUDA BBS3D backend" OFF)
 if (BUILD_CUDA)
   add_definitions(-DUSE_CUDA)
   find_package(CUDA REQUIRED)
@@ -60,7 +60,6 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
@@ -68,7 +67,6 @@ find_package(livox_ros_driver2 REQUIRED)
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(PCL REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem)
-find_package(GTSAM REQUIRED)
 find_package(Glog REQUIRED)
 
 find_package(basic REQUIRED)
@@ -91,20 +89,14 @@ endif()
 
 include_directories(
   include
-  3rdparty
   ${EIGEN3_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
-  ${GTSAM_INCLUDE_DIR}
   ${Glog_INCLUDE_DIRS}
 )
 
 set(BACKEND_SOURCES
   include/backend/backend/Backend.cpp
-  include/backend/backend/FactorGraphOptimization.cpp
-  include/backend/backend/GnssProcessor.cpp
-  include/backend/backend/LoopClosure.cpp
   include/backend/backend/Relocalization.cpp
-  include/backend/utility/Pcd2Pgm.cpp
   include/backend/global_localization/scancontext/Scancontext.cpp
   include/backend/global_localization/InitCoordinate.cpp)
 
@@ -118,7 +110,6 @@ ament_target_dependencies(lio PUBLIC
   std_msgs
   geometry_msgs
   sensor_msgs
-  visualization_msgs
   nav_msgs
   pcl_ros
   livox_ros_driver2
@@ -129,7 +120,6 @@ target_link_libraries(lio PUBLIC
   Eigen3::Eigen
   ${PCL_LIBRARIES}
   Boost::filesystem
-  gtsam
   stdc++fs
   glog
   pthread
@@ -141,22 +131,12 @@ if(BUILD_CUDA)
   target_link_libraries(lio PUBLIC gpu_bbs3d)
 endif()
 
-add_executable(super_lio_node src/apps/super_lio_node.cpp)
-target_link_libraries(super_lio_node
-  lio
-  Boost::filesystem
-  ${cpp_typesupport_target}
-)
-
 add_executable(relocation_node src/apps/relocation_node.cpp)
 target_link_libraries(relocation_node
   lio
   Boost::filesystem
   ${cpp_typesupport_target}
 )
-
-add_executable(status_switch src/apps/status_switch.cpp)
-ament_target_dependencies(status_switch rclcpp std_msgs)
 
 install(TARGETS
   lio
@@ -170,18 +150,12 @@ if(BUILD_CUDA)
 endif()
 
 install(TARGETS
-  super_lio_node status_switch
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(TARGETS
   relocation_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
   include/
-  3rdparty/
   DESTINATION include/${PROJECT_NAME}
 )
 

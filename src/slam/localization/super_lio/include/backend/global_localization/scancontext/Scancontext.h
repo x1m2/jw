@@ -63,11 +63,8 @@ public:
     std::pair<double, int> distanceBtnScanContext ( MatrixXd &_sc1, MatrixXd &_sc2 ); // "D" (eq 6) in the original paper (IROS 18)
 
     // User-side API
-    void makeAndSaveScancontextAndKeys( pcl::PointCloud<SCPointType> & _scan_down );
     std::pair<int, float> detectClosestKeyframeID(int num_exclude_recent, const std::vector<float> &curr_key, Eigen::MatrixXd &curr_desc);
-    std::pair<int, float> detectLoopClosureID( int num_exclude_recent = 50 ); // int: nearest node index, float: relative yaw  
 
-    void saveCurrentSCD(const std::string &fileName, int num_digits = 6, const std::string &delimiter = " ");
     void loadPriorSCD(const std::string &path, int num_digits, int num_keyframe);
     std::pair<int, float> relocalize(pcl::PointCloud<SCPointType> &_scan_down);
 

@@ -524,28 +524,6 @@ void Relocalization::set_gicp_param(bool _use_gicp, const double &_filter_range,
     fitness_score = fit_score;
 }
 
-void Relocalization::add_keyframe_descriptor(const PointCloudType::Ptr thiskeyframe, const std::string &path)
-{
-    PointCloudType::Ptr thiskeyframeDS(new PointCloudType());
-    pcl::PointCloud<SCPointType>::Ptr sc_input(new pcl::PointCloud<SCPointType>());
-    voxel_filter.setLeafSize(0.5, 0.5, 0.5);
-    voxel_filter.setInputCloud(thiskeyframe);
-    voxel_filter.filter(*thiskeyframeDS);
-
-    pcl::PointXYZI tmp;
-    for (auto &point : thiskeyframeDS->points)
-    {
-        tmp.x = point.x;
-        tmp.y = point.y;
-        tmp.z = point.z;
-        sc_input->push_back(tmp);
-    }
-    sc_manager->makeAndSaveScancontextAndKeys(*sc_input);
-
-    if (path.compare("") != 0)
-        sc_manager->saveCurrentSCD(path);
-}
-
 void Relocalization::get_pose_score(const Eigen::Matrix4d &imu_pose, const PointCloudType::Ptr &scan, double &bnb_score, double &ndt_score)
 {
     PointCloudType::Ptr trans_pc(new PointCloudType(scan->points.size(), 1));

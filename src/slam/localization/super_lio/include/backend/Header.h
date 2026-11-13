@@ -10,8 +10,6 @@
 #include <pcl/common/eigen.h>
 #include <pcl/octree/octree_pointcloud_voxelcentroid.h>
 #include <pcl/io/pcd_io.h>
-#include <gtsam/geometry/Pose3.h>
-#include <gtsam/linear/NoiseModel.h>
 
 #include "utility/LogTool.h"
 #include "utility/Timer.h"
@@ -34,7 +32,6 @@ using namespace EigenMath;
 #define CONSTRAIN(v, min, max) ((v > min) ? ((v < max) ? v : max) : min)
 #define ARRAY_FROM_EIGEN(mat) mat.data(), mat.data() + mat.rows() * mat.cols()
 #define STD_VEC_FROM_EIGEN(mat) vector<decltype(mat)::Scalar>(mat.data(), mat.data() + mat.rows() * mat.cols())
-#define DEBUG_FILE_DIR(name) (string(string(ROOT) + "Log/" + name))
 #define PCD_FILE_DIR(name) (string(string(ROOT) + "PCD/" + name))
 
 /**
@@ -132,21 +129,6 @@ struct MeasureCollection
     deque<ImuData::Ptr> imu;
 };
 
-struct LoopConstraint
-{
-    void clear()
-    {
-        loop_indexs.clear();
-        loop_pose_correct.clear();
-        loop_noise.clear();
-    }
-
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    vector<pair<int, int>> loop_indexs;
-    vector<gtsam::Pose3> loop_pose_correct;
-    vector<gtsam::noiseModel::Diagonal::shared_ptr> loop_noise;
-};
-
 /**
  * @brief transform frame_a to frame_b
  * @param extR rot from frame_b to frame_a
@@ -199,12 +181,6 @@ float pointDistance(const PointType &p1, const PointType &p2)
     return sqrt(pointDistanceSquare(p1, p2));
 }
 
-inline gtsam::Pose3 pclPointTogtsamPose3(const PointXYZIRPYT &thisPoint)
-{
-    return gtsam::Pose3(gtsam::Rot3::RzRyRx(thisPoint.roll, thisPoint.pitch, thisPoint.yaw),
-                        gtsam::Point3(thisPoint.x, thisPoint.y, thisPoint.z));
-}
-
 inline Eigen::Affine3f pclPointToAffine3f(const PointXYZIRPYT &thisPoint)
 {
     return pcl::getTransformation(thisPoint.x, thisPoint.y, thisPoint.z, thisPoint.roll, thisPoint.pitch, thisPoint.yaw);
@@ -250,16 +226,6 @@ inline void octreeDownsampling(const PointCloudType::Ptr &src, PointCloudType::P
     map_ds->points.assign(centroids.begin(), centroids.end());
     map_ds->width = 1;
     map_ds->height = map_ds->points.size();
-}
-
-inline void savePCDFile(const std::string &save_path, const PointCloudType &src)
-{
-    pcl::PointCloud<pcl::PointXYZI>::Ptr save_pc(new pcl::PointCloud<pcl::PointXYZI>(src.points.size(), 1));
-    for (auto i = 0; i < src.points.size(); ++i)
-    {
-        pcl::copyPoint(src.points[i], save_pc->points[i]);
-    }
-    pcl::io::savePCDFileBinary(save_path, *save_pc);
 }
 
 template <typename ikfom_state>
@@ -329,167 +295,3 @@ inline PointCloudType::Ptr pointcloudKeyframeToWorld(const PointCloudType::Ptr &
     }
     return cloud_out;
 }
-
-enum FrontendOdometryType
-{
-    Fastlio,
-    Pointlio
-};
-
-#define NO_LOGER
-
-class LogAnalysis
-{
-public:
-    LogAnalysis()
-    {
-        frame_num = preprocess_time = preprocess_avetime = 0;
-        imu_process_avetime = downsample_avetime = kdtree_search_avetime = match_avetime = cal_H_avetime = 0;
-        meas_update_avetime = kdtree_incremental_avetime = kdtree_delete_avetime = map_incre_avetime = map_remove_avetime = total_avetime = 0;
-
-#ifndef NO_LOGER
-        fout_predict = fopen(DEBUG_FILE_DIR("state_predict.txt").c_str(), "w");
-        fout_update = fopen(DEBUG_FILE_DIR("state_update.txt").c_str(), "w");
-        fout_fastlio_log = fopen(DEBUG_FILE_DIR("fast_lio_log.csv").c_str(), "w");
-
-        if (fout_predict && fout_update)
-            cout << "~~~~" << ROOT << " file opened" << endl;
-        else
-            cout << "~~~~" << ROOT << " doesn't exist" << endl;
-#endif
-    }
-
-    ~LogAnalysis()
-    {
-        fclose(fout_predict);
-        fclose(fout_update);
-        fclose(fout_fastlio_log);
-    }
-
-    template <typename ikfom_state>
-    void print_pose(const ikfom_state &state, const std::string &print)
-    {
-        const auto &xyz = state.pos;
-        const auto &rpy = EigenMath::Quaternion2RPY(state.rot);
-        LOG_INFO("%s (xyz, rpy): (%.5f, %.5f, %.5f, %.5f, %.5f, %.5f)", print.c_str(), xyz(0), xyz(1), xyz(2), RAD2DEG(rpy(0)), RAD2DEG(rpy(1)), RAD2DEG(rpy(2)));
-    }
-
-    template <typename ikfom_state>
-    void print_extrinsic(const ikfom_state &state, bool need_print)
-    {
-        const auto &offset_xyz = state.offset_T_L_I;
-        const auto &offset_rpy = EigenMath::Quaternion2RPY(state.offset_R_L_I);
-        LOG_INFO_COND(need_print, "extrinsic_est: (%.5f, %.5f, %.5f, %.5f, %.5f, %.5f)", offset_xyz(0), offset_xyz(1), offset_xyz(2), RAD2DEG(offset_rpy(0)), RAD2DEG(offset_rpy(1)), RAD2DEG(offset_rpy(2)));
-    }
-
-    void output_fastlio_log_to_csv(const double &lidar_beg_time)
-    {
-        if (!runtime_log)
-            return;
-        static bool first = true;
-        if (first)
-        {
-            fprintf(fout_fastlio_log, "timestamp,total time,feats_undistort size,incremental time,search time,delete size,delete time,"
-                                      "kdtree size,kdtree size end,add point size,preprocess time\n");
-            first = false;
-        }
-
-        fprintf(fout_fastlio_log, "%0.8f,%0.8f,%d,%0.8f,%0.8f,%d,%0.8f,%d,%d,%d,%0.8f\n",
-                lidar_beg_time, total_time, feats_undistort_size, kdtree_incremental_time, kdtree_search_time,
-                kdtree_delete_counter, kdtree_delete_time, kdtree_size, kdtree_size_end, add_point_size, preprocess_time);
-    }
-
-    void resetTimer()
-    {
-        imu_process_time = 0;
-        downsample_time = 0;
-
-        kdtree_search_time = 0;
-        match_time = 0;
-        cal_H_time = 0;
-        meas_update_time = 0;
-
-        kdtree_incremental_time = 0;
-        kdtree_delete_time = 0;
-        map_incre_time = 0;
-        map_remove_time = 0;
-
-        total_time = 0;
-
-        feats_undistort_size = 0;
-        feats_down_size = 0;
-    }
-
-    void print_fastlio_cost_time()
-    {
-        total_time = preprocess_time + imu_process_time + downsample_time + meas_update_time + map_incre_time + map_remove_time;
-
-        if (!runtime_log)
-            return;
-
-        frame_num++;
-
-        preprocess_avetime = (preprocess_avetime * (frame_num - 1) + preprocess_time) / frame_num;
-        imu_process_avetime = (imu_process_avetime * (frame_num - 1) + imu_process_time) / frame_num;
-        downsample_avetime = (downsample_avetime * (frame_num - 1) + downsample_time) / frame_num;
-
-        kdtree_search_avetime = (kdtree_search_avetime * (frame_num - 1) + kdtree_search_time) / frame_num;
-        match_avetime = (match_avetime * (frame_num - 1) + match_time) / frame_num;
-        cal_H_avetime = (cal_H_avetime * (frame_num - 1) + cal_H_time) / frame_num;
-        meas_update_avetime = (meas_update_avetime * (frame_num - 1) + meas_update_time) / frame_num;
-
-        kdtree_incremental_avetime = (kdtree_incremental_avetime * (frame_num - 1) + kdtree_incremental_time) / frame_num;
-        kdtree_delete_avetime = (kdtree_delete_avetime * (frame_num - 1) + kdtree_delete_time) / frame_num;
-        map_incre_avetime = (map_incre_avetime * (frame_num - 1) + map_incre_time) / frame_num;
-        map_remove_avetime = (map_remove_avetime * (frame_num - 1) + map_remove_time) / frame_num;
-
-        total_avetime = (total_avetime * (frame_num - 1) + total_time) / frame_num;
-
-#if 0
-        printf("[ave_time]: feats_undistort: %d, feats_down: %d, preprocess: %0.3f, imu: %0.3f, downsample: %0.3f, search: %0.3f, match: %0.3f, "
-               "meas update: %0.3f, map incre: %0.3f, map remove: %0.3f, ave total: %0.3f\n",
-               feats_undistort_size, feats_down_size,
-               preprocess_avetime, imu_process_avetime, downsample_avetime, kdtree_search_avetime, match_avetime,
-               meas_update_avetime, map_incre_avetime, map_remove_avetime, total_avetime);
-#else
-        printf("[cur_time]: feats_undistort: %d, feats_down: %d, preprocess: %0.3f, imu: %0.3f, downsample: %0.3f, search: %0.3f, match: %0.3f, "
-               "meas update: %0.3f, map incre: %0.3f, map remove: %0.3f, total: %0.3f\n",
-               feats_undistort_size, feats_down_size,
-               preprocess_time, imu_process_time, downsample_time, kdtree_search_time, match_time,
-               meas_update_time, map_incre_time, map_remove_time, total_time);
-#endif
-    }
-
-    // 0 : not, 1 : TUM
-    static void save_trajectory(FILE *fp, const V3D &pos, const QD &quat, const double &time, int save_traj_fmt = 1)
-    {
-        if (save_traj_fmt == 1)
-        {
-            fprintf(fp, "%0.4lf %0.4f %0.4f %0.4f %0.4f %0.4f %0.4f %0.4f\n", time,
-                    pos.x(), pos.y(), pos.z(), quat.x(), quat.y(), quat.z(), quat.w());
-        }
-
-        fflush(fp);
-    }
-
-public:
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    int runtime_log = 0;
-    bool inited_first_lidar_beg_time = false;
-    double first_lidar_beg_time;
-
-    FILE *fout_fastlio_log;
-    FILE *fout_predict, *fout_update;
-
-    long unsigned int frame_num;
-    double preprocess_time, imu_process_time, downsample_time, kdtree_search_time, match_time, cal_H_time;
-    double meas_update_time, kdtree_incremental_time, kdtree_delete_time, map_incre_time, map_remove_time, total_time;
-
-    double preprocess_avetime, imu_process_avetime, downsample_avetime, kdtree_search_avetime, match_avetime, cal_H_avetime;
-    double meas_update_avetime, kdtree_incremental_avetime, kdtree_delete_avetime, map_incre_avetime, map_remove_avetime, total_avetime;
-
-    int feats_undistort_size = 0, feats_down_size = 0, kdtree_size = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
-};
-
-
-// #define DEDUB_MODE

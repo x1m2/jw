@@ -77,8 +77,6 @@ void SuperLIOReLoc::init(){
 
   scan_undistort_full_.reset(new PointCloudType());
   ds_undistort_.reset(new PointCloudType());
-  world_pc_.reset(new PointCloudType());
-  ds_world_.reset(new PointCloudType());
   point_map_.reset(new PointCloudType());
   init_obs_data_.reset(new PointCloudType());
   
@@ -90,17 +88,12 @@ void SuperLIOReLoc::init(){
   LOG(INFO) << GREEN << " ---> [SuperLIO]: initialized." << RESET;
 
   auto start_time = std::chrono::high_resolution_clock::now();
-  SuperLIOReLoc::map_init();
 
   if (!backend.init_localization_mode())
     LOG(WARNING) << YELLOW << " ---> [Relocalization] prior map not loaded; "
                  << "relocalization is disabled until a prior map is provided." << RESET;
   else if (backend.global_map && !backend.global_map->empty())
   {
-    /// Localization MUST register against the same prior map that was used for
-    /// relocalization (official.map_path / globalmap.pcd). map_init() may have
-    /// injected the legacy frontend map (g_save_map_dir/g_map_name), so replace
-    /// whatever is in ivox_ unconditionally instead of only seeding when empty.
     ivox_->clear();
     point_map_->clear();
     *point_map_ = *backend.global_map;
@@ -114,6 +107,9 @@ void SuperLIOReLoc::init(){
               << point_map_->size() << RESET;
     ivox_->printInfo();
   }
+
+  data_wrapper_->set_initial_data(flg_get_init_guess_);
+  data_wrapper_->set_gnss_data();
 
   auto end_time = std::chrono::high_resolution_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -132,70 +128,6 @@ bool SuperLIOReLoc::process(){
       return false;
   }
   return SuperLIO::process();
-}
-
-
-bool SuperLIOReLoc::RunBackend(){
-  /// Localization mode: skip keyframe insertion, ScanContext and the GTSAM/iSAM2
-  /// factor graph entirely. The base stateProcess() interprets a false return as
-  /// "no backend correction" and calls UpdateMap() for the current scan instead.
-  static bool warned = false;
-  if (!warned)
-  {
-    warned = true;
-    LOG(INFO) << GREEN << " ---> [Relocalization] localization mode: mapping backend "
-              << "(keyframes / factor graph / loop closure) disabled." << RESET;
-  }
-  return false;
-}
-
-
-bool SuperLIOReLoc::map_init(){
-  static bool pcd_loaded = false;
-  if(pcd_loaded) return true;
-  pcd_loaded = true;
-
-  std::string map_name = g_save_map_dir + "/" + g_map_name;
-  bool loaded = true;
-
-  /// In localization mode the prior map (official.map_path/globalmap.pcd) is the
-  /// single source of truth. If it exists, do not load the legacy frontend map
-  /// (g_save_map_dir/g_map_name) at all: it would put a different map into ivox_.
-  const bool has_prior_map = !backend.globalmap_path.empty() && fs::exists(backend.globalmap_path);
-  if (has_prior_map)
-  {
-    LOG(INFO) << GREEN << " ---> Using prior map " << backend.globalmap_path
-              << " (legacy frontend map " << map_name << " ignored)." << RESET;
-    loaded = false;
-  }
-  else if(pcl::io::loadPCDFile<PointType>(map_name, *point_map_) == -1){
-    LOG(ERROR) << RED << " ---> Load frontend map failed. File: " << map_name
-               << " (the relocalization prior map will be used for ivox_ if available)" << RESET;
-    loaded = false;
-  } else {
-    std::vector<int> useless_indices;
-    pcl::removeNaNFromPointCloud(*point_map_, *point_map_, useless_indices);
-
-    VV3 point_map_v3;
-    point_map_v3.reserve(point_map_->size());
-    for(const auto& point: *point_map_){
-      V3 pt(point.x, point.y, point.z);
-      point_map_v3.push_back(pt);
-    }
-
-    ivox_->insert(point_map_v3);
-
-    LOG(INFO) << GREEN << " ---> Load map success. File: " << map_name << RESET;
-    LOG(INFO) << GREEN << " ---> Map size: " << point_map_->size() << RESET;
-    ivox_->printInfo();
-  }
-
-  /// Always create the ROS interfaces, otherwise /initialpose and GNSS are dead
-  /// whenever the frontend map happens to be missing.
-  data_wrapper_->set_global_map(point_map_);
-  data_wrapper_->set_initial_data(flg_get_init_guess_);
-  data_wrapper_->set_gnss_data();
-  return loaded;
 }
 
 
@@ -402,35 +334,6 @@ bool SuperLIOReLoc::kf_init(){
   init_frame_count = 0;
   init_obs_data_->clear();
   return false;
-}
-
-
-void SuperLIOReLoc::UpdateMap() {
-  if(!g_update_map) return;
-  
-  static int __update_delay = 100;
-  if(__update_delay > 0){
-    __update_delay--;
-    std::cout << "Update map Delay: " << 100 - __update_delay << " %" << std::endl;
-    return;
-  }
-
-  const size_t ptsize = ds_undistort_->size();
-  if (ptsize == 0) return;
-  
-  last_pose_ = kf_->GetSE3();
-  points_world_v3_.resize(ptsize);
-  
-  const auto R = last_pose_.R_;
-  const auto t = last_pose_.t_;
-  
-  for (size_t i = 0; i < ptsize; ++i) {
-    const auto& pt = points_body_v3_[i];
-    points_world_v3_[i] = R * pt + t;
-  }
-  
-  ivox_->insert(points_world_v3_);
-
 }
 
 

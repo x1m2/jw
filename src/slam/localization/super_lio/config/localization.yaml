@@ -10,23 +10,9 @@
     # stale copy with e.g. `lio.sensor.filter_rate: 3.0` instead of `3`).
     # ---------------------------------------------------------------------------
 
-    # ---- prior map consumed by the LIO frontend (ivox_), relative to super_lio root ----
-    lio.map.save_map: false
-    lio.map.save_map_dir: "map"
-    lio.map.map_name: "map.pcd"
-    lio.map.ds_size: 0.3
-    lio.map.save_interval: 500
-
-    lio.localization.update_map: false
-
-    # ======================== relocalization ========================
-    # false => localization mode: init_system_mode() is skipped, so the
-    # keyframe/scancontext directories are never recreated and no loop-closure
-    # thread is started.
-    official.system_mode: false
-
     # Directory holding the artifacts written by the MAPPING run:
-    #   globalmap.pcd  trajectory.pcd  keyframe/  scancontext/  voxelmaps_coords/
+    #   globalmap.pcd; scan_context additionally needs trajectory.pcd + scancontext/.
+    #   voxelmaps_coords/ is used by BBS3D and can be built from the prior map.
     # Empty => <super_lio_pkg>/PCD/. e.g. "/home/h/mid360_out"
     official.map_path: "/home/will/tmp/out_bag/"
 
