@@ -23,7 +23,7 @@ class LocalizationController {
   void stop(uint64_t session_id, Completion completion);
 
  private:
-  WorkerClient fastlio_localization_worker_;
+  WorkerClient localization_worker_;
 };
 
 }  // namespace slam_manager

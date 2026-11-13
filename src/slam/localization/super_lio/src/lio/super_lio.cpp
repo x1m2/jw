@@ -8,7 +8,6 @@
 #include <tbb/enumerable_thread_specific.h>
 
 FILE *location_log = nullptr;
-Backend backend;
 
 using namespace BASIC;
 
@@ -93,6 +92,11 @@ void SuperLIO::stateProcess(){
     DownSample();
     Observe();
   }
+  const auto state = kf_->GetNavState();
+  if (!observation_valid_ || !state.p.allFinite() || !state.R.R_.allFinite()) {
+    tracking_failed();
+    return;
+  }
   Output();
 }
 
@@ -106,8 +110,8 @@ void SuperLIO::Propagation_Undistort(){
     propagate_states_.emplace_back(kf_->GetDynamicState());
   }
 
-  static const M3 TLI_R = g_lidar_imu.R_;
-  static const V3 TLI_t = g_lidar_imu.t_;
+  const M3 TLI_R = g_lidar_imu.R_;
+  const V3 TLI_t = g_lidar_imu.t_;
   const SE3 T_end = kf_->GetSE3();
   const M3  R_inv = T_end.R_.transpose();
   const V3  T_end_t = T_end.t_;
@@ -181,12 +185,21 @@ void SuperLIO::DownSample(){
 struct ThreadACC{
   M6d HTVH = M6d::Zero();
   V6d HTVr = V6d::Zero();
+  double residual_sum = 0.0;
+  size_t valid_count = 0;
   ThreadACC(): HTVH(M6d::Zero()), HTVr(V6d::Zero()) {}
 };
 
 
 void SuperLIO::Observe(){
   size_t ptsize = ds_undistort_->size();
+  match_score_ = 0.0;
+  observation_valid_ = false;
+  if (ptsize == 0) return;
+  abcd_vec_.resize(ptsize);
+  effect_knn_idxs_.resize(ptsize);
+  effect_mask_.resize(ptsize);
+  effect_knn_mask_.resize(ptsize);
   
   static std::vector<float> _lengths;
   points_body_v3_.resize(ptsize);
@@ -250,15 +263,28 @@ void SuperLIO::Observe(){
       
             local_acc.HTVH += J * 1000 * J.transpose();
             local_acc.HTVr -= J * 1000 * error;
+            local_acc.residual_sum += std::abs(error);
+            ++local_acc.valid_count;
           }
         }
     });
 
     M6d sum_HTVH = M6d::Zero();
     V6d sum_HTVr = V6d::Zero();
+    double residual_sum = 0.0;
+    size_t valid_count = 0;
     for(const auto& local_acc : tls_acc){
       sum_HTVH += local_acc.HTVH;
       sum_HTVr += local_acc.HTVr;
+      residual_sum += local_acc.residual_sum;
+      valid_count += local_acc.valid_count;
+    }
+    observation_valid_ = valid_count > 0;
+    if (observation_valid_) {
+      const double valid_ratio = static_cast<double>(valid_count) / ptsize;
+      const double valid_score = std::clamp((valid_ratio - 0.3) / 0.5, 0.0, 1.0);
+      const double residual_score = std::exp(-residual_sum / valid_count / 0.05);
+      match_score_ = std::clamp(0.6 * valid_score + 0.4 * residual_score, 0.0, 1.0);
     }
     HTVH = sum_HTVH.cast<scalar>();
     HTVr = sum_HTVr.cast<scalar>();

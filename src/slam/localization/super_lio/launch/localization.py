@@ -1,22 +1,28 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_super_lio = get_package_share_directory('super_lio')
-    relocation_yaml = os.path.join(pkg_super_lio, 'config', 'localization.yaml')
     rviz_config_file = os.path.join(pkg_super_lio, 'rviz', 'localization.rviz')
 
     declare_config_arg = DeclareLaunchArgument(
         'config',
-        default_value='livox_360.yaml',
-        description='Robot config yaml that provides the LIO / sensor / extrinsic block'
+        default_value='reloc_mid360s.yaml',
+        description='Complete sensor and relocalization config yaml'
     )
-    config_yaml = PathJoinSubstitution([pkg_super_lio, 'config', LaunchConfiguration('config')])
+    config_file_arg = DeclareLaunchArgument('config_file', default_value=LaunchConfiguration('config'))
+    config_yaml = PathJoinSubstitution([pkg_super_lio, 'config', LaunchConfiguration('config_file')])
+    robot_param_arg = DeclareLaunchArgument('robot_param_file', default_value='',
+        description='Optional robot YAML providing lidar_to_base_T/R')
+    map_path_arg = DeclareLaunchArgument('map_path', default_value='',
+        description='Prior map directory; empty uses the selected YAML')
+    runtime_arg = DeclareLaunchArgument('runtime_profile', default_value='test',
+        description='test autostarts; platform waits for Worker START')
 
     declare_rviz_arg = DeclareLaunchArgument(
         'rviz',
@@ -25,14 +31,18 @@ def generate_launch_description():
     )
     rviz_flag = LaunchConfiguration('rviz')
 
-    localization_node = Node(
-        package='super_lio',
-        executable='relocation_node',
-        name='relocation_node',
-        output='screen',
-        parameters=[config_yaml, relocation_yaml],
-        arguments=['--ros-args', '--log-level', 'info']
-    )
+    def localization_node(context):
+        parameters = [config_yaml]
+        robot_file = LaunchConfiguration('robot_param_file').perform(context)
+        if robot_file:
+            parameters.append(robot_file)
+        overrides = {'runtime_profile': LaunchConfiguration('runtime_profile').perform(context)}
+        map_path = LaunchConfiguration('map_path').perform(context)
+        if map_path:
+            overrides['map_path'] = map_path
+        parameters.append(overrides)
+        return [Node(package='super_lio', executable='relocation_node',
+                     output='screen', parameters=parameters)]
 
     rviz2_node = Node(
         package='rviz2',
@@ -44,8 +54,12 @@ def generate_launch_description():
 
     ld = LaunchDescription()
     ld.add_action(declare_config_arg)
+    ld.add_action(config_file_arg)
+    ld.add_action(robot_param_arg)
+    ld.add_action(map_path_arg)
+    ld.add_action(runtime_arg)
     ld.add_action(declare_rviz_arg)
-    ld.add_action(localization_node)
+    ld.add_action(OpaqueFunction(function=localization_node))
     ld.add_action(rviz2_node)
 
     return ld

@@ -44,6 +44,7 @@ protected:
   void DownSample();
   void Observe();
   virtual void Output() = 0;
+  virtual void tracking_failed() = 0;
 
   using StateFn = void (SuperLIO::*)();
   using OctVoxMapType = OctVoxMap<BASIC::V3, BASIC::scalar>;
@@ -64,10 +65,12 @@ protected:
   int frame_num_ = 0;
   BASIC::SE3 sys_init_pose_;
 
+  bool observation_valid_ = false;
+  double match_score_ = 0.0;
   std::size_t effect_knn_num_ = 0;
   BASIC::VV3 points_world_v3_, points_body_v3_;
-  alignas(64) bool effect_mask_[20000] = {false};
-  alignas(64) bool effect_knn_mask_[20000] = {false};
+  std::vector<uint8_t> effect_mask_;
+  std::vector<uint8_t> effect_knn_mask_;
   std::vector<int> effect_knn_idxs_;
   std::vector<std::pair<BASIC::M6, BASIC::V6>> H_R_;
   std::vector<std::array<double, 4>> abcd_vec_;

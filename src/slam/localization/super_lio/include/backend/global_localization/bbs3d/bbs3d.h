@@ -1,12 +1,20 @@
 #pragma once
+#include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <exception>
+#include <string>
 #include <vector>
 #include <Eigen/Core>
 #ifdef USE_CUDA
-#include "backend/global_localization/bbs3d/gpu_bbs3d/bbs3d.cuh"
+#include <gpu_bbs3d/bbs3d.cuh>
+#else
+#include <cpu_bbs3d/bbs3d.hpp>
 #endif
-#include "backend/global_localization/bbs3d/cpu_bbs3d/bbs3d.hpp"
-#include "backend/global_localization/bbs3d/pointcloud_iof/pcl_eigen_converter.hpp"
+#ifdef BBS_ENABLE_OPENCL
+#include <opencl_bbs3d/bbs3d.hpp>
+#endif
+#include <pointcloud_iof/pcl_eigen_converter.hpp>
 // #include <pointcloud_iof/pcd_loader.hpp>
 
 struct BBS3DOptions
@@ -20,6 +28,7 @@ struct BBS3DOptions
     // angular search range
     std::vector<double> min_rpy;
     std::vector<double> max_rpy;
+    bool gravity_align = false;
 
     // score threshold percentage
     double score_threshold_percentage;
@@ -35,6 +44,11 @@ struct BBS3DOptions
 
     // align
     bool use_gicp;
+
+    std::string backend = "opencl";
+    int64_t opencl_batch_size = 10000;
+    bool opencl_fallback_cpu = true;
+    bool opencl_verify = false;
 };
 
 class BBS3D
@@ -42,6 +56,13 @@ class BBS3D
 public:
     bool load_config(const BBS3DOptions &bbs3d_option)
     {
+        backend_ = bbs3d_option.backend;
+        fallback_cpu_ = bbs3d_option.opencl_fallback_cpu;
+        fallback_reason_.clear();
+#ifdef BBS_ENABLE_OPENCL
+        // The engine holds a reference to bbs3d_ptr: release it before reloading a map.
+        opencl_engine_.reset();
+#endif
         tar_path = bbs3d_option.tar_path;
 
         std::cout << "[BBS3D] Loading 3D-BBS parameters..." << std::endl;
@@ -65,6 +86,7 @@ public:
             std::cout << "[ERROR] Set min_rpy and max_rpy correctly" << std::endl;
             return false;
         }
+        gravity_align = bbs3d_option.gravity_align;
 
         std::cout << "[BBS3D] Loading score threshold percentage..." << std::endl;
         score_threshold_percentage = bbs3d_option.score_threshold_percentage;
@@ -121,6 +143,40 @@ public:
 #ifndef USE_CUDA
         bbs3d_ptr->set_num_threads(bbs3d_option.num_threads);
 #endif
+        if (backend_ == "opencl")
+        {
+#ifdef BBS_ENABLE_OPENCL
+            oclbbs::SearchOptions options;
+            options.use_opencl = true;
+            options.batch_size = static_cast<size_t>(bbs3d_option.opencl_batch_size);
+            options.verify_gpu = bbs3d_option.opencl_verify;
+            options.fallback_cpu = fallback_cpu_;
+            opencl_engine_ = std::make_unique<oclbbs::CudaStyleSearch>(*bbs3d_ptr, options);
+            if (!opencl_engine_->gpu_available())
+            {
+                fallback_reason_ = opencl_engine_->setup_error();
+                opencl_engine_.reset();
+            }
+            else
+            {
+                std::cout << "[BBS_RUNTIME] requested=opencl active=opencl map_bytes="
+                          << opencl_engine_->gpu_map_bytes() << " setup_ms="
+                          << opencl_engine_->runtime_setup_ms << " batch=" << options.batch_size
+                          << " fallback_cpu=" << fallback_cpu_ << std::endl;
+            }
+#else
+            fallback_reason_ = "localization built without ENABLE_OPENCL_BBS";
+#endif
+            if (!fallback_reason_.empty())
+            {
+                std::cerr << "[BBS_BACKEND] requested=opencl active="
+                          << (fallback_cpu_ ? "cpu" : "unavailable")
+                          << " reason=" << fallback_reason_ << std::endl;
+                if (!fallback_cpu_) return false;
+            }
+        }
+        else
+            std::cout << "[BBS_RUNTIME] requested=cpu active=cpu" << std::endl;
         return true;
     }
 
@@ -132,14 +188,60 @@ public:
         std::vector<Eigen::Vector3d> src_points;
 #endif
         pciof::pcl_to_eigen(src_cloud, src_points);
-        if (src_points.empty())
+        if (src_points.empty() || !bbs3d_ptr)
         {
-            std::cout << "[Failed] Source cloud is empty." << std::endl;
+            std::cerr << "[BBS_BACKEND_ERROR] Empty input or map not initialized" << std::endl;
             return false;
         }
-        bbs3d_ptr->set_src_points(src_points);
+        for (const auto &point : src_points)
+            if (!point.allFinite())
+            {
+                std::cerr << "[BBS_BACKEND_ERROR] Nonfinite input point" << std::endl;
+                return false;
+            }
         std::cout << "[Localize] bbs3d start localize." << std::endl;
-        bbs3d_ptr->localize();
+        try
+        {
+#ifdef BBS_ENABLE_OPENCL
+            if (opencl_engine_)
+            {
+                opencl_engine_->prepare(src_points);
+                const auto result = opencl_engine_->localize();
+                const bool gpu_used = result.gpu_candidates != 0;
+                std::cout << "[BBS_SEARCH_STATS] requested=opencl active="
+                          << (gpu_used ? (result.cpu_batches ? "opencl+cpu" : "opencl") : "cpu")
+                          << " search_ms=" << result.search_ms
+                          << " scan_setup_ms=" << result.scan_setup_ms
+                          << " gpu_kernel_ms=" << result.gpu_kernel_ms
+                          << " boundary_ms=" << result.boundary_ms
+                          << " gpu_candidates=" << result.gpu_candidates
+                          << " cpu_batches=" << result.cpu_batches
+                          << " gpu_failures=" << result.gpu_failures
+                          << " success=" << result.success
+                          << " timed_out=" << result.timed_out << std::endl;
+                if (!gpu_used || result.gpu_failures || result.cpu_batches)
+                    std::cerr << "[BBS_CPU_FALLBACK] reason="
+                              << (!result.gpu_error.empty() ? result.gpu_error :
+                                  (!result.gpu_eligible ? "input requires CPU precision" :
+                                   "candidate range requires CPU precision, or no candidates scored"))
+                              << std::endl;
+                // A timeout or insufficient score is a normal failed attempt;
+                // do not restart the search on CPU with a fresh timeout budget.
+                if (!result.success) return false;
+                lidar_pose_mat = result.pose;
+                return true;
+            }
+#endif
+            std::cout << "[BBS_SEARCH_STATS] requested=" << backend_ << " active=cpu"
+                      << (fallback_reason_.empty() ? "" : " reason=" + fallback_reason_) << std::endl;
+            bbs3d_ptr->set_src_points(src_points);
+            bbs3d_ptr->localize();
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "[BBS_BACKEND_ERROR] " << error.what() << std::endl;
+            return false;
+        }
 
         std::cout << "[Localize] Execution time: " << bbs3d_ptr->get_elapsed_time() << "[msec] " << std::endl;
         std::cout << "[Localize] Score: " << bbs3d_ptr->get_best_score() << std::endl;
@@ -155,18 +257,6 @@ public:
 
         lidar_pose_mat = bbs3d_ptr->get_global_pose().cast<double>();
         return true;
-    }
-
-    void reset_rpy(const Eigen::Vector3d &rpy_fix)
-    {
-        auto tmp_min_rpy = min_rpy + rpy_fix;
-        auto tmp_max_rpy = max_rpy + rpy_fix;
-
-#ifdef USE_CUDA
-        bbs3d_ptr->set_angular_search_range(tmp_min_rpy.cast<float>(), tmp_max_rpy.cast<float>());
-#else
-        bbs3d_ptr->set_angular_search_range(tmp_min_rpy, tmp_max_rpy);
-#endif
     }
 
 private:
@@ -198,6 +288,7 @@ public:
     // angular search range
     Eigen::Vector3d min_rpy;
     Eigen::Vector3d max_rpy;
+    bool gravity_align = false;
 
     // score threshold percentage
     double score_threshold_percentage;
@@ -211,4 +302,12 @@ public:
 
     // align
     bool use_gicp;
+
+private:
+    std::string backend_ = "cpu";
+    bool fallback_cpu_ = true;
+    std::string fallback_reason_;
+#ifdef BBS_ENABLE_OPENCL
+    std::unique_ptr<oclbbs::CudaStyleSearch> opencl_engine_;
+#endif
 };

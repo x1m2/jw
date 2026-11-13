@@ -10,6 +10,7 @@ slam_manager:
 
     # 开始定位Action等待重定位成功；超时后停止定位并返回失败。
     localization:
+      worker_service: "/fastlio_localization_worker/set_state"
       relocalization_timeout_sec: 60.0
       stop_timeout_sec: 10.0
       # load_map每次都运行该工具，基于当前globalmap.pcd重新生成voxelmaps_coords。

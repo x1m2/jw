@@ -28,7 +28,7 @@ public:
     void set_extrinsic(const V3D &transl, const M3D &rot);
     bool load_prior_map(const PointCloudType::Ptr &global_map);
     bool load_keyframe_descriptor(const std::string &path);
-    bool run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time);
+    bool run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time, const V3D &mean_acc);
 
     void set_init_pose(const Pose &_manual_pose);
     /// Thread-safe /initialpose entry point: queues the pose so it is applied by the
@@ -57,11 +57,12 @@ public:
     Eigen::Matrix4d extrinsic_imu2gnss;
 
 private:
+    bool compute_gravity_alignment(const V3D &mean_acc, Eigen::Matrix4d &gravity_from_imu) const;
     bool fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const Eigen::Matrix4d &lidar_ext, const double &score);
     bool run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const double &lidar_beg_time, const Eigen::Matrix4d &lidar_ext, double &score);
-    bool run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
+    bool run_bbs3d(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, const V3D &mean_acc, double &score);
     bool run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
-    bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
+    bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, const V3D &mean_acc, double &score);
 
     bool prior_pose_inited = false;
 

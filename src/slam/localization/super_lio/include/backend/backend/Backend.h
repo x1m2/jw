@@ -9,7 +9,7 @@ public:
     Backend();
     bool init_localization_mode();
     bool build_voxelmaps();
-    bool run_relocalization(PointCloudType::Ptr scan, const double &lidar_beg_time, Eigen::Matrix4d &imu_pose);
+    bool run_relocalization(PointCloudType::Ptr scan, const double &lidar_beg_time, const V3D &mean_acc, Eigen::Matrix4d &imu_pose);
 
     std::shared_ptr<Relocalization> relocalization;
     std::string map_path;

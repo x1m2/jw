@@ -14,7 +14,6 @@
 
 
 using namespace BASIC;
-extern Backend backend;
 
 namespace LI2Sup{
 
@@ -73,7 +72,7 @@ void SuperLIOReLoc::init(){
   kf_.reset(new ESKF());
   data_wrapper_->setESKF(kf_);
 
-  data_wrapper_->load_backend_param(backend);
+  data_wrapper_->load_backend_param(data_wrapper_->backend());
 
   scan_undistort_full_.reset(new PointCloudType());
   ds_undistort_.reset(new PointCloudType());
@@ -89,14 +88,14 @@ void SuperLIOReLoc::init(){
 
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  if (!backend.init_localization_mode())
+  if (!data_wrapper_->backend().init_localization_mode())
     LOG(WARNING) << YELLOW << " ---> [Relocalization] prior map not loaded; "
                  << "relocalization is disabled until a prior map is provided." << RESET;
-  else if (backend.global_map && !backend.global_map->empty())
+  else if (data_wrapper_->backend().global_map && !data_wrapper_->backend().global_map->empty())
   {
     ivox_->clear();
     point_map_->clear();
-    *point_map_ = *backend.global_map;
+    *point_map_ = *data_wrapper_->backend().global_map;
     VV3 map_v3;
     map_v3.reserve(point_map_->size());
     for (const auto &p : *point_map_)
@@ -119,6 +118,11 @@ void SuperLIOReLoc::init(){
 }
 
 bool SuperLIOReLoc::process(){
+  if (stopping_) return false;
+  if (data_wrapper_->initial_pose_requested()) {
+    data_wrapper_->consume_initial_pose_request();
+    if (kf_->init_) tracking_failed();
+  }
   /// While the background search runs, only poll its result. Skipping sync_measure
   /// keeps the sensor callback fast; the buffered data is cleared once it succeeds.
   if (reloc_inflight_)
@@ -131,12 +135,19 @@ bool SuperLIOReLoc::process(){
 }
 
 
+void SuperLIOReLoc::tracking_failed() {
+  data_wrapper_->publish_status(false);
+  kf_ = std::make_shared<ESKF>();
+  data_wrapper_->setESKF(kf_);
+  init_obs_data_.reset(new PointCloudType());
+  imu_cout = init_frame_count = 0;
+  mean_gyro.setZero(); mean_acce.setZero();
+  data_wrapper_->clear();
+  state_fn_ = &SuperLIOReLoc::stateWaitKFInit;
+}
+
 bool SuperLIOReLoc::kf_init(){
   const int need_init_frames = 10;
-  static int imu_cout = 0;
-  static int init_frame_count = 0;
-  static V3 mean_gyro = V3::Zero();
-  static V3 mean_acce = V3::Zero();
 
   /// A previous relocalization is still running in the background. Poll it here;
   /// never block the sensor callback. The heavy BBS3D/NDT/GICP work lives in the worker.
@@ -157,7 +168,7 @@ bool SuperLIOReLoc::kf_init(){
     reloc_inflight_ = false;
 
     /// /initialpose arrived while the search was running: prefer the manual pose.
-    if (backend.relocalization->apply_pending_manual_pose())
+    if (data_wrapper_->backend().relocalization->apply_pending_manual_pose())
     {
       LOG(WARNING) << YELLOW << " ---> Manual pose received during relocalization, "
                    << "discarding the background result." << RESET;
@@ -206,6 +217,7 @@ bool SuperLIOReLoc::kf_init(){
 
     /// Drop data buffered while the background search was running.
     data_wrapper_->clear();
+    data_wrapper_->publish_status(true);
 
     {
       /// ivox_ already holds the prior map: it must NOT be cleared here.
@@ -220,7 +232,7 @@ bool SuperLIOReLoc::kf_init(){
   }
 
   /// Apply a manual pose queued by /initialpose before starting a new accumulation.
-  backend.relocalization->apply_pending_manual_pose();
+  data_wrapper_->backend().relocalization->apply_pending_manual_pose();
 
   /// get init guess from ROS topic.
   if(flg_get_init_guess_){
@@ -265,38 +277,18 @@ bool SuperLIOReLoc::kf_init(){
 
   /// Never touch the relocalization backends before the prior map is loaded:
   /// bnb3d / bbs3d are null otherwise and would crash.
-  if (!backend.relocalization_ready)
+  if (!data_wrapper_->backend().relocalization_ready)
   {
     static bool warned_not_ready = false;
     if (!warned_not_ready)
     {
       warned_not_ready = true;
       LOG(ERROR) << RED << " ---> Prior map not loaded, relocalization unavailable. "
-                 << "Check official.map_path / globalmap.pcd." << RESET;
+                 << "Check map_path / globalmap.pcd." << RESET;
     }
     init_frame_count = 0;
     init_obs_data_->clear();
     return false;
-  }
-
-  /// Level the body frame with gravity. Yaw stays unknown and is searched over 360 deg.
-  V3 gravity = - mean_acce * g_gravity_norm / mean_acce.norm();
-  V3 ref_gravity(0, 0, - g_gravity_norm);
-  M3 init_rot = Quat::FromTwoVectors(gravity, ref_gravity).toRotationMatrix();
-  V3 n = init_rot.col(0);
-  double yaw = atan2(n(1), n(0));
-
-  M3 R_yaw_inv = Eigen::AngleAxis<scalar>(-yaw, V3::UnitZ()).toRotationMatrix(); 
-  M3 rot = R_yaw_inv * init_rot;
-
-  /// Shrink the BBS3D angular window with the gravity-aligned roll/pitch of the LIDAR frame,
-  /// so only yaw has to be exhausted. reset_rpy() is idempotent (it never mutates the base range).
-  if (backend.relocalization->algorithm_type == "bbs3d")
-  {
-    const M3 R_lidar = rot * g_lidar_imu.R_.matrix();
-    const M3D R_lidar_d = R_lidar.cast<double>();
-    const V3D rpy = EigenMath::RotationMatrix2RPY(R_lidar_d);
-    backend.relocalization->bbs3d.reset_rpy(V3D(rpy.x(), rpy.y(), 0.0));
   }
 
   /// Launch the heavy part (BBS3D -> BnB/NDT/GICP) on a worker thread. Copy the
@@ -304,16 +296,17 @@ bool SuperLIOReLoc::kf_init(){
   /// callback keeps receiving data.
   CloudPtr scan_copy(new PointCloudType(*init_obs_data_));
   const double lidar_time = measures_.lidar.end_time;
+  const V3D mean_acc = mean_acce.cast<double>();
   LOG(INFO) << YELLOW << " ---> RELOC start in background... obs_data size: " << scan_copy->size()
             << ", prior map size: " << point_map_->size()
-            << ", algorithm_type: " << backend.relocalization->algorithm_type << RESET;
+            << ", algorithm_type: " << data_wrapper_->backend().relocalization->algorithm_type << RESET;
   try
   {
-    reloc_future_ = std::async(std::launch::async, [this, scan_copy, lidar_time]() {
+    reloc_future_ = std::async(std::launch::async, [this, scan_copy, lidar_time, mean_acc]() {
       RelocTaskResult r;
       try
       {
-        r.ok = backend.run_relocalization(scan_copy, lidar_time, r.imu_pose);
+        r.ok = data_wrapper_->backend().run_relocalization(scan_copy, lidar_time, mean_acc, r.imu_pose);
       }
       catch (const std::exception &e)
       {
@@ -339,7 +332,8 @@ bool SuperLIOReLoc::kf_init(){
 
 void SuperLIOReLoc::Output() {
   auto state = kf_->GetNavState();
-  data_wrapper_->pub_odom(state);  
+  data_wrapper_->pub_odom(state, match_score_);
+  data_wrapper_->pub_cloud_body(scan_undistort_full_, state.timestamp);
 
   Eigen::Matrix4f transformation = Eigen::Matrix4f::Identity();
   transformation.block<3, 3>(0, 0) = state.R.R_.cast<float>();
@@ -348,12 +342,11 @@ void SuperLIOReLoc::Output() {
   CloudPtr world_pc(new PointCloudType());
   
   if(g_visual_map){
-    static int count = -1;
-    count++;
-    if(count % g_pub_step != 0){
+    output_count_++;
+    if(output_count_ % g_pub_step != 0){
       return;
     }
-    count = 0;
+    output_count_ = 0;
     if(g_visual_dense){
       pcl::transformPointCloud(*scan_undistort_full_, *world_pc, transformation);
       data_wrapper_->pub_cloud_world(world_pc, state.timestamp);

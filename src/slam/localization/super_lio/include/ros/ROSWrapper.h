@@ -5,6 +5,7 @@
 #include <map>
 #include <tuple>
 #include <deque>
+#include <chrono>
 #include <vector>
 #include <execution>
 
@@ -17,6 +18,10 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <slam_manager_interfaces/msg/localization_pose.hpp>
+#include "common/localization_geometry.h"
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -59,7 +64,14 @@ public:
     last_timestamp_lidar_ = -1.0;
   }
 
-  void pub_odom(const NavState&);
+  void pub_odom(const NavState&, double match_score = 0.0);
+  void publish_status(bool valid);
+  void publish_imu_localization(const DynamicState &state);
+  void pub_cloud_body(const BASIC::CloudPtr &pc, double time);
+  Backend &backend() { return backend_; }
+  bool initial_pose_requested() const { return manual_pose_requested_; }
+  void consume_initial_pose_request() { manual_pose_requested_ = false; }
+
   void pub_cloud_world(const BASIC::CloudPtr& pc, double time);
 
   void pub_processing_time(double time, double current_time, double mean_time, double std_time);
@@ -86,6 +98,27 @@ private:
   void setupIO();
 
 private:
+  void setup_localization_interface();
+  bool sensors_fresh() const;
+  Eigen::Matrix4d base_pose(const Eigen::Matrix4d &map_imu) const;
+  void publish_base_tf(const Eigen::Matrix4d &pose, double time);
+  Backend backend_;
+  std::string map_frame_, lidar_frame_, baselink_frame_;
+  Eigen::Matrix4d T_base_lidar_ = Eigen::Matrix4d::Identity();
+  bool path_en_ = true, lidar_tf_broadcast_ = true, imu_tf_broadcast_ = false;
+  bool manual_pose_requested_ = false;
+  std::atomic<bool> localization_valid_{false};
+  double sensor_timeout_sec_ = 1.0;
+  std::chrono::steady_clock::time_point last_imu_received_{}, last_lidar_received_{};
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr reloc_status_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr robot_pose_pub_;
+  rclcpp::Publisher<slam_manager_interfaces::msg::LocalizationPose>::SharedPtr app_pose_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr imu_localization_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_body_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr global_map_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr processing_time_pub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_pose_sub_;
+  rclcpp::TimerBase::SharedPtr global_map_timer_, status_timer_;
   rclcpp::CallbackGroup::SharedPtr cb_sensor_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_lidar_;

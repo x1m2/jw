@@ -5,16 +5,20 @@ Backend::Backend() : relocalization(std::make_shared<Relocalization>()) {}
 bool Backend::init_localization_mode()
 {
     relocalization_ready = false;
+    // Manual/SC initialization also consumes this option, without loading the
+    // BBS search engine or requiring its voxel index.
+    relocalization->bbs3d.gravity_align = bbs3d_option.gravity_align;
 
     if (access(globalmap_path.c_str(), F_OK) != 0)
     {
         LOG_ERROR("File not exist! Please check the \"globalmap_path\".");
-        std::exit(100);
+        throw std::runtime_error("Cannot initialize localization prior map: " + globalmap_path);
     }
 
     Timer2 timer;
     global_map.reset(new PointCloudType());
-    pcl::io::loadPCDFile(globalmap_path, *global_map);
+    if (pcl::io::loadPCDFile(globalmap_path, *global_map) < 0 || global_map->empty())
+        throw std::runtime_error("Invalid or empty prior map: " + globalmap_path);
     if (global_map->points.size() < 5000)
     {
         LOG_WARN("Too few point clouds! Please check the map file.");
@@ -38,7 +42,7 @@ bool Backend::init_localization_mode()
 
     if (!relocalization->load_prior_map(global_map))
     {
-        std::exit(100);
+        throw std::runtime_error("Cannot initialize localization prior map: " + globalmap_path);
     }
     relocalization_ready = true;
 
@@ -71,6 +75,8 @@ bool Backend::init_localization_mode()
             LOG_ERROR("BBS3D init failed (voxelmaps_coords missing or corrupted at %s), "
                       "fallback to manually_set.",
                       voxelmap_path.c_str());
+            if (bbs3d_option.backend == "opencl" && !bbs3d_option.opencl_fallback_cpu)
+                throw std::runtime_error("Requested OpenCL BBS3D backend is unavailable");
             relocalization->algorithm_type = "manually_set";
         }
     }
@@ -126,7 +132,7 @@ bool Backend::build_voxelmaps()
     return true;
 }
 
-bool Backend::run_relocalization(PointCloudType::Ptr scan, const double &lidar_beg_time, Eigen::Matrix4d &imu_pose)
+bool Backend::run_relocalization(PointCloudType::Ptr scan, const double &lidar_beg_time, const V3D &mean_acc, Eigen::Matrix4d &imu_pose)
 {
-    return relocalization->run(scan, imu_pose, lidar_beg_time);
+    return relocalization->run(scan, imu_pose, lidar_beg_time, mean_acc);
 }

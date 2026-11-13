@@ -16,6 +16,9 @@
   <depend>nav_msgs</depend>
   <depend>livox_ros_driver2</depend>
   <depend>basic</depend>
+  <depend>tf2_ros</depend>
+  <depend>slam_manager</depend>
+  <depend>slam_manager_interfaces</depend>
   <depend>libboost-filesystem-dev</depend>
 
   <export>

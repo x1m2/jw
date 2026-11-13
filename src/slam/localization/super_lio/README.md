@@ -1,51 +1,87 @@
 # Super-LIO 重定位与纯定位
 
-本包基于 diwei 分支的 Super-LIO，仅保留已有地图上的重定位和连续定位。
-前端使用 IMU 传播、点云去畸变、ESKF 和 OctVoxMap 地图匹配。
-定位过程中不会插入新地图点，不生成关键帧，不执行回环检测或位姿图优化，
-也不保存或覆盖建图产物。
+前端保留 Super-LIO 的 ESKF 和 OctVoxMap，只匹配已有地图，不插入新地图点，
+不执行建图、回环或图优化。基础库位于 `src/depd/basic`。
 
-基础库位于 `src/depd/basic`，以独立 ROS 包提供。
+## BBS3D 后端与编译
 
-## 编译
-
-在工作区根目录执行：
+与 `fastlio_localization` 共用 `src/depd/3d_bbs` 安装的 CPU/OpenCL 库，
+不再内置另一套 CPU/CUDA 实现。
 
 ```bash
-colcon build --packages-up-to super_lio
+# 仅 CPU
+bash src/depd/3d_bbs/build_cpu.sh
+colcon build --packages-up-to super_lio --cmake-args -DENABLE_OPENCL_BBS=OFF
+
+# OpenCL（需要对应的开发环境及运行设备）
+bash src/depd/3d_bbs/build_opencl.sh
+colcon build --packages-up-to super_lio --cmake-args -DENABLE_OPENCL_BBS=ON
 source install/setup.bash
 ```
 
-默认使用 CPU BBS3D，无需 CUDA 或 GTSAM。需要 GPU BBS3D 时，
-可在已安装 CUDA 的环境下传入 `--cmake-args -DBUILD_CUDA=ON`。
+非默认安装位置可通过 `-DBBS3D_ROOT=/path/to/bbs3d` 指定。
+YAML 的 `bbs3d.backend` 选择 `cpu` 或 `opencl`；`opencl_batch_size`、
+`opencl_fallback_cpu`、`opencl_verify` 与 FAST-LIO 使用同一实现。
+默认选择 CPU。明确请求 OpenCL 且禁止 CPU 回退时，初始化失败会报告 Worker 错误。
 
-## 启动
+## 启动与配置
 
-在 `config/localization.yaml` 中将 `official.map_path` 设置为先验地图目录，
-该目录必须包含 `globalmap.pcd`。
+两份配置 `reloc_mid360s.yaml`、`reloc_airy96.yaml` 均包含传感器、前端和重定位参数。
+地图目录使用 `map_path`，其中必须包含 `globalmap.pcd`。
 
 ```bash
-ros2 launch super_lio localization.py config:=livox_360.yaml
-# Airy 雷达
-ros2 launch super_lio localization.py config:=airy.yaml rviz:=false
+ros2 launch super_lio localization.py \
+  config_file:=reloc_mid360s.yaml \
+  robot_param_file:=$PWD/src/config/P2.5_mid360s.yaml \
+  map_path:=/robotfs/data/slam_data/map_0/map rviz:=false
 ```
 
-机器人配置提供传感器、外参和前端参数，`localization.yaml` 提供重定位参数。
-唯一的节点入口为 `relocation_node`，唯一的启动文件为 `localization.py`。
+Airy 使用 `config_file:=reloc_airy96.yaml`，并传入对应机器人配置，例如
+`robot_param_file:=$PWD/src/config/P3_airy96.yaml`。
+`config:=...` 仍可作为配置文件参数使用。
+机器人配置提供弧度制 `lidar_to_base_R` 和米制 `lidar_to_base_T`，即雷达在 base_link 中的位姿。
+未提供时采用零平移、零旋转；实际机器人应传入正确的外参文件。
 
-## 重定位
+## 重力与重定位
 
-`relocalization.algorithm_type` 支持：
+`bbs3d.gravity_align: true` 时，用 IMU 平均加速度构造重力对齐旋转，
+通过 `T_gravity_imu * T_imu_lidar` 变换扫描点云，再在零附近搜索 roll/pitch 残差，
+并搜索 yaw。结果通过 `T_map_imu = T_map_gravity * T_gravity_imu` 转回滤波器位姿。
+手动初值也使用重力确定 roll/pitch，并保留输入 yaw。
+关闭该开关时搜索原始雷达点云，需要配置覆盖真实安装姿态的角度范围。
 
-- `bbs3d`：在先验地图中搜索初始位姿；缺少 `voxelmaps_coords/` 时可自动构建搜索索引。
-- `scan_context`：检索已有描述子，需要 `trajectory.pcd` 和 `scancontext/`；仅用于重定位。
-- `manually_set`：通过 `/initialpose` 接收初始位姿。
+`relocalization.algorithm_type` 支持 `bbs3d`、`scan_context`、`manually_set`。
+Scan Context 需要至少 10 个轨迹点和对应描述子；其他模式只需要先验点云。
+`voxelmaps_coords/` 缺失时可从已有地图生成搜索索引，不是在线建图。
+`relocalization_profile` 支持 `initial`、`map_connection`，分别读取 `bnb3d` 中对应配置。
+当前两个 profile 沿用原有调参值，可分别调整。
 
-可通过 `relocalization.use_gnss` 和 `relocalization.gnss_topic` 启用地图坐标系下的 GNSS 位姿先验。
-初始位姿经过配准验证后用于初始化滤波器，随后对固定地图持续定位。
-BBS3D 搜索索引由已有地图生成，不是在线建图。
+保留的 GNSS 先验输入为地图坐标系下的 `nav_msgs/Odometry`，由
+`relocalization.use_gnss` 和 `relocalization.gnss_topic` 控制；
+不将原始经纬度直接作为地图坐标。
 
-主要输出包括 `/lidar_localization`、`/lio/odom`、`/lio/path`、
-`/lio/cloud_world` 和 `/lio/global_map`。
+## 工程接口
+
+- `map_frame`、`lidar_frame`、`baselink_frame` 可配置，默认 `map`、`lidar`、`base_link`。
+- `/initialpose` 输入地图坐标系下的 **base_link 位姿**，按外参转换到 IMU。
+- `/lidar_localization`、`/imu_localization` 输出地图到 **base_link** 的里程计。
+- `/pose_stamped_localization`、`/app/localization_pose` 输出机器人位姿。
+- 应用匹配分数采用与 FAST-LIO 相同的有效点比例和平均残差加权公式；
+  两个前端的点匹配结果不同，不能保证分数数值相同。
+- `/reloc_success` 报告重定位/定位状态；无有效观测或非有限状态时重新初始化。
+- 雷达或 IMU 超过 `sensor_timeout_sec`（默认 1 秒）没有收到数据时，
+  `/reloc_success` 变为 false；两路数据恢复且前端再次有效定位后才恢复 true。
+  超时使用单调时钟，暂停回放也会触发，检测周期为 100 ms。
+- `/cloud_registered`、`/cloud_registered_body`、`/global_map`、`/imu_path` 输出可视化数据。
+- `path_en`、`scan_publish_en`、`dense_publish_en`、`lidar_tf_broadcast`、`imu_tf_broadcast` 控制输出。
+- `/lio/odom` 保留 IMU 位姿输出，供调试使用。
+
+可执行文件 `relocation_node` 使用与 FAST-LIO 相同的 `ManagedWorker` 协议。
+launch 默认 `runtime_profile:=test`，自动启动算法；`platform` 模式等待 START。
+服务为 `/super_lio_localization_worker/set_state`，支持地图路径、手动初值模式、重定位 profile 和 session 启停，
+不提供地图保存操作。停止时等待后台任务结束。
+
+`slam_manager` 的 `localization.worker_service` 默认仍选择 FAST-LIO。
+使用 Super-LIO 时，改为 `/super_lio_localization_worker/set_state`，并启动 Super-LIO Worker 的 platform 模式。
 
 上游项目：https://github.com/Liansheng-Wang/Super-LIO （GPLv3，见 LICENSE）。

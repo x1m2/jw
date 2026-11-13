@@ -3,8 +3,9 @@
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 
 #include <chrono>
+#include <algorithm>
+#include <stdexcept>
 
-extern Backend backend;
 
 using namespace BASIC;
 
@@ -217,8 +218,9 @@ ROSWrapper::ROSWrapper(const rclcpp::NodeOptions& options)
   LOG(INFO) << GREEN << " ---> Using Lidar type: "
             << lidarTypeToString(g_lidar_type) << RESET;
 
-  msg2uav_.header.frame_id = "world";
-  path_.header.frame_id = "world";
+  setup_localization_interface();
+  msg2uav_.header.frame_id = map_frame_;
+  path_.header.frame_id = map_frame_;
 
   setupIO();
 }
@@ -239,6 +241,11 @@ void ROSWrapper::setupIO(){
   auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(20))
                    .best_effort()
                    .durability_volatile();
+
+  // Serialize the watchdog with sensor/processing callbacks. Use wall elapsed
+  // time so paused bag playback or /clock cannot keep a stale success alive.
+  status_timer_ = create_wall_timer(std::chrono::milliseconds(100),
+      [this]() { publish_status(localization_valid_); }, cb_sensor_);
 
   sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
       g_imu_topic,
@@ -277,11 +284,11 @@ void ROSWrapper::setupIO(){
       "/lio/robo/odom", 10);
 
   pub_path_ = this->create_publisher<nav_msgs::msg::Path>(
-      "/lio/path", 10);
+      "/imu_path", 1000);
 
   pub_cloud_world_ =
     this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/lio/cloud_world", 10);
+        "/cloud_registered", 1000);
 
   tf_broadcaster_ =
       std::make_shared<tf2_ros::TransformBroadcaster>(this);
@@ -290,6 +297,7 @@ void ROSWrapper::setupIO(){
 
 
 void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
+  last_imu_received_ = std::chrono::steady_clock::now();
   IMUData data;
   data.secs = stampToSec(msg->header.stamp);
   data.acc  = V3(msg->linear_acceleration.x,
@@ -353,12 +361,13 @@ void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
 
     odom_imu.header.stamp = msg->header.stamp;
     odom_robo.header.stamp = msg->header.stamp;
-    odom_imu.header.frame_id = "world";
-    odom_robo.header.frame_id = "world";
+    odom_imu.header.frame_id = map_frame_;
+    odom_robo.header.frame_id = map_frame_;
     odom_imu.child_frame_id = "imu";
     odom_robo.child_frame_id = "base_link";
     pub_imu_odom_->publish(odom_imu);
     pub_robo_odom_->publish(odom_robo);
+    publish_imu_localization(imu_state);
   }
 }
 
@@ -384,6 +393,8 @@ void ROSWrapper::livoxHandler(const livox_ros_driver2::msg::CustomMsg::SharedPtr
   }
   lidar_data.start_time = stampToSec(msg->header.stamp);
   lidar_data.end_time   = lidar_data.start_time + offset_time;
+  if (lidar_data.pc->empty()) return;
+  last_lidar_received_ = std::chrono::steady_clock::now();
   lidar_buffer_.push_back(lidar_data);
 }
 
@@ -472,6 +483,8 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
     return;
   }
   
+  if (lidar_data.pc->empty()) return;
+  last_lidar_received_ = std::chrono::steady_clock::now();
   lidar_buffer_.push_back(lidar_data);
 }
 
@@ -512,149 +525,10 @@ bool ROSWrapper::sync_measure(MeasureGroup& meas){
 }
 
 
-void ROSWrapper::pub_odom(const NavState& state){
-  nav_msgs::msg::Odometry odom;
-  odom.header.frame_id = "world";
-
-  odom.header.stamp = toRosTime(state.timestamp);
-  odom.pose.pose.position.x = state.p[0];
-  odom.pose.pose.position.y = state.p[1];
-  odom.pose.pose.position.z = state.p[2];
-
-  V4 temp_q = state.R.coeffs();
-  odom.pose.pose.orientation.x = temp_q[0];
-  odom.pose.pose.orientation.y = temp_q[1];
-  odom.pose.pose.orientation.z = temp_q[2];
-  odom.pose.pose.orientation.w = temp_q[3];
-
-  odom.twist.twist.linear.x = state.v[0];
-  odom.twist.twist.linear.y = state.v[1];
-  odom.twist.twist.linear.z = state.v[2];
-
-  odom.child_frame_id = "imu";
-  pub_odom_->publish(odom);    // imu frame -> lidar frequency
-
-  V3 lidar_position = state.R.R_ * g_lidar_imu.t_ + state.p;
-  M3 lidar_rotation = state.R.R_ * g_lidar_imu.R_;
-  Quat lidar_quat(lidar_rotation);
-  lidar_quat.normalize();
-
-  V3 robo_position = state.R.R_ * g_odom_robo.t_ + state.p;
-  M3 robo_rotation = state.R.R_ * g_odom_robo.R_;
-  Quat robo_quat(robo_rotation);
-  robo_quat.normalize();
-
-  /// Current pose in the world frame, semantic-compatible with
-  /// fastlio_localization's /lidar_localization (world -> lidar).
-  {
-    nav_msgs::msg::Odometry lidar_odom;
-    lidar_odom.header.frame_id = "world";
-    lidar_odom.child_frame_id = "lidar";
-    lidar_odom.header.stamp = odom.header.stamp;
-    lidar_odom.pose.pose.position.x = lidar_position[0];
-    lidar_odom.pose.pose.position.y = lidar_position[1];
-    lidar_odom.pose.pose.position.z = lidar_position[2];
-    lidar_odom.pose.pose.orientation.w = lidar_quat.w();
-    lidar_odom.pose.pose.orientation.x = lidar_quat.x();
-    lidar_odom.pose.pose.orientation.y = lidar_quat.y();
-    lidar_odom.pose.pose.orientation.z = lidar_quat.z();
-    pub_lidar_localization_->publish(lidar_odom);
-  }
-
-  /// Debug: echo the current world pose to the terminal at ~1 Hz.
-  if (print_pose_)
-  {
-    static auto last_print = std::chrono::steady_clock::now();
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last_print >= std::chrono::seconds(1))
-    {
-      last_print = now;
-      const M3D R_robo_d = robo_rotation.cast<double>();
-      const V3D rpy = EigenMath::RotationMatrix2RPY(R_robo_d);
-      LOG(INFO) << "[pose] world->base_link xyz=("
-                << robo_position.x() << ", " << robo_position.y() << ", " << robo_position.z()
-                << ") rpy(deg)=(" << RAD2DEG(rpy.x()) << ", " << RAD2DEG(rpy.y()) << ", "
-                << RAD2DEG(rpy.z()) << ")" << RESET;
-    }
-  }
-
-  if(g_2_robot){
-    static auto pub_msg2uav_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
-        "/mavros/vision_pose/pose", 10);
-    msg2uav_.header.stamp = odom.header.stamp;
-    msg2uav_.pose.position.x = robo_position[0];
-    msg2uav_.pose.position.y = robo_position[1];
-    msg2uav_.pose.position.z = robo_position[2];
-    msg2uav_.pose.orientation.w = robo_quat.w();
-    msg2uav_.pose.orientation.x = robo_quat.x();
-    msg2uav_.pose.orientation.y = robo_quat.y();
-    msg2uav_.pose.orientation.z = robo_quat.z();
-    pub_msg2uav_->publish(msg2uav_);
-  }
-
-  if((last_path_point_ - robo_position).norm() > 0.1)
-  {
-    path_.header.stamp = odom.header.stamp;
-    geometry_msgs::msg::PoseStamped point;
-    point.pose = odom.pose.pose;
-    path_.poses.push_back(point);
-    if (path_.poses.size() >= 300)
-    {
-        path_.poses.erase(path_.poses.begin());
-    }
-    pub_path_->publish(path_);
-    last_path_point_ = robo_position;
-  }
-
-  geometry_msgs::msg::TransformStamped tf_msg;
-
-  if (true)
-  {
-    tf_msg.header.stamp = odom.header.stamp;
-    tf_msg.header.frame_id = "world";
-    tf_msg.child_frame_id = "base_link";
-
-    tf_msg.transform.translation.x = robo_position[0];
-    tf_msg.transform.translation.y = robo_position[1];
-    tf_msg.transform.translation.z = robo_position[2];
-
-    tf_msg.transform.rotation.x = robo_quat.x();
-    tf_msg.transform.rotation.y = robo_quat.y();
-    tf_msg.transform.rotation.z = robo_quat.z();
-    tf_msg.transform.rotation.w = robo_quat.w();
-  }
-  else
-  {
-    tf_msg.header.stamp = odom.header.stamp;
-    tf_msg.header.frame_id = "world";
-    tf_msg.child_frame_id = "imu";
-
-    tf_msg.transform.translation.x = state.p[0];
-    tf_msg.transform.translation.y = state.p[1];
-    tf_msg.transform.translation.z = state.p[2];
-
-    tf_msg.transform.rotation.x = temp_q.x();
-    tf_msg.transform.rotation.y = temp_q.y();
-    tf_msg.transform.rotation.z = temp_q.z();
-    tf_msg.transform.rotation.w = temp_q.w();
-  }
-
-  tf_broadcaster_->sendTransform(tf_msg);
-
-  // tf_msg.child_frame_id = "god";
-  // tf_msg.transform.rotation.x = 0.0;
-  // tf_msg.transform.rotation.y = 0.0;
-  // tf_msg.transform.rotation.z = 0.0;
-  // tf_msg.transform.rotation.w = 1.0;
-  // tf_broadcaster_->sendTransform(tf_msg);
-
-}
-
-
 void ROSWrapper::pub_cloud_world(const CloudPtr& pc, double time){
   sensor_msgs::msg::PointCloud2 cloud;
   pcl::toROSMsg(*pc, cloud);
-  cloud.header.frame_id = "world";
+  cloud.header.frame_id = map_frame_;
   cloud.header.stamp = toRosTime(time);
   pub_cloud_world_->publish(cloud);
 }
@@ -662,7 +536,7 @@ void ROSWrapper::pub_cloud_world(const CloudPtr& pc, double time){
 void ROSWrapper::pub_processing_time(double time, 
   double current_time, double mean_time, double std_time)
 {
-  static auto pub_processing_time_ =
+  if (!processing_time_pub_) processing_time_pub_ =
     this->create_publisher<geometry_msgs::msg::PoseStamped>(
         "/lio/processing_time", 10);
   geometry_msgs::msg::PoseStamped msg;
@@ -670,85 +544,7 @@ void ROSWrapper::pub_processing_time(double time,
   msg.pose.position.x = current_time;
   msg.pose.position.y = mean_time;
   msg.pose.position.z = std_time;
-  pub_processing_time_->publish(msg);
-}
-
-void ROSWrapper::set_global_map(const BASIC::CloudPtr& global_map){
-  pcl::toROSMsg(*global_map, global_map_msg_);
-  global_map_msg_.header.frame_id = "world";
-
-  static auto global_map_pub =
-    this->create_publisher<sensor_msgs::msg::PointCloud2>(
-          "/lio/global_map", 10);
-
-  static auto global_map_timer =
-    this->create_wall_timer(
-      std::chrono::seconds(1),
-      [this]() {
-        static int count = -1;
-        static int publish_interval = 1;
-
-        count++;
-        if (count % publish_interval != 0) {
-          return;
-        }
-
-        count = 0;
-        publish_interval++;
-        if (publish_interval > 10) {
-          publish_interval = 10;
-        }
-        global_map_msg_.header.stamp = this->now();
-        global_map_pub->publish(global_map_msg_);
-      });
-}
-
-
-void ROSWrapper::set_initial_data(bool& flg_get_init_guess, bool flg_finish_init)
-{
-  static auto init_pose_sub =
-    this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        "/initialpose", 1,
-        [this, &flg_get_init_guess](
-          const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) 
-        {
-          const auto &pos = msg->pose.pose.position;
-          const auto &ori = msg->pose.pose.orientation;
-
-          // Full 6-DoF: z is no longer hard-coded and roll/pitch are preserved.
-          V3 init_translation(pos.x, pos.y, pos.z);
-          Quat init_rotation(ori.w, ori.x, ori.y, ori.z);
-
-          flg_get_init_guess = true;
-
-          // Feed the backend relocalization pipeline as the highest-priority source.
-          {
-            // Relocalization::set_init_pose() and BnB operate in RADIANS
-            // (lidar_extrinsic is also stored in radians), so keep rpy in radians here.
-            const V3 rpy = EigenMath::RotationMatrix2RPY(init_rotation.toRotationMatrix());  // roll, pitch, yaw
-            Pose manual_pose;  // imu pose, radians, consumed by Relocalization::set_init_pose()
-            manual_pose.x = pos.x;
-            manual_pose.y = pos.y;
-            manual_pose.z = pos.z;
-            manual_pose.roll = rpy(0);
-            manual_pose.pitch = rpy(1);
-            manual_pose.yaw = rpy(2);
-            // Queue only: applying it runs on the relocalization owner thread so it
-            // can never race an in-flight background search (and never blocks here).
-            backend.relocalization->request_manual_pose(manual_pose);
-          }
-
-          LOG(INFO) << YELLOW
-                  << " ---> GET Initial guess: "
-                  << init_translation.transpose()
-                  << " rpy(deg): "
-                  << RAD2DEG(EigenMath::RotationMatrix2RPY(init_rotation.toRotationMatrix())).transpose()
-                  << RESET;
-        });
-
-  if (flg_finish_init) {
-    init_pose_sub.reset();
-  }
+  processing_time_pub_->publish(msg);
 }
 
 void ROSWrapper::set_gnss_data()
@@ -758,18 +554,18 @@ void ROSWrapper::set_gnss_data()
     return;
   }
 
-  if (!sub_gnss_) {
+  if (use_gnss_ && !sub_gnss_) {
     // The relocalization pipeline is compiled with `gnss_with_direction`, so the
     // prior must carry an orientation and be expressed in the map frame. That is
     // nav_msgs/Odometry, not a raw NavSatFix (lat/lon/alt would be fed as metres).
     sub_gnss_ = this->create_subscription<nav_msgs::msg::Odometry>(
         gnss_topic_, 10,
-        [](const nav_msgs::msg::Odometry::SharedPtr msg) {
+        [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
           const auto &pos = msg->pose.pose.position;
           const auto &ori = msg->pose.pose.orientation;
           const double stamp = msg->header.stamp.sec + msg->header.stamp.nanosec * 1.0e-9;
-          std::lock_guard<std::mutex> lock(backend.relocalization->gnss_mutex);
-          backend.relocalization->gnss_pose =
+          std::lock_guard<std::mutex> lock(backend_.relocalization->gnss_mutex);
+          backend_.relocalization->gnss_pose =
               GnssPose(stamp, V3D(pos.x, pos.y, pos.z), QD(ori.w, ori.x, ori.y, ori.z));
         });
     LOG(INFO) << YELLOW << " ---> GNSS prior enabled, topic: " << gnss_topic_
@@ -779,7 +575,7 @@ void ROSWrapper::set_gnss_data()
 
 void ROSWrapper::load_backend_param(Backend &backend)
 {
-  this->declare_parameter("official.map_path", "");
+  this->declare_parameter("map_path", "");
   this->declare_parameter("scan_context.lidar_height", 2.0);
   this->declare_parameter("scan_context.sc_dist_thres", 0.5);
 
@@ -792,6 +588,11 @@ void ROSWrapper::load_backend_param(Backend &backend)
   // ---- BBS3D (global search, CPU/OpenMP) ----
   this->declare_parameter("bbs3d.min_level_res", 0.5);
   this->declare_parameter("bbs3d.max_level", 6);
+  this->declare_parameter("bbs3d.gravity_align", true);
+  this->declare_parameter("bbs3d.backend", std::string("cpu"));
+  this->declare_parameter("bbs3d.opencl_batch_size", 10000);
+  this->declare_parameter("bbs3d.opencl_fallback_cpu", false);
+  this->declare_parameter("bbs3d.opencl_verify", false);
   this->declare_parameter("bbs3d.min_rpy", vector<double>{-0.1, -0.1, 0.0});
   this->declare_parameter("bbs3d.max_rpy", vector<double>{0.1, 0.1, 6.28});
   this->declare_parameter("bbs3d.score_threshold_percentage", 0.9);
@@ -803,19 +604,23 @@ void ROSWrapper::load_backend_param(Backend &backend)
   this->declare_parameter("bbs3d.timeout_msec", 0);
   this->declare_parameter("bbs3d.use_gicp", false);
 
+  const auto profile = declare_parameter<std::string>("relocalization_profile", "initial");
+  if (profile != "initial" && profile != "map_connection")
+    throw std::invalid_argument("Unknown relocalization_profile: " + profile);
+  const std::string bnb_prefix = "bnb3d." + profile + ".";
   // ---- BnB3D window refinement ----
-  this->declare_parameter("bnb3d.linear_xy_window_size", 8.0);
-  this->declare_parameter("bnb3d.linear_z_window_size", 0.5);
-  this->declare_parameter("bnb3d.angular_search_window", 30.0);  // degree
-  this->declare_parameter("bnb3d.pc_resolutions", vector<double>{0.3, 0.5, 0.8});
-  this->declare_parameter("bnb3d.bnb_depth", 3);
-  this->declare_parameter("bnb3d.min_score", 0.1);
-  this->declare_parameter("bnb3d.enough_score", 0.8);
-  this->declare_parameter("bnb3d.min_xy_resolution", 0.2);
-  this->declare_parameter("bnb3d.min_z_resolution", 0.1);
-  this->declare_parameter("bnb3d.min_angular_resolution", 5.0);  // degree
-  this->declare_parameter("bnb3d.filter_size_scan", 2.0);
-  this->declare_parameter("bnb3d.debug_mode", false);
+  this->declare_parameter(bnb_prefix + "linear_xy_window_size", 8.0);
+  this->declare_parameter(bnb_prefix + "linear_z_window_size", 0.5);
+  this->declare_parameter(bnb_prefix + "angular_search_window", 30.0);  // degree
+  this->declare_parameter(bnb_prefix + "pc_resolutions", vector<double>{0.3, 0.5, 0.8});
+  this->declare_parameter(bnb_prefix + "bnb_depth", 3);
+  this->declare_parameter(bnb_prefix + "min_score", 0.1);
+  this->declare_parameter(bnb_prefix + "enough_score", 0.8);
+  this->declare_parameter(bnb_prefix + "min_xy_resolution", 0.2);
+  this->declare_parameter(bnb_prefix + "min_z_resolution", 0.1);
+  this->declare_parameter(bnb_prefix + "min_angular_resolution", 5.0);  // degree
+  this->declare_parameter(bnb_prefix + "filter_size_scan", 2.0);
+  this->declare_parameter(bnb_prefix + "debug_mode", false);
 
   // ---- NDT / GICP fine alignment ----
   this->declare_parameter("ndt.step_size", 0.1);
@@ -828,7 +633,7 @@ void ROSWrapper::load_backend_param(Backend &backend)
   this->declare_parameter("gicp.feps", 1e-3);
   this->declare_parameter("gicp.fitness_score", 0.3);
 
-  this->get_parameter("official.map_path", backend.map_path);
+  this->get_parameter("map_path", backend.map_path);
   if (backend.map_path.compare("") != 0)
   {
     backend.globalmap_path = backend.map_path + "/globalmap.pcd";
@@ -861,18 +666,18 @@ void ROSWrapper::load_backend_param(Backend &backend)
     lidar_extrinsic.yaw = RAD2DEG(rpy.z());
 
     BnbOptions match_option;
-    this->get_parameter("bnb3d.linear_xy_window_size", match_option.linear_xy_window_size);
-    this->get_parameter("bnb3d.linear_z_window_size", match_option.linear_z_window_size);
-    this->get_parameter("bnb3d.angular_search_window", match_option.angular_search_window);
-    this->get_parameter("bnb3d.pc_resolutions", match_option.pc_resolutions);
-    this->get_parameter("bnb3d.bnb_depth", match_option.bnb_depth);
-    this->get_parameter("bnb3d.min_score", match_option.min_score);
-    this->get_parameter("bnb3d.enough_score", match_option.enough_score);
-    this->get_parameter("bnb3d.min_xy_resolution", match_option.min_xy_resolution);
-    this->get_parameter("bnb3d.min_z_resolution", match_option.min_z_resolution);
-    this->get_parameter("bnb3d.min_angular_resolution", match_option.min_angular_resolution);
-    this->get_parameter("bnb3d.filter_size_scan", match_option.filter_size_scan);
-    this->get_parameter("bnb3d.debug_mode", match_option.debug_mode);
+    this->get_parameter(bnb_prefix + "linear_xy_window_size", match_option.linear_xy_window_size);
+    this->get_parameter(bnb_prefix + "linear_z_window_size", match_option.linear_z_window_size);
+    this->get_parameter(bnb_prefix + "angular_search_window", match_option.angular_search_window);
+    this->get_parameter(bnb_prefix + "pc_resolutions", match_option.pc_resolutions);
+    this->get_parameter(bnb_prefix + "bnb_depth", match_option.bnb_depth);
+    this->get_parameter(bnb_prefix + "min_score", match_option.min_score);
+    this->get_parameter(bnb_prefix + "enough_score", match_option.enough_score);
+    this->get_parameter(bnb_prefix + "min_xy_resolution", match_option.min_xy_resolution);
+    this->get_parameter(bnb_prefix + "min_z_resolution", match_option.min_z_resolution);
+    this->get_parameter(bnb_prefix + "min_angular_resolution", match_option.min_angular_resolution);
+    this->get_parameter(bnb_prefix + "filter_size_scan", match_option.filter_size_scan);
+    this->get_parameter(bnb_prefix + "debug_mode", match_option.debug_mode);
     // bnb3d.h asserts pc_resolutions.size() >= bnb_depth; clamp instead of aborting.
     if (match_option.pc_resolutions.size() < static_cast<size_t>(match_option.bnb_depth))
     {
@@ -905,6 +710,11 @@ void ROSWrapper::load_backend_param(Backend &backend)
   // ---------------------------------------------------------------- 3D-BBS options
   this->get_parameter("bbs3d.min_level_res", backend.bbs3d_option.min_level_res);
   this->get_parameter("bbs3d.max_level", backend.bbs3d_option.max_level);
+  this->get_parameter("bbs3d.gravity_align", backend.bbs3d_option.gravity_align);
+  this->get_parameter("bbs3d.backend", backend.bbs3d_option.backend);
+  this->get_parameter("bbs3d.opencl_batch_size", backend.bbs3d_option.opencl_batch_size);
+  this->get_parameter("bbs3d.opencl_fallback_cpu", backend.bbs3d_option.opencl_fallback_cpu);
+  this->get_parameter("bbs3d.opencl_verify", backend.bbs3d_option.opencl_verify);
   this->get_parameter("bbs3d.min_rpy", backend.bbs3d_option.min_rpy);
   this->get_parameter("bbs3d.max_rpy", backend.bbs3d_option.max_rpy);
   this->get_parameter("bbs3d.score_threshold_percentage", backend.bbs3d_option.score_threshold_percentage);
@@ -936,3 +746,193 @@ void ROSWrapper::load_backend_param(Backend &backend)
 }
 
 } // namespace END.
+
+namespace LI2Sup {
+namespace {
+builtin_interfaces::msg::Time stamp_from_seconds(double seconds) {
+  builtin_interfaces::msg::Time stamp;
+  stamp.sec = static_cast<int32_t>(std::floor(seconds));
+  stamp.nanosec = static_cast<uint32_t>((seconds - stamp.sec) * 1e9);
+  return stamp;
+}
+void set_pose(geometry_msgs::msg::Pose &pose, const Eigen::Matrix4d &matrix) {
+  const Eigen::Quaterniond q(matrix.topLeftCorner<3, 3>());
+  pose.position.x = matrix(0, 3);
+  pose.position.y = matrix(1, 3);
+  pose.position.z = matrix(2, 3);
+  pose.orientation.x = q.x(); pose.orientation.y = q.y();
+  pose.orientation.z = q.z(); pose.orientation.w = q.w();
+}
+}
+
+void ROSWrapper::setup_localization_interface() {
+  map_frame_ = declare_parameter<std::string>("map_frame", "map");
+  lidar_frame_ = declare_parameter<std::string>("lidar_frame", "lidar");
+  baselink_frame_ = declare_parameter<std::string>("baselink_frame", "base_link");
+  path_en_ = declare_parameter<bool>("path_en", true);
+  g_visual_map = declare_parameter<bool>("scan_publish_en", g_visual_map);
+  g_visual_dense = declare_parameter<bool>("dense_publish_en", g_visual_dense);
+  lidar_tf_broadcast_ = declare_parameter<bool>("lidar_tf_broadcast", true);
+  imu_tf_broadcast_ = declare_parameter<bool>("imu_tf_broadcast", false);
+  sensor_timeout_sec_ = declare_parameter<double>("sensor_timeout_sec", 1.0);
+  if (!std::isfinite(sensor_timeout_sec_) || sensor_timeout_sec_ <= 0.0)
+    throw std::invalid_argument("sensor_timeout_sec must be finite and positive");
+  const auto t = declare_parameter<std::vector<double>>("lidar_to_base_T", {0., 0., 0.});
+  const auto r = declare_parameter<std::vector<double>>("lidar_to_base_R", {0., 0., 0.});
+  if (t.size() != 3 || r.size() != 3)
+    throw std::invalid_argument("lidar_to_base_T/R must contain three values");
+  for (const auto *values : {&t, &r})
+    for (double value : *values)
+      if (!std::isfinite(value)) throw std::invalid_argument("Nonfinite LiDAR/base extrinsic");
+  T_base_lidar_.topLeftCorner<3, 3>() =
+      (Eigen::AngleAxisd(r[2], Eigen::Vector3d::UnitZ()) *
+       Eigen::AngleAxisd(r[1], Eigen::Vector3d::UnitY()) *
+       Eigen::AngleAxisd(r[0], Eigen::Vector3d::UnitX())).toRotationMatrix();
+  T_base_lidar_.topRightCorner<3, 1>() = Eigen::Vector3d(t[0], t[1], t[2]);
+  // Keep high-rate ESKF robot output consistent with the same rigid transform.
+  const Eigen::Matrix4d imu_base = g_lidar_imu.matrix().cast<double>() * T_base_lidar_.inverse();
+  const BASIC::M3 imu_base_rotation = imu_base.topLeftCorner<3, 3>().cast<BASIC::scalar>();
+  const BASIC::V3 imu_base_translation = imu_base.topRightCorner<3, 1>().cast<BASIC::scalar>();
+  g_odom_robo = BASIC::SE3(imu_base_rotation, imu_base_translation);
+
+  reloc_status_pub_ = create_publisher<std_msgs::msg::Bool>("/reloc_success", 1);
+  robot_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/pose_stamped_localization", 1000);
+  app_pose_pub_ = create_publisher<slam_manager_interfaces::msg::LocalizationPose>("/app/localization_pose", 20);
+  imu_localization_pub_ = create_publisher<nav_msgs::msg::Odometry>("/imu_localization", 1000);
+  cloud_body_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
+  global_map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/global_map", 1);
+  publish_status(false);
+}
+
+Eigen::Matrix4d ROSWrapper::base_pose(const Eigen::Matrix4d &map_imu) const {
+  return localization_geometry::baseFromImuPose(
+      map_imu, g_lidar_imu.matrix().cast<double>(), T_base_lidar_);
+}
+
+bool ROSWrapper::sensors_fresh() const {
+  const auto now = std::chrono::steady_clock::now();
+  const auto fresh = [&](const auto &received) {
+    return received != std::chrono::steady_clock::time_point{} &&
+        std::chrono::duration<double>(now - received).count() < sensor_timeout_sec_;
+  };
+  return fresh(last_imu_received_) && fresh(last_lidar_received_);
+}
+
+void ROSWrapper::publish_status(bool valid) {
+  valid = valid && sensors_fresh();
+  localization_valid_ = valid;
+  std_msgs::msg::Bool status; status.data = valid;
+  reloc_status_pub_->publish(status);
+}
+
+void ROSWrapper::publish_base_tf(const Eigen::Matrix4d &pose, double time) {
+  geometry_msgs::msg::TransformStamped tf;
+  tf.header.frame_id = map_frame_; tf.child_frame_id = baselink_frame_;
+  tf.header.stamp = stamp_from_seconds(time);
+  tf.transform.translation.x = pose(0, 3);
+  tf.transform.translation.y = pose(1, 3);
+  tf.transform.translation.z = pose(2, 3);
+  const Eigen::Quaterniond q(pose.topLeftCorner<3, 3>());
+  tf.transform.rotation.x = q.x(); tf.transform.rotation.y = q.y();
+  tf.transform.rotation.z = q.z(); tf.transform.rotation.w = q.w();
+  tf_broadcaster_->sendTransform(tf);
+}
+
+void ROSWrapper::pub_odom(const NavState &state, double match_score) {
+  const Eigen::Matrix4d map_imu = state.GetSE3().matrix().cast<double>();
+  if (!map_imu.allFinite()) { publish_status(false); return; }
+  nav_msgs::msg::Odometry imu;
+  imu.header.frame_id = map_frame_; imu.child_frame_id = "imu";
+  imu.header.stamp = stamp_from_seconds(state.timestamp);
+  set_pose(imu.pose.pose, map_imu);
+  pub_odom_->publish(imu);
+
+  const Eigen::Matrix4d map_base = base_pose(map_imu);
+  nav_msgs::msg::Odometry odom;
+  odom.header = imu.header; odom.child_frame_id = baselink_frame_;
+  set_pose(odom.pose.pose, map_base);
+  pub_lidar_localization_->publish(odom);
+  geometry_msgs::msg::PoseStamped robot;
+  robot.header = odom.header; robot.pose = odom.pose.pose;
+  robot_pose_pub_->publish(robot);
+  slam_manager_interfaces::msg::LocalizationPose app;
+  app.pose = robot;
+  app.match_score = static_cast<float>(std::clamp(match_score, 0.0, 1.0));
+  app_pose_pub_->publish(app);
+  publish_status(true);
+  if (lidar_tf_broadcast_) publish_base_tf(map_base, state.timestamp);
+  if (path_en_) {
+    path_.header = robot.header;
+    path_.poses.push_back(robot);
+    if (path_.poses.size() > 300) path_.poses.erase(path_.poses.begin());
+    pub_path_->publish(path_);
+  }
+  if (print_pose_)
+    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000, "base position: %.3f %.3f %.3f", map_base(0,3), map_base(1,3), map_base(2,3));
+}
+
+void ROSWrapper::publish_imu_localization(const DynamicState &state) {
+  if (!localization_valid_) return;
+  Eigen::Matrix4d map_imu = Eigen::Matrix4d::Identity();
+  map_imu.topLeftCorner<3, 3>() = state.R.cast<double>();
+  map_imu.topRightCorner<3, 1>() = state.p.cast<double>();
+  if (!map_imu.allFinite()) return;
+  const Eigen::Matrix4d map_base = base_pose(map_imu);
+  nav_msgs::msg::Odometry odom;
+  odom.header.frame_id = map_frame_; odom.child_frame_id = baselink_frame_;
+  odom.header.stamp = stamp_from_seconds(state.time);
+  set_pose(odom.pose.pose, map_base);
+  imu_localization_pub_->publish(odom);
+  if (imu_tf_broadcast_) publish_base_tf(map_base, state.time);
+}
+
+void ROSWrapper::pub_cloud_body(const BASIC::CloudPtr &pc, double time) {
+  if (!g_visual_map || cloud_body_pub_->get_subscription_count() == 0) return;
+  BASIC::CloudPtr lidar_cloud(new BASIC::PointCloudType());
+  pcl::transformPointCloud(*pc, *lidar_cloud, g_lidar_imu.inverse().matrix().cast<float>());
+  sensor_msgs::msg::PointCloud2 cloud;
+  pcl::toROSMsg(*lidar_cloud, cloud);
+  cloud.header.frame_id = lidar_frame_; cloud.header.stamp = stamp_from_seconds(time);
+  cloud_body_pub_->publish(cloud);
+}
+
+void ROSWrapper::set_global_map(const BASIC::CloudPtr &global_map) {
+  pcl::toROSMsg(*global_map, global_map_msg_);
+  global_map_msg_.header.frame_id = map_frame_;
+  global_map_timer_ = create_wall_timer(std::chrono::seconds(2), [this]() {
+    global_map_msg_.header.stamp = now();
+    global_map_pub_->publish(global_map_msg_);
+  });
+}
+
+void ROSWrapper::set_initial_data(bool &flg_get_init_guess, bool flg_finish_init) {
+  if (flg_finish_init || init_pose_sub_) return;
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = cb_sensor_;
+  init_pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "/initialpose", 1, [this, &flg_get_init_guess](
+          geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
+        const auto &q = msg->pose.pose.orientation;
+        Eigen::Quaterniond rotation(q.w, q.x, q.y, q.z);
+        const auto &p = msg->pose.pose.position;
+        if (!rotation.coeffs().allFinite() || rotation.norm() <= 1e-6 ||
+            !Eigen::Vector3d(p.x, p.y, p.z).allFinite()) {
+          RCLCPP_ERROR(get_logger(), "Ignoring invalid /initialpose"); return;
+        }
+        if (!msg->header.frame_id.empty() && msg->header.frame_id != map_frame_) {
+          RCLCPP_ERROR(get_logger(), "/initialpose must be expressed in %s", map_frame_.c_str()); return;
+        }
+        Eigen::Matrix4d map_base = Eigen::Matrix4d::Identity();
+        map_base.topLeftCorner<3,3>() = rotation.normalized().toRotationMatrix();
+        map_base.topRightCorner<3,1>() = Eigen::Vector3d(p.x,p.y,p.z);
+        const Eigen::Matrix4d map_imu = localization_geometry::imuFromBasePose(
+            map_base, g_lidar_imu.matrix().cast<double>(), T_base_lidar_);
+        Pose pose;
+        EigenMath::DecomposeAffineMatrix(map_imu, pose.x, pose.y, pose.z,
+                                        pose.roll, pose.pitch, pose.yaw);
+        backend_.relocalization->request_manual_pose(pose);
+        flg_get_init_guess = true;
+        manual_pose_requested_ = true;
+      }, options);
+}
+} // namespace LI2Sup

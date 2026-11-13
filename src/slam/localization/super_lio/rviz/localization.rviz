@@ -108,7 +108,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /lio/cloud_world
+        Value: /cloud_registered
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
@@ -142,7 +142,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /lio/cloud_world
+        Value: /cloud_registered
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -176,7 +176,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /lio/global_map
+        Value: /global_map
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -206,7 +206,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /lio/path
+        Value: /imu_path
       Value: true
     - Class: rviz_common/Group
       Displays:
@@ -286,7 +286,7 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /lio/imu/odom
+            Value: /imu_localization
           Value: true
       Enabled: true
       Name: LIOdom
@@ -329,14 +329,14 @@ Visualization Manager:
             Filter size: 10
             History Policy: Keep Last
             Reliability Policy: Reliable
-            Value: /lio/robo/odom
+            Value: /lidar_localization
           Value: true
       Enabled: true
       Name: RoboOdom
   Enabled: true
   Global Options:
     Background Color: 5; 0; 26
-    Fixed Frame: world
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:

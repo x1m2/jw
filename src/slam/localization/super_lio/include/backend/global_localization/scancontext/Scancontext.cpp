@@ -5,11 +5,6 @@
 namespace ScanContext
 {
 
-    void coreImportTest(void)
-    {
-        cout << "scancontext lib is successfully imported." << endl;
-    } // coreImportTest
-
     float rad2deg(float radians)
     {
         return radians * 180.0 / M_PI;

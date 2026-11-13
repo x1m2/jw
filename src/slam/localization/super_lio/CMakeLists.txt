@@ -42,15 +42,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
 message(STATUS "[super_lio] cores=${N} MP_PROC_NUM=${MP_PROC_NUM} BNB_PROC_NUM=${BNB_PROC_NUM} OpenMP_CXX_FLAGS='${OpenMP_CXX_FLAGS}'")
 
-option(BUILD_CUDA "Build the optional CUDA BBS3D backend" OFF)
-if (BUILD_CUDA)
-  add_definitions(-DUSE_CUDA)
-  find_package(CUDA REQUIRED)
-  include_directories(${CUDA_INCLUDE_DIRS})
-  link_directories(${CUDA_LIBRARY_DIRS})
-
-  set(CUDA_PROPAGATE_HOST_FLAGS ON)
-  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++20 -Xcompiler -fPIC)
+option(ENABLE_OPENCL_BBS "Link the installed OpenCL BBS backend" ON)
+set(BBS3D_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../install/bbs3d"
+  CACHE PATH "3d_bbs installation prefix")
+set(bbs3d_DIR "${BBS3D_ROOT}/lib/cmake/bbs3d")
+find_package(bbs3d CONFIG REQUIRED PATHS "${bbs3d_DIR}" NO_DEFAULT_PATH)
+if(ENABLE_OPENCL_BBS AND NOT TARGET bbs3d::opencl_bbs3d)
+  message(FATAL_ERROR "Installed 3d_bbs has no OpenCL backend. Run build_opencl.sh, or set ENABLE_OPENCL_BBS=OFF for CPU.")
 endif()
 
 find_package(ament_cmake REQUIRED)
@@ -63,6 +61,9 @@ find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(slam_manager REQUIRED)
+find_package(slam_manager_interfaces REQUIRED)
 
 find_package(Eigen3 REQUIRED NO_MODULE)
 find_package(PCL REQUIRED)
@@ -70,22 +71,6 @@ find_package(Boost REQUIRED COMPONENTS filesystem)
 find_package(Glog REQUIRED)
 
 find_package(basic REQUIRED)
-
-add_library(cpu_bbs3d
-  include/backend/global_localization/bbs3d/cpu_bbs3d/bbs3d.cpp
-  include/backend/global_localization/bbs3d/cpu_bbs3d/voxelmaps.cpp
-  include/backend/global_localization/bbs3d/cpu_bbs3d/voxelmaps_io.cpp
-)
-
-if(BUILD_CUDA)
-  cuda_add_library(gpu_bbs3d SHARED
-    include/backend/global_localization/bbs3d/gpu_bbs3d/bbs3d.cu
-    include/backend/global_localization/bbs3d/gpu_bbs3d/calc_score.cu
-    include/backend/global_localization/bbs3d/gpu_bbs3d/voxelmaps.cu
-    include/backend/global_localization/bbs3d/gpu_bbs3d/stream_manager/check_error.cu
-    include/backend/global_localization/bbs3d/gpu_bbs3d/voxelmaps_io.cu
-  )
-endif()
 
 include_directories(
   include
@@ -100,10 +85,10 @@ set(BACKEND_SOURCES
   include/backend/global_localization/scancontext/Scancontext.cpp
   include/backend/global_localization/InitCoordinate.cpp)
 
-file(GLOB_RECURSE LIO_LIB_SRC "src/lio/*.cpp" "src/ros/*.cpp")
+file(GLOB_RECURSE LIO_LIB_SRC "src/lio/*.cpp")
 file(GLOB_RECURSE LIO_LIB_HEADERS "include/lio/*.hpp" "include/lio/*.h")
 
-add_library(lio ${LIO_LIB_SRC} ${LIO_LIB_HEADERS} ${BACKEND_SOURCES})
+add_library(lio src/ROSWrapper.cpp ${LIO_LIB_SRC} ${LIO_LIB_HEADERS} ${BACKEND_SOURCES})
 
 ament_target_dependencies(lio PUBLIC
   rclcpp
@@ -113,6 +98,9 @@ ament_target_dependencies(lio PUBLIC
   nav_msgs
   pcl_ros
   livox_ros_driver2
+  tf2_ros
+  slam_manager
+  slam_manager_interfaces
   basic
 )
 
@@ -123,15 +111,17 @@ target_link_libraries(lio PUBLIC
   stdc++fs
   glog
   pthread
-  cpu_bbs3d
   OpenMP::OpenMP_CXX
   ${cpp_typesupport_target}
 )
-if(BUILD_CUDA)
-  target_link_libraries(lio PUBLIC gpu_bbs3d)
+if(ENABLE_OPENCL_BBS)
+  target_compile_definitions(lio PUBLIC BBS_ENABLE_OPENCL=1)
+  target_link_libraries(lio PUBLIC bbs3d::opencl_bbs3d)
+else()
+  target_link_libraries(lio PUBLIC bbs3d::cpu_bbs3d)
 endif()
 
-add_executable(relocation_node src/apps/relocation_node.cpp)
+add_executable(relocation_node src/main.cpp)
 target_link_libraries(relocation_node
   lio
   Boost::filesystem
@@ -140,14 +130,12 @@ target_link_libraries(relocation_node
 
 install(TARGETS
   lio
-  cpu_bbs3d
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-if(BUILD_CUDA)
-  install(TARGETS gpu_bbs3d)
-endif()
+set_target_properties(relocation_node PROPERTIES
+  INSTALL_RPATH "$ORIGIN/../lib;${bbs3d_LIBRARY_DIR}")
 
 install(TARGETS
   relocation_node
