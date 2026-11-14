@@ -38,9 +38,18 @@ ros2 launch super_lio localization.py \
 
 Airy 使用 `config_file:=reloc_airy96.yaml`，并传入对应机器人配置，例如
 `robot_param_file:=$PWD/src/config/P3_airy96.yaml`。
+Airy 的 `lio.sensor.lidar_type` 为 `8`（RSAIRY）。输入校验与 FAST-LIO 一致：
+`x/y/z/intensity` 为 float32、`ring` 为 uint16、`timestamp` 为 float64，
+拒绝空点云及首尾非有限时间戳或无效尾时间戳。帧开始采用消息头时间，
+逐点偏移采用秒制的 `timestamp - 原始首点timestamp`；同步时按偏移排序，
+以最大偏移计算帧结束时间并等待 IMU 覆盖。
 `config:=...` 仍可作为配置文件参数使用。
 机器人配置提供弧度制 `lidar_to_base_R` 和米制 `lidar_to_base_T`，即雷达在 base_link 中的位姿。
+`lio.extrinsic_T` 为三维平移，`lio.extrinsic_R` 为按行展开的九元素旋转矩阵，
+表示 `p_imu = R * p_lidar + t`；数值格式与 FAST-LIO 的 `extrinsic_T`、`extrinsic_R` 一致。
 未提供时采用零平移、零旋转；实际机器人应传入正确的外参文件。
+`lio.timedelay_lidar2imu` 以秒为单位加到 IMU 时间戳上，用于将 IMU 时间对齐到雷达时钟；
+默认 `0.0`，符号约定与 FAST-LIO 的 `timedelay_lidar2imu` 相同。
 
 ## 重力与重定位
 
@@ -74,6 +83,9 @@ Scan Context 需要至少 10 个轨迹点和对应描述子；其他模式只需
   超时使用单调时钟，暂停回放也会触发，检测周期为 100 ms。
 - `/cloud_registered`、`/cloud_registered_body`、`/global_map`、`/imu_path` 输出可视化数据。
 - `path_en`、`scan_publish_en`、`dense_publish_en`、`lidar_tf_broadcast`、`imu_tf_broadcast` 控制输出。
+- `lio.output.pub_step` 控制世界系点云每隔多少帧发布一次，必须为正整数。
+  点云发布开关只使用根层 `scan_publish_en`、`dense_publish_en`；
+  重定位重力对齐由 `bbs3d.gravity_align` 控制，精配准 GICP 由 `gicp.use_gicp` 控制。
 - `/lio/odom` 保留 IMU 位姿输出，供调试使用。
 
 可执行文件 `super_lio_localization_node` 使用与 FAST-LIO 相同的 `ManagedWorker` 协议。

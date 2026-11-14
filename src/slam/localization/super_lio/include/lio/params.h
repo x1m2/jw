@@ -34,12 +34,13 @@ namespace LI2Sup{
   extern std::string g_imu_topic;
   extern std::string g_lidar_topic;
 
-  extern int   g_lidar_type;       // 1: mid360, 2: hesai16, 3: velo16, 4: velo32, 5: vel_nclt, 6: ls16 
+  extern int   g_lidar_type;       // 1: mid360, 2: hesai16, 3: velo16, 4: velo32, 5: vel_nclt, 6: ls16, 7: ouster, 8: rsairy
   extern float g_blind2;
   extern float g_maxrange2;
   extern int   g_filter_rate;
   extern bool  g_enable_downsample;
   extern float g_voxel_fliter_size;
+  extern double g_timedelay_lidar2imu;
 
   extern double g_gravity_norm;
   extern double g_imu_na;
@@ -48,8 +49,7 @@ namespace LI2Sup{
   extern double g_imu_nbg;
 
   extern BASIC::SE3 g_lidar_imu;      // lidar in imu frame
-  extern BASIC::SE3 g_odom_robo;      // lidar in robot frame
-  extern BASIC::M3  g_lidar_robo_yaw; // lidar in robot frame rotation only yaw
+  extern BASIC::SE3 g_odom_robo;      // base_link pose in IMU, derived from LiDAR/base extrinsics
 
   /// hash_map
   extern std::size_t g_ivox_capacity;
@@ -57,11 +57,9 @@ namespace LI2Sup{
   
   /// kf
   extern int g_kf_max_iterations;
-  extern bool g_kf_align_gravity;
   extern double g_kf_quit_eps;
 
   /// output  
-  extern bool g_2_robot;
   extern bool g_visual_map;
   extern bool g_visual_dense;
   extern int  g_pub_step;

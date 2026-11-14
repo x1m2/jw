@@ -37,6 +37,9 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.declare_parameter<int>("lio.sensor.filter_rate", 1);
   node.get_parameter("lio.sensor.filter_rate", g_filter_rate);
 
+  node.declare_parameter<double>("lio.timedelay_lidar2imu", 0.0);
+  node.get_parameter("lio.timedelay_lidar2imu", g_timedelay_lidar2imu);
+
   node.declare_parameter<bool>("lio.sensor.enable_downsample", false);
   node.get_parameter("lio.sensor.enable_downsample", g_enable_downsample);
 
@@ -59,47 +62,24 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.get_parameter("lio.sensor.imu_nbg", g_imu_nbg);
 
   // ================= extrinsic =================
-  std::vector<double> extrinsic_lidar_imu;
+  std::vector<double> extrinsic_T, extrinsic_R;
   node.declare_parameter<std::vector<double>>(
-      "lio.extrinsic.lidar_imu", std::vector<double>(12, 0.0));
-  node.get_parameter("lio.extrinsic.lidar_imu", extrinsic_lidar_imu);
+      "lio.extrinsic_T", {0.0, 0.0, 0.0});
+  node.declare_parameter<std::vector<double>>(
+      "lio.extrinsic_R", {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+  node.get_parameter("lio.extrinsic_T", extrinsic_T);
+  node.get_parameter("lio.extrinsic_R", extrinsic_R);
+  if (extrinsic_T.size() != 3 || extrinsic_R.size() != 9)
+    throw std::invalid_argument("lio.extrinsic_T/R must contain 3/9 values");
 
-  V3 __t(extrinsic_lidar_imu[0],
-         extrinsic_lidar_imu[1],
-         extrinsic_lidar_imu[2]);
-  std::vector<scalar> r_data(9);
-  for (int i = 0; i < 9; ++i) {
-    r_data[i] = static_cast<scalar>(extrinsic_lidar_imu[3 + i]);
-  }
-  M3 __R(r_data.data());
+  V3 __t(extrinsic_T[0], extrinsic_T[1], extrinsic_T[2]);
+  // YAML stores R row by row, matching FAST-LIO's extrinsic_R convention.
+  // Fill by index so Eigen's default column-major storage cannot transpose it.
+  M3 __R;
+  for (int row = 0; row < 3; ++row)
+    for (int col = 0; col < 3; ++col)
+      __R(row, col) = static_cast<scalar>(extrinsic_R[row * 3 + col]);
   g_lidar_imu = SE3(__R, __t);
-
-  std::vector<double> extrinsic_odom_robo;
-  node.declare_parameter<std::vector<double>>(
-      "lio.extrinsic.odom_robo", std::vector<double>(6, 0.0));
-  node.get_parameter("lio.extrinsic.odom_robo", extrinsic_odom_robo);
-
-  __t = V3(extrinsic_odom_robo[0],
-           extrinsic_odom_robo[1],
-           extrinsic_odom_robo[2]);
-
-  auto temp_R =
-      Eigen::AngleAxisd(extrinsic_odom_robo[5] * M_PI / 180.0,
-                          Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(extrinsic_odom_robo[4] * M_PI / 180.0,
-                          Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(extrinsic_odom_robo[3] * M_PI / 180.0,
-                          Eigen::Vector3d::UnitX());
-
-  g_odom_robo.R_ = temp_R.cast<scalar>();
-  g_odom_robo.R_ = g_odom_robo.R_.transpose().eval();
-  g_odom_robo = SE3(g_odom_robo.R_, __t);
-
-  auto temp_R_yaw =
-      Eigen::AngleAxisd(extrinsic_odom_robo[5] * M_PI / 180.0,
-                        Eigen::Vector3d::UnitZ())
-          .toRotationMatrix();
-  g_lidar_robo_yaw = temp_R_yaw.cast<scalar>();
 
   // ================= hash map =================
   node.declare_parameter<int>("lio.hash_map.hash_capacity", 1000000);
@@ -112,24 +92,13 @@ void LoadParamFromRos(rclcpp::Node& node)
   node.declare_parameter<int>("lio.kf.kf_max_iterations", 0);
   node.get_parameter("lio.kf.kf_max_iterations", g_kf_max_iterations);
 
-  node.declare_parameter<bool>("lio.kf.kf_align_gravity", false);
-  node.get_parameter("lio.kf.kf_align_gravity", g_kf_align_gravity);
-
   node.declare_parameter<double>("lio.kf.kf_quit_eps", 0.0);
   node.get_parameter("lio.kf.kf_quit_eps", g_kf_quit_eps);
 
   // visual
-  node.declare_parameter<bool>("lio.output.robot", false);
-  node.get_parameter("lio.output.robot", g_2_robot);
-
-  node.declare_parameter<bool>("lio.output.map", false);
-  node.get_parameter("lio.output.map", g_visual_map);
-
-  node.declare_parameter<bool>("lio.output.dense", false);
-  node.get_parameter("lio.output.dense", g_visual_dense);
-
-  node.declare_parameter<int>("lio.output.pub_step", 0);
+  node.declare_parameter<int>("lio.output.pub_step", 1);
   node.get_parameter("lio.output.pub_step", g_pub_step);
+  if (g_pub_step <= 0) throw std::invalid_argument("lio.output.pub_step must be positive");
 
   LOG(INFO) << GREEN << " ---> [Params]: Load from ROS2 parameter server."
             << RESET;
@@ -299,7 +268,8 @@ void ROSWrapper::setupIO(){
 void ROSWrapper::imuHandler(const sensor_msgs::msg::Imu::SharedPtr msg){
   last_imu_received_ = std::chrono::steady_clock::now();
   IMUData data;
-  data.secs = stampToSec(msg->header.stamp);
+  // Shift IMU timestamps into the LiDAR clock, matching FAST-LIO semantics.
+  data.secs = stampToSec(msg->header.stamp) + g_timedelay_lidar2imu;
   data.acc  = V3(msg->linear_acceleration.x,
                  msg->linear_acceleration.y,
                  msg->linear_acceleration.z);
@@ -411,12 +381,43 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
   switch (g_lidar_type) {
 
   case LID_TYPE::HESAI16:
+  case LID_TYPE::RSAIRY:
   {
+    if (g_lidar_type == LID_TYPE::RSAIRY) {
+      const auto has_field = [msg](const char *name, uint8_t datatype) {
+        return std::any_of(msg->fields.begin(), msg->fields.end(),
+            [name, datatype](const auto &field) {
+              return field.name == name && field.datatype == datatype;
+            });
+      };
+      using PointField = sensor_msgs::msg::PointField;
+      if (!has_field("x", PointField::FLOAT32) ||
+          !has_field("y", PointField::FLOAT32) ||
+          !has_field("z", PointField::FLOAT32) ||
+          !has_field("intensity", PointField::FLOAT32) ||
+          !has_field("ring", PointField::UINT16) ||
+          !has_field("timestamp", PointField::FLOAT64)) {
+        RCLCPP_ERROR_ONCE(get_logger(),
+            "Airy requires x/y/z/intensity(float32), ring(uint16), "
+            "timestamp(float64) PointCloud2 fields");
+        return;
+      }
+    }
+    // Airy and Hesai expose the same registered point fields.
     pcl::PointCloud<hesai_ros::Point> pl_orig;
     pcl::fromROSMsg(*msg, pl_orig);
+    if (pl_orig.empty()) return;
+    if (g_lidar_type == LID_TYPE::RSAIRY &&
+        (!std::isfinite(pl_orig.points.front().timestamp) ||
+         !std::isfinite(pl_orig.points.back().timestamp) ||
+         pl_orig.points.back().timestamp <= 0.0)) {
+      RCLCPP_ERROR_ONCE(get_logger(), "Airy point timestamps are invalid");
+      return;
+    }
     lidar_data.pc->reserve(pl_orig.size() / g_filter_rate + 1);
     const double time_begin = pl_orig.points[0].timestamp;
-    lidar_data.start_time = time_begin;
+    lidar_data.start_time = g_lidar_type == LID_TYPE::RSAIRY
+        ? stampToSec(msg->header.stamp) : time_begin;
     for(std::size_t i = 0; i < pl_orig.size(); i += g_filter_rate)
     {
       auto& pt = pl_orig.points[i];
@@ -425,7 +426,8 @@ void ROSWrapper::stdMsgHandler(const sensor_msgs::msg::PointCloud2::SharedPtr ms
       lidar_data.pc->emplace_back(
           pt.x, pt.y, pt.z, pt.intensity, offset_time);
     }
-    lidar_data.end_time = time_begin + offset_time;
+    lidar_data.end_time = lidar_data.start_time + offset_time;
+    if (g_lidar_type == LID_TYPE::RSAIRY && lidar_data.pc->size() <= 1) return;
     break;
   }
   case LID_TYPE::VEL_NCLT:
@@ -496,6 +498,13 @@ bool ROSWrapper::sync_measure(MeasureGroup& meas){
 
   if (!lidar_pushed_) {
     meas.lidar = lidar_buffer_.front();
+    if (g_lidar_type == LID_TYPE::RSAIRY) {
+      auto &points = meas.lidar.pc->points;
+      std::sort(points.begin(), points.end(), [](const auto &a, const auto &b) {
+        return a.offset_time < b.offset_time;
+      });
+      meas.lidar.end_time = meas.lidar.start_time + points.back().offset_time;
+    }
     lidar_pushed_ = true;
   }
 
@@ -597,12 +606,10 @@ void ROSWrapper::load_backend_param(Backend &backend)
   this->declare_parameter("bbs3d.max_rpy", vector<double>{0.1, 0.1, 6.28});
   this->declare_parameter("bbs3d.score_threshold_percentage", 0.9);
   this->declare_parameter("bbs3d.num_threads", 6);
-  this->declare_parameter("bbs3d.tar_leaf_size", 0.0);
   this->declare_parameter("bbs3d.src_leaf_size", 2.0);
   this->declare_parameter("bbs3d.min_scan_range", 0.0);
   this->declare_parameter("bbs3d.max_scan_range", 100.0);
   this->declare_parameter("bbs3d.timeout_msec", 0);
-  this->declare_parameter("bbs3d.use_gicp", false);
 
   const auto profile = declare_parameter<std::string>("relocalization_profile", "initial");
   if (profile != "initial" && profile != "map_connection")
@@ -719,12 +726,10 @@ void ROSWrapper::load_backend_param(Backend &backend)
   this->get_parameter("bbs3d.max_rpy", backend.bbs3d_option.max_rpy);
   this->get_parameter("bbs3d.score_threshold_percentage", backend.bbs3d_option.score_threshold_percentage);
   this->get_parameter("bbs3d.num_threads", backend.bbs3d_option.num_threads);
-  this->get_parameter("bbs3d.tar_leaf_size", backend.bbs3d_option.tar_leaf_size);
   this->get_parameter("bbs3d.src_leaf_size", backend.bbs3d_option.src_leaf_size);
   this->get_parameter("bbs3d.min_scan_range", backend.bbs3d_option.min_scan_range);
   this->get_parameter("bbs3d.max_scan_range", backend.bbs3d_option.max_scan_range);
   this->get_parameter("bbs3d.timeout_msec", backend.bbs3d_option.timeout_msec);
-  this->get_parameter("bbs3d.use_gicp", backend.bbs3d_option.use_gicp);
 
   LOG(WARNING) << YELLOW << " ---> Relocalization:"
             << " algorithm_type=" << backend.relocalization->algorithm_type
@@ -770,8 +775,8 @@ void ROSWrapper::setup_localization_interface() {
   lidar_frame_ = declare_parameter<std::string>("lidar_frame", "lidar");
   baselink_frame_ = declare_parameter<std::string>("baselink_frame", "base_link");
   path_en_ = declare_parameter<bool>("path_en", true);
-  g_visual_map = declare_parameter<bool>("scan_publish_en", g_visual_map);
-  g_visual_dense = declare_parameter<bool>("dense_publish_en", g_visual_dense);
+  g_visual_map = declare_parameter<bool>("scan_publish_en", false);
+  g_visual_dense = declare_parameter<bool>("dense_publish_en", false);
   lidar_tf_broadcast_ = declare_parameter<bool>("lidar_tf_broadcast", true);
   imu_tf_broadcast_ = declare_parameter<bool>("imu_tf_broadcast", false);
   sensor_timeout_sec_ = declare_parameter<double>("sensor_timeout_sec", 1.0);

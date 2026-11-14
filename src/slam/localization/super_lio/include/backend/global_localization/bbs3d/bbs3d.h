@@ -36,14 +36,11 @@ struct BBS3DOptions
     int num_threads;
 
     // downsample
-    double tar_leaf_size, src_leaf_size;
+    double src_leaf_size;
     double min_scan_range, max_scan_range;
 
     // timeout
     int timeout_msec;
-
-    // align
-    bool use_gicp;
 
     std::string backend = "opencl";
     int64_t opencl_batch_size = 10000;
@@ -92,13 +89,11 @@ public:
         score_threshold_percentage = bbs3d_option.score_threshold_percentage;
 
         std::cout << "[BBS3D] Loading downsample parameters..." << std::endl;
-        tar_leaf_size = bbs3d_option.tar_leaf_size;
         src_leaf_size = bbs3d_option.src_leaf_size;
         min_scan_range = bbs3d_option.min_scan_range;
         max_scan_range = bbs3d_option.max_scan_range;
 
         timeout_msec = bbs3d_option.timeout_msec;
-        use_gicp = bbs3d_option.use_gicp;
 
         // ====3D-BBS====
 #ifdef USE_CUDA
@@ -294,14 +289,11 @@ public:
     double score_threshold_percentage;
 
     // downsample
-    float tar_leaf_size, src_leaf_size;
+    float src_leaf_size;
     double min_scan_range, max_scan_range;
 
     // timeout
     int timeout_msec;
-
-    // align
-    bool use_gicp;
 
 private:
     std::string backend_ = "cpu";

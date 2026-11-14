@@ -7,30 +7,28 @@
         imu_topic: /livox/imu
       sensor:
         lidar_type: 1
-        blind: 0.5
+        blind: 0.2
         maxrange: 70.0
         filter_rate: 3
         enable_downsample: true
-        voxel_fliter_size: 0.5
+        voxel_fliter_size: 0.2
         gravity_norm: 9.7946
         imu_na: 0.1
         imu_ng: 0.1
         imu_nba: 0.0001
         imu_nbg: 0.0001
-      extrinsic:
-        lidar_imu: [-0.011, -0.02329, 0.04412, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-        odom_robo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      timedelay_lidar2imu: 0.0  # Shift IMU timestamps into the LiDAR clock (seconds)
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
       hash_map:
         hash_capacity: 2000000
         vox_resolution: 0.5
       kf:
         kf_max_iterations: 4
-        kf_align_gravity: true
         kf_quit_eps: 0.001
       output:
-        robot: false
-        map: true
-        dense: true
         pub_step: 1
       eva:
         timer: true
@@ -53,12 +51,10 @@
       max_rpy: [0.04, 0.04, 6.28]
       score_threshold_percentage: 0.9
       num_threads: 6
-      tar_leaf_size: 0.1
       src_leaf_size: 2.0
       min_scan_range: 0.0
       max_scan_range: 100.0
       timeout_msec: 0
-      use_gicp: false
       gravity_align: true
       backend: cpu
       opencl_batch_size: 10000
@@ -78,7 +74,7 @@
         min_xy_resolution: 0.2
         min_z_resolution: 0.1
         min_angular_resolution: 5.0
-        filter_size_scan: 2.0
+        filter_size_scan: 0.5
         debug_mode: false
       map_connection:
         linear_xy_window_size: 8.0
@@ -91,7 +87,7 @@
         min_xy_resolution: 0.2
         min_z_resolution: 0.1
         min_angular_resolution: 5.0
-        filter_size_scan: 2.0
+        filter_size_scan: 0.5
         debug_mode: false
 
     ndt:

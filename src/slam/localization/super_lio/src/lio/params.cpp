@@ -23,6 +23,7 @@ namespace LI2Sup{
   int    g_filter_rate;
   bool   g_enable_downsample;
   float  g_voxel_fliter_size;
+  double g_timedelay_lidar2imu = 0.0;
 
   double g_gravity_norm = 9.7946;
   double g_imu_na;
@@ -32,7 +33,6 @@ namespace LI2Sup{
 
   SE3 g_lidar_imu;
   SE3 g_odom_robo;
-  M3  g_lidar_robo_yaw;
 
   /// hash_map
   std::size_t g_ivox_capacity = 100000;
@@ -40,11 +40,9 @@ namespace LI2Sup{
 
   /// kf
   int g_kf_max_iterations = 4;
-  bool g_kf_align_gravity = true;
   double g_kf_quit_eps;
 
   /// output
-  bool g_2_robot    = false;
   bool g_visual_map = true;
   bool g_visual_dense = false;
   int  g_pub_step;
