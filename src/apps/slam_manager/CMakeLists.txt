@@ -72,6 +72,12 @@ install(
 
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+install(FILES
+  ../../config/P2.5_mid360s.yaml
+  ../../config/P3_airy96.yaml
+  ../../config/S01_mid360s.yaml
+  DESTINATION share/${PROJECT_NAME}/config/robots
+)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 install(FILES README.md DESTINATION share/${PROJECT_NAME})

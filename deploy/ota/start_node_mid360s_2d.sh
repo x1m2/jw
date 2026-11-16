@@ -345,6 +345,7 @@ start_node pure_pursuit "$NAV_LIB_PATH" "$NAV_DIR/pure_pursuit/pure_pursuit_node
   --ros-args --params-file "$NAV_DIR/config/pure_pursuit_params.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node slam_manager "$MANAGER_LIB_PATH" "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
+  --params-file "$ROBOT_PARAM_CONFIG" \
   -p localization.worker_service:="$LOCALIZATION_WORKER" \
   -p map_storage.root_directory:="$DATA_ROOT" -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver"
 start_node nav_server_console "$MANAGER_LIB_PATH" "$MANAGER_DIR/nav_server/nav_server_node" \

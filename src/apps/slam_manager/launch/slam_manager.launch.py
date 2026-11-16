@@ -18,6 +18,7 @@ def generate_launch_description():
     )
 
     params_file = LaunchConfiguration('params_file')
+    robot_param_file = LaunchConfiguration('robot_param_file')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     return LaunchDescription([
@@ -25,6 +26,12 @@ def generate_launch_description():
             'params_file',
             default_value=default_params_file,
             description='slam_manager ROS 2 parameter YAML file',
+        ),
+        DeclareLaunchArgument(
+            'robot_param_file',
+            default_value=os.path.join(
+                package_share, 'config', 'robots', 'P2.5_mid360s.yaml'),
+            description='Robot YAML containing the IMU topic and LiDAR-to-IMU rotation',
         ),
         DeclareLaunchArgument(
             'use_sim_time',
@@ -38,6 +45,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 params_file,
+                robot_param_file,
                 {'use_sim_time': use_sim_time},
             ],
         ),

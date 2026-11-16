@@ -21,14 +21,9 @@ slam_manager:
         generation_timeout_sec: 120.0
 
     imu_calibration:
-      topic: "/livox/imu"
+      # topic和extrinsic_R由后加载的机体YAML提供；静止倾角标定不需要平移。
       sample_count: 200
       timeout_sec: 5.0
-      # LiDAR坐标到IMU坐标的旋转矩阵：p_imu = extrinsic_R * p_lidar。
-      # Mid-360S的内置IMU与点云坐标轴一致，因此使用单位矩阵。
-      extrinsic_R: [1.0, 0.0, 0.0,
-                    0.0, 1.0, 0.0,
-                    0.0, 0.0, 1.0]
 
     # 导航Worker启停、暂停控制和单个目标点执行超时。
     navigation:

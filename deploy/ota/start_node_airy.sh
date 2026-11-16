@@ -494,6 +494,7 @@ stdbuf -oL -eL \
   "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args \
   --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
+  --params-file "$ROBOT_PARAM_CONFIG" \
   -p localization.worker_service:="$LOCALIZATION_WORKER" \
   -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver" \
   2>&1 | tee -a "$LOG_DIR/slam_manager.log" &

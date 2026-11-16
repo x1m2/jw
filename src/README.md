@@ -49,7 +49,8 @@ colcon build --symlink-install \
     -DCMAKE_BUILD_TYPE=Release \
     -DQUATRO_TBB=ON \
     -DROS_EDITION=ROS2 \
-    -DHUMBLE_ROS=humble && \
+    -DHUMBLE_ROS=humble \
+    -DENABLE_OPENCL_BBS=ON && \
 source install/setup.bash
 
 ## 目录结构

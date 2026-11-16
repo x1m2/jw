@@ -93,7 +93,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
   imu_calibration_topic_ =
-      declare_parameter<std::string>("imu_calibration.topic", "/livox/imu");
+      declare_parameter<std::string>("imu_calibration.topic", "");
   const auto configured_imu_calibration_sample_count =
       declare_parameter<int64_t>("imu_calibration.sample_count", 200);
   imu_calibration_timeout_sec_ =
@@ -101,12 +101,41 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
   const auto imu_calibration_extrinsic_rotation =
       declare_parameter<std::vector<double>>(
           "imu_calibration.extrinsic_R",
-          {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
-  imu_calibration_sample_count_ =
-      static_cast<std::size_t>(configured_imu_calibration_sample_count);
-  imu_from_lidar_rotation_ =
-      Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(
-          imu_calibration_extrinsic_rotation.data());
+          std::vector<double>{});
+  if (!imu_calibration_topic_.empty() &&
+      configured_imu_calibration_sample_count > 0 &&
+      std::isfinite(imu_calibration_timeout_sec_) &&
+      imu_calibration_timeout_sec_ > 0.0 &&
+      imu_calibration_extrinsic_rotation.size() == 9U) {
+    imu_from_lidar_rotation_ =
+        Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(
+            imu_calibration_extrinsic_rotation.data());
+    imu_calibration_config_valid_ =
+        imu_from_lidar_rotation_.allFinite() &&
+        (imu_from_lidar_rotation_.transpose() * imu_from_lidar_rotation_)
+            .isApprox(Eigen::Matrix3d::Identity(), 1e-3) &&
+        std::abs(imu_from_lidar_rotation_.determinant() - 1.0) < 1e-3;
+  }
+  if (imu_calibration_config_valid_) {
+    imu_calibration_sample_count_ =
+        static_cast<std::size_t>(configured_imu_calibration_sample_count);
+    RCLCPP_INFO(get_logger(),
+                "LiDAR tilt calibration configured: topic=%s, samples=%zu, "
+                "timeout=%.3fs, extrinsic_R=[%.8f, %.8f, %.8f; "
+                "%.8f, %.8f, %.8f; %.8f, %.8f, %.8f]",
+                imu_calibration_topic_.c_str(), imu_calibration_sample_count_,
+                imu_calibration_timeout_sec_,
+                imu_from_lidar_rotation_(0, 0), imu_from_lidar_rotation_(0, 1),
+                imu_from_lidar_rotation_(0, 2), imu_from_lidar_rotation_(1, 0),
+                imu_from_lidar_rotation_(1, 1), imu_from_lidar_rotation_(1, 2),
+                imu_from_lidar_rotation_(2, 0), imu_from_lidar_rotation_(2, 1),
+                imu_from_lidar_rotation_(2, 2));
+  } else {
+    RCLCPP_ERROR(get_logger(),
+                 "LiDAR tilt calibration disabled: load a robot YAML with a "
+                 "nonempty imu_calibration.topic and a valid 3x3 imu_calibration.extrinsic_R; "
+                 "sample_count and timeout_sec must be positive and finite");
+  }
   body_cloud_publish_hz_ =
       declare_parameter<double>("publish.body_cloud_hz", 5.0);
 
@@ -371,6 +400,12 @@ SlamManagerNode::~SlamManagerNode() {
 void SlamManagerNode::calibrateLidarTiltCallback(
     const CalibrateLidarTilt::Request::SharedPtr,
     CalibrateLidarTilt::Response::SharedPtr response) {
+  if (!imu_calibration_config_valid_) {
+    response->success = false;
+    RCLCPP_ERROR(get_logger(),
+                 "LiDAR tilt calibration rejected: invalid configuration");
+    return;
+  }
   struct CalibrationData {
     std::mutex mutex;
     std::condition_variable cv;

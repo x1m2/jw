@@ -231,7 +231,8 @@ class SlamManagerNode : public rclcpp::Node {
   double relocalization_timeout_sec_{60.0};
   double localization_tracking_pose_timeout_sec_{2.0};
   double localization_stop_timeout_sec_{10.0};
-  std::string imu_calibration_topic_{"/livox/imu"};
+  std::string imu_calibration_topic_;
+  bool imu_calibration_config_valid_{false};
   std::size_t imu_calibration_sample_count_{200U};
   double imu_calibration_timeout_sec_{5.0};
   Eigen::Matrix3d imu_from_lidar_rotation_{Eigen::Matrix3d::Identity()};

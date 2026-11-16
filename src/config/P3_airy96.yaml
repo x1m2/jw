@@ -25,3 +25,10 @@
       # 后Airy96雷达坐标系在base_link中的位姿。
       rear_lidar_to_base_T: [-0.47, 0.0, -0.07] # [x, y, z]
       rear_lidar_to_base_R: [0.0, 1.53, 3.141592653589793]  # [roll, pitch, yaw]
+
+      imu_calibration:
+        topic: "/rslidar_front/imu"
+        # LiDAR到IMU的旋转；静止倾角标定不需要平移。
+        extrinsic_R: [0.0371031, -0.999192, 0.0154193,
+                      -0.999305, -0.037043, 0.00416679,
+                      -0.00359224, -0.0155632, -0.999872]

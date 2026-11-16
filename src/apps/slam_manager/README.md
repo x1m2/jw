@@ -312,12 +312,36 @@ ros2 action send_goal /robot/navigate_to_pose slam_manager_interfaces/action/Nav
 
 ## 雷达倾角标定
 
-`/robot/calibrate_lidar_tilt`在收到Service请求后临时订阅`/livox/imu`，默认采集
-200个有效加速度样本，计算雷达相对水平面的roll和pitch并返回。标定完成、
-取消或超过5秒后都会销毁IMU订阅。该接口不计算yaw，也不修改配置文件。
+`/robot/calibrate_lidar_tilt`在收到Service请求后临时订阅车型配置中的IMU话题，默认采集
+200个有效加速度样本，计算雷达相对水平面的roll和pitch并返回。标定完成
+或超过5秒后都会销毁IMU订阅。标定时车体须静止并放在水平地面上。
+该接口返回弧度，不计算yaw，也不修改配置文件。
 `imu_calibration.extrinsic_R`表示LiDAR坐标到IMU坐标的旋转矩阵，与FAST-LIO
 的`mapping.extrinsic_R`方向一致。计算前会用其转置将IMU加速度转换到LiDAR
 坐标系；Mid-360S的内置IMU使用单位矩阵。
+
+硬件参数`imu_calibration.topic`和`imu_calibration.extrinsic_R`放在
+`src/config/`的车型YAML中，`imu_calibration`与`lidars`同级。
+静止倾角标定只需要话题和旋转，不配置平移。
+P2.5和S01使用`/livox/imu`及单位旋转矩阵；P3仅标定前雷达，使用
+`/rslidar_front/imu`，旋转矩阵与`mapping_airy96.yaml`一致。
+建图、重定位和纯定位继续读取各自算法YAML中的传感器话题和外参，
+不读取机体YAML的`imu_calibration`参数；硬件外参变化时需同步更新相应配置。
+通用`sample_count`、`timeout_sec`保留在`slam_manager.yaml`中。
+启动时先加载通用配置，再加载车型配置；参数启动时读取，修改后需重启节点。
+缺少话题、旋转矩阵无效或采样参数无效时禁用标定，服务返回`success=false`，
+其他Manager功能仍可运行。启动日志打印实际使用的话题、旋转矩阵和采样参数。
+
+launch默认加载随包安装的P2.5配置，切换车型可指定源文件或其他配置路径：
+
+```bash
+ros2 launch slam_manager slam_manager.launch.py \
+  robot_param_file:=$PWD/src/config/P3_airy96.yaml
+```
+
+直接执行节点时，同样需要按顺序传入两个`--params-file`。OTA的Airy、
+MID360s 3D和MID360s 2D启动脚本均传入各自选中的`ROBOT_PARAM_CONFIG`；
+部署时须同步更新车型YAML中的标定参数。
 
 ```bash
 ros2 service call /robot/calibrate_lidar_tilt \
