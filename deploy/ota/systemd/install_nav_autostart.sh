@@ -6,7 +6,7 @@ set -euo pipefail
 LIDAR_TYPE="${1:-}"
 case "$LIDAR_TYPE" in
   airy|mid360s_3d|mid360s_2d) shift ;;
-  *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [--localization fastlio|super_lio] [运行用户名] [OTA目录]" >&2; exit 1 ;;
+  *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [--localization fastlio|superlio] [运行用户名] [OTA目录]" >&2; exit 1 ;;
 esac
 LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
 POSITIONAL_ARGS=()
@@ -14,7 +14,7 @@ while (( $# )); do
   case "$1" in
     --localization)
       if [[ $# -lt 2 ]]; then
-        echo "[ERROR] --localization 需要指定 fastlio 或 super_lio" >&2
+        echo "[ERROR] --localization 需要指定 fastlio 或 superlio" >&2
         exit 1
       fi
       LOCALIZATION_ALGORITHM="$2"
@@ -25,8 +25,8 @@ while (( $# )); do
   esac
 done
 case "$LOCALIZATION_ALGORITHM" in
-  fastlio|super_lio) ;;
-  *) echo "[ERROR] 不支持的定位算法：$LOCALIZATION_ALGORITHM（fastlio|super_lio）" >&2; exit 1 ;;
+  fastlio|superlio) ;;
+  *) echo "[ERROR] 不支持的定位算法：$LOCALIZATION_ALGORITHM（fastlio|superlio）" >&2; exit 1 ;;
 esac
 LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
 CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"

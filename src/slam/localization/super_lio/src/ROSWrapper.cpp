@@ -181,7 +181,7 @@ inline builtin_interfaces::msg::Time toRosTime(double t_sec)
 
 
 ROSWrapper::ROSWrapper(const rclcpp::NodeOptions& options)
-: rclcpp::Node("super_lio_localization", options)
+: rclcpp::Node("superlio_localization", options)
 {
   LoadParamFromRos(*this);
   LOG(INFO) << GREEN << " ---> Using Lidar type: "

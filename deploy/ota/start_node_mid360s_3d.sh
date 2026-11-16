@@ -9,21 +9,21 @@ while (( $# )); do
     --check) CHECK_ONLY=true; shift ;;
     --localization)
       if [[ $# -lt 2 ]]; then
-        echo "[ERROR] --localization requires fastlio or super_lio" >&2
+        echo "[ERROR] --localization requires fastlio or superlio" >&2
         exit 1
       fi
       LOCALIZATION_ALGORITHM="$2"
       shift 2
       ;;
-    *) echo "Usage: bash $0 [--check] [--localization fastlio|super_lio]" >&2; exit 1 ;;
+    *) echo "Usage: bash $0 [--check] [--localization fastlio|superlio]" >&2; exit 1 ;;
   esac
 done
 case "$LOCALIZATION_ALGORITHM" in
-  fastlio|super_lio) ;;
+  fastlio|superlio) ;;
   *) echo "[ERROR] Unsupported localization algorithm: $LOCALIZATION_ALGORITHM" >&2; exit 1 ;;
 esac
 LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
-# Config filenames use fastlio/superlio; node and worker names retain super_lio.
+# Configuration, executable and Worker names follow the selected algorithm.
 LOCALIZATION_CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"
 LOCALIZATION_WORKER="/${LOCALIZATION_ALGORITHM}_localization_worker/set_state"
 
@@ -199,7 +199,7 @@ NODE_PATTERNS=(
   "fastlio_mapping_node"
   "pgo_sc_node"
   "fastlio_localization_node"
-  "super_lio_localization_node"
+  "superlio_localization_node"
   "global_path_planner_node"
   "path_smoother_node"
   "scan_planner_node"

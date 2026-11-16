@@ -41,7 +41,7 @@ def generate_launch_description():
         if map_path:
             overrides['map_path'] = map_path
         parameters.append(overrides)
-        return [Node(package='super_lio', executable='super_lio_localization_node',
+        return [Node(package='super_lio', executable='superlio_localization_node',
                      output='screen', parameters=parameters)]
 
     rviz2_node = Node(

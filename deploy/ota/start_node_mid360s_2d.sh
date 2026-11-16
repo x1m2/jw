@@ -9,7 +9,7 @@ while (( $# )); do
     --check) CHECK_ONLY=true; shift ;;
     --localization)
       if [[ $# -lt 2 ]]; then
-        echo "[ERROR] --localization requires fastlio or super_lio" >&2
+        echo "[ERROR] --localization requires fastlio or superlio" >&2
         exit 1
       fi
       LOCALIZATION_ALGORITHM="$2"
@@ -22,15 +22,15 @@ while (( $# )); do
       fi
       exit 0
       ;;
-    *) echo "Usage: bash $0 [--check] [--localization fastlio|super_lio]" >&2; exit 1 ;;
+    *) echo "Usage: bash $0 [--check] [--localization fastlio|superlio]" >&2; exit 1 ;;
   esac
 done
 case "$LOCALIZATION_ALGORITHM" in
-  fastlio|super_lio) ;;
+  fastlio|superlio) ;;
   *) echo "[ERROR] Unsupported localization algorithm: $LOCALIZATION_ALGORITHM" >&2; exit 1 ;;
 esac
 LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
-# Config filenames use fastlio/superlio; node and worker names retain super_lio.
+# Configuration, executable and Worker names follow the selected algorithm.
 LOCALIZATION_CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"
 LOCALIZATION_WORKER="/${LOCALIZATION_ALGORITHM}_localization_worker/set_state"
 
@@ -293,7 +293,7 @@ trap 'exit 0' INT TERM
 # Clear processes left by the previous profile/script. Match executable command
 # lines, not shell commands or GUI names containing a node name as an argument.
 LEGACY_NAMES=(livox_ros_driver2_node rslidar_sdk_node dual_airy_fusion_node
-  woodox_imu_bridge_node fastlio_mapping_node pgo_sc_node fastlio_localization_node super_lio_localization_node
+  woodox_imu_bridge_node fastlio_mapping_node pgo_sc_node fastlio_localization_node superlio_localization_node
   terrain_filter_node obstacle_stop_node costmap_2d_node global_path_planner_node
   path_smoother_node pure_pursuit_node scan_planner_node slam_manager_node nav_server_node)
 for signal in INT TERM KILL; do

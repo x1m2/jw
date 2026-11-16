@@ -121,8 +121,8 @@ else()
   target_link_libraries(lio PUBLIC bbs3d::cpu_bbs3d)
 endif()
 
-add_executable(super_lio_localization_node src/main.cpp)
-target_link_libraries(super_lio_localization_node
+add_executable(superlio_localization_node src/main.cpp)
+target_link_libraries(superlio_localization_node
   lio
   Boost::filesystem
   ${cpp_typesupport_target}
@@ -134,11 +134,11 @@ install(TARGETS
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-set_target_properties(super_lio_localization_node PROPERTIES
+set_target_properties(superlio_localization_node PROPERTIES
   INSTALL_RPATH "$ORIGIN/../lib;${bbs3d_LIBRARY_DIR}")
 
 install(TARGETS
-  super_lio_localization_node
+  superlio_localization_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

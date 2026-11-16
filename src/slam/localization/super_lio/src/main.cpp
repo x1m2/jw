@@ -11,7 +11,7 @@ struct LocalizationInstance {
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto worker = std::make_shared<slam_manager::ManagedWorker>(
-      "super_lio_localization_worker", [](const slam_manager::ManagedWorker::StartContext &context) {
+      "superlio_localization_worker", [](const slam_manager::ManagedWorker::StartContext &context) {
         rclcpp::NodeOptions options;
         if (!context.resource_path.empty()) options.append_parameter_override("map_path", context.resource_path);
         if (context.use_initial_pose) options.append_parameter_override("relocalization.algorithm_type", "manually_set");

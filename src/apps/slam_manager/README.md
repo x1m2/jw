@@ -350,6 +350,6 @@ ros2 service call /robot/calibrate_lidar_tilt \
 
 `localization.worker_service` 在启动时读取，默认值为
 `/fastlio_localization_worker/set_state`。使用 Super-LIO 时，将其设为
-`/super_lio_localization_worker/set_state`，并启动 Super-LIO 的
+`/superlio_localization_worker/set_state`，并启动 Super-LIO 的
 `runtime_profile:=platform` 模式。两者使用相同的 Worker 会话协议、
 `/reloc_success` 和 `/app/localization_pose` 接口。

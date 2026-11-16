@@ -36,13 +36,13 @@ bash deploy/ota/start_node_mid360s_2d.sh
 
 默认 OTA 目录为 `/home/jw/ota`；可通过 `OTA_ROOT=/路径` 指定。加 `--check` 只检查文件，不启动节点。
 
-三个启动脚本均支持 `--localization fastlio|super_lio`，默认 `fastlio`。
+三个启动脚本均支持 `--localization fastlio|superlio`，默认 `fastlio`。
 也可设置环境变量 `LOCALIZATION_ALGORITHM`；命令行选项优先。
 例如 Airy 使用 Super LIO，先检查再启动：
 
 ```bash
-bash deploy/ota/start_node_airy.sh --localization super_lio --check
-bash deploy/ota/start_node_airy.sh --localization super_lio
+bash deploy/ota/start_node_airy.sh --localization superlio --check
+bash deploy/ota/start_node_airy.sh --localization superlio
 ```
 
 选择会同步切换定位程序、传感器配置和 `slam_manager` 的
@@ -54,12 +54,12 @@ bash deploy/ota/start_node_airy.sh --localization super_lio
 | 算法 | `slam/pack/content/localization/` 下的程序 | `slam/pack/content/config/` 下的配置 |
 | --- | --- | --- |
 | `fastlio` | `fastlio_localization_node` | `reloc_fastlio_airy96.yaml`、`reloc_fastlio_mid360s.yaml` |
-| `super_lio` | `super_lio_localization_node` | `reloc_superlio_airy96.yaml`、`reloc_superlio_mid360s.yaml` |
+| `superlio` | `superlio_localization_node` | `reloc_superlio_airy96.yaml`、`reloc_superlio_mid360s.yaml` |
 
 两套配置分别来源于 `src/slam/localization/fastlio_localization/config/reloc_fastlio_*.yaml`
 和 `src/slam/localization/super_lio/config/reloc_superlio_*.yaml`，部署时保留原文件名。
 Super LIO 程序编译安装后位于
-`install/super_lio/lib/super_lio/super_lio_localization_node`；
+`install/super_lio/lib/super_lio/superlio_localization_node`；
 同时将所需的 `liblio`、`basic`、BBS 等动态库及其依赖部署到 `slam/pack/content/lib/`。
 使用目标板对应架构构建，并检查动态库依赖。安装服务不会替你编译或复制程序。
 机器人尺寸和 `lidar_to_base_T/R` 仍使用对应雷达的共享机器人配置。
@@ -80,9 +80,9 @@ sudo bash  install_nav_autostart.sh mid360s_2d
 安装时同时选择定位算法，例如：
 
 ```bash
-sudo bash  install_nav_autostart.sh airy --localization super_lio
+sudo bash  install_nav_autostart.sh airy --localization superlio
 sudo bash  install_nav_autostart.sh mid360s_3d --localization fastlio
-sudo bash  install_nav_autostart.sh mid360s_2d --localization super_lio jw /home/jw/ota
+sudo bash  install_nav_autostart.sh mid360s_2d --localization superlio jw /home/jw/ota
 ```
 
 未指定算法时保持 `fastlio`，兼容原安装命令。算法保存在 systemd 服务环境中，
