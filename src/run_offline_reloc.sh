@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MAP_DIR="${MAP_DIR:-${WORKSPACE_DIR}/map}"
 BAG_DIR=''
-SAVER="${SAVER:-${WORKSPACE_DIR}/../3rdparty/3d_bbs/test/build/saver}"
+SAVER="${SAVER:-${WORKSPACE_DIR}/install/bbs3d/bin/voxelmaps_saver}"
 ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-}"
 LOG_ROOT="${LOG_ROOT:-${WORKSPACE_DIR}/log/offline_reloc}"
 SCAN_INDEX="${SCAN_INDEX:-100}"
@@ -286,6 +286,7 @@ import sys
 import time
 
 import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from rosbag2_interfaces.srv import Burst, Resume
 from std_msgs.msg import Bool
 
@@ -293,6 +294,14 @@ rclpy.init()
 node = rclpy.create_node('offline_reloc_playback_controller')
 succeeded = False
 started = False
+manual_pose_version = 0
+manual_pose_received_at = 0.0
+
+def on_initial_pose(message):
+    global manual_pose_version, manual_pose_received_at
+    manual_pose_version += 1
+    manual_pose_received_at = time.monotonic()
+    print('收到手动初始位姿，准备补送点云和 IMU 触发配准', flush=True)
 
 def on_status(message):
     global succeeded, started
@@ -302,6 +311,8 @@ def on_status(message):
         started = True
 
 subscription = node.create_subscription(Bool, '/reloc_success', on_status, 10)
+initial_pose_subscription = node.create_subscription(
+    PoseWithCovarianceStamped, '/initialpose', on_initial_pose, 10)
 burst_client = node.create_client(Burst, '/rosbag2_player/burst')
 resume_client = node.create_client(Resume, '/rosbag2_player/resume')
 deadline = time.monotonic() + float(sys.argv[1])
@@ -332,11 +343,31 @@ try:
     if not started and not succeeded:
         raise RuntimeError('已送入点云和 IMU，但定位节点没有开始重定位')
 
-    print('全局重定位进行中，bag 保持暂停', flush=True)
+    print('等待重定位成功，bag 保持暂停；可在 RViz 设置初始位姿', flush=True)
+    attempted_pose_version = 0
+    manual_bursts_remaining = 0
+    next_manual_burst_at = 0.0
     while rclpy.ok() and not succeeded and time.monotonic() < deadline:
-        rclpy.spin_once(node, timeout_sec=0.5)
+        rclpy.spin_once(node, timeout_sec=0.1)
+        if succeeded:
+            break
+        if manual_pose_version != attempted_pose_version:
+            attempted_pose_version = manual_pose_version
+            manual_bursts_remaining = 3
+            # Allow the localization node to receive the same /initialpose
+            # before new sensor data triggers its matching callback.
+            next_manual_burst_at = manual_pose_received_at + 0.3
+        if manual_bursts_remaining and time.monotonic() >= next_manual_burst_at:
+            response = await_result(burst_client.call_async(
+                Burst.Request(num_messages=100)))
+            if response.actually_burst == 0:
+                raise RuntimeError('bag 已结束，无法继续手动重定位；请重新启动脚本')
+            manual_bursts_remaining -= 1
+            next_manual_burst_at = time.monotonic() + 2.0
+            if not manual_bursts_remaining:
+                print('已补送配准数据；若仍未成功，可重新设置初始位姿重试', flush=True)
     if not succeeded:
-        raise RuntimeError('全局重定位超时；尝试更换 SCAN_INDEX 并检查定位日志')
+        raise RuntimeError('重定位超时；检查手动初始位姿、SCAN_INDEX 和定位日志')
 
     while not resume_client.wait_for_service(timeout_sec=0.5):
         if time.monotonic() >= deadline:
