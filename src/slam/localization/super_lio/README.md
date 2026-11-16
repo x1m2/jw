@@ -26,17 +26,17 @@ YAML 的 `bbs3d.backend` 选择 `cpu` 或 `opencl`；`opencl_batch_size`、
 
 ## 启动与配置
 
-两份配置 `reloc_mid360s.yaml`、`reloc_airy96.yaml` 均包含传感器、前端和重定位参数。
+两份配置 `reloc_superlio_mid360s.yaml`、`reloc_superlio_airy96.yaml` 均包含传感器、前端和重定位参数。
 地图目录使用 `map_path`，其中必须包含 `globalmap.pcd`。
 
 ```bash
 ros2 launch super_lio localization.py \
-  config_file:=reloc_mid360s.yaml \
+  config_file:=reloc_superlio_mid360s.yaml \
   robot_param_file:=$PWD/src/config/P2.5_mid360s.yaml \
   map_path:=/robotfs/data/slam_data/map_0/map rviz:=false
 ```
 
-Airy 使用 `config_file:=reloc_airy96.yaml`，并传入对应机器人配置，例如
+Airy 使用 `config_file:=reloc_superlio_airy96.yaml`，并传入对应机器人配置，例如
 `robot_param_file:=$PWD/src/config/P3_airy96.yaml`。
 Airy 的 `lio.sensor.lidar_type` 为 `8`（RSAIRY）。输入校验与 FAST-LIO 一致：
 `x/y/z/intensity` 为 float32、`ring` 为 uint16、`timestamp` 为 float64，
@@ -84,6 +84,13 @@ Scan Context 需要至少 10 个轨迹点和对应描述子；其他模式只需
 - `/cloud_registered`、`/cloud_registered_body`、`/global_map`、`/imu_path` 输出可视化数据。
 - `path_en`、`scan_publish_en`、`dense_publish_en`、`lidar_tf_broadcast`、`imu_tf_broadcast` 控制输出。
 - `lio.output.pub_step` 控制世界系点云每隔多少帧发布一次，必须为正整数。
+- `publish.print_pose: true` 时，每个有效定位帧打印底盘在地图中的 XYZ（米）、
+  roll/pitch/yaw（度）、降采样点数、匹配分数和耗时，格式与 FAST-LIO 一致。
+  `cost time` 使用单调时钟统计 IMU 传播、去畸变、降采样和观测更新耗时；
+  `input_delay` 为开始处理时 ROS 时间与扫描结束时间的差值；`pose_delay` 为完成输出时
+  ROS 时间与发布位姿时间戳的差值，单位均为毫秒。
+  离线回放应使用匹配的仿真时钟，否则延迟包含录制时间与当前时间的差值。
+  无效定位帧始终打印错误和诊断数据，不受 `publish.print_pose` 开关影响。
   点云发布开关只使用根层 `scan_publish_en`、`dense_publish_en`；
   重定位重力对齐由 `bbs3d.gravity_align` 控制，精配准 GICP 由 `gicp.use_gicp` 控制。
 - `/lio/odom` 保留 IMU 位姿输出，供调试使用。

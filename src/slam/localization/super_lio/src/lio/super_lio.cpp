@@ -1,6 +1,7 @@
 
 #include "lio/super_lio.h"
 
+#include <chrono>
 #include <sys/resource.h>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -82,6 +83,9 @@ bool SuperLIO::process(){
 
 
 void SuperLIO::stateProcess(){
+  const auto processing_start = std::chrono::steady_clock::now();
+  const double input_delay_ms =
+      (data_wrapper_->now().seconds() - measures_.lidar.end_time) * 1000.0;
   frame_num_++;
   if(g_time_eva){
     time_record_.Evaluate([this](){Propagation_Undistort();}, "[Undistort]");
@@ -93,11 +97,17 @@ void SuperLIO::stateProcess(){
     Observe();
   }
   const auto state = kf_->GetNavState();
+  const double cost_time_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - processing_start).count();
   if (!observation_valid_ || !state.p.allFinite() || !state.R.R_.allFinite()) {
+    data_wrapper_->log_localization(state, false, ds_undistort_->size(),
+                                    match_score_, cost_time_ms, input_delay_ms);
     tracking_failed();
     return;
   }
   Output();
+  data_wrapper_->log_localization(state, true, ds_undistort_->size(),
+                                  match_score_, cost_time_ms, input_delay_ms);
 }
 
 

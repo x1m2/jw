@@ -6,8 +6,31 @@ set -euo pipefail
 LIDAR_TYPE="${1:-}"
 case "$LIDAR_TYPE" in
   airy|mid360s_3d|mid360s_2d) shift ;;
-  *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [运行用户名] [OTA目录]" >&2; exit 1 ;;
+  *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [--localization fastlio|super_lio] [运行用户名] [OTA目录]" >&2; exit 1 ;;
 esac
+LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
+POSITIONAL_ARGS=()
+while (( $# )); do
+  case "$1" in
+    --localization)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --localization 需要指定 fastlio 或 super_lio" >&2
+        exit 1
+      fi
+      LOCALIZATION_ALGORITHM="$2"
+      shift 2
+      ;;
+    --*) echo "[ERROR] 未知选项：$1" >&2; exit 1 ;;
+    *) POSITIONAL_ARGS+=("$1"); shift ;;
+  esac
+done
+case "$LOCALIZATION_ALGORITHM" in
+  fastlio|super_lio) ;;
+  *) echo "[ERROR] 不支持的定位算法：$LOCALIZATION_ALGORITHM（fastlio|super_lio）" >&2; exit 1 ;;
+esac
+LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
+CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"
+set -- "${POSITIONAL_ARGS[@]}"
 if [[ $# -gt 2 ]]; then
   echo "[ERROR] 参数过多" >&2
   exit 1
@@ -19,7 +42,7 @@ SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
 PERMISSION_INSTALLER="$SCRIPT_DIR/install_runtime_restart_permission.sh"
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "[ERROR] 请使用 sudo 执行：sudo bash $0 $LIDAR_TYPE [运行用户名] [OTA目录]"
+  echo "[ERROR] 请使用 sudo 执行：sudo bash $0 $LIDAR_TYPE --localization $LOCALIZATION_ALGORITHM [运行用户名] [OTA目录]"
   exit 1
 fi
 
@@ -53,6 +76,20 @@ for module in nav slam slam_manager; do
   fi
 done
 START_SCRIPT="$DEPLOY_ROOT/start_node_${LIDAR_TYPE}.sh"
+case "$LIDAR_TYPE" in
+  airy) SENSOR_CONFIG=airy96 ;;
+  *) SENSOR_CONFIG=mid360s ;;
+esac
+LOCALIZATION_CONFIG="$OTA_ROOT/slam/pack/content/config/${CONFIG_PREFIX}_${SENSOR_CONFIG}.yaml"
+for required_file in \
+  "$OTA_ROOT/slam/pack/content/localization/$LOCALIZATION_NODE" \
+  "$OTA_ROOT/slam/pack/content/localization/voxelmaps_saver" \
+  "$LOCALIZATION_CONFIG"; do
+  if [[ ! -f "$required_file" ]]; then
+    echo "[ERROR] 所选定位算法 $LOCALIZATION_ALGORITHM 的部署文件不存在：$required_file" >&2
+    exit 1
+  fi
+done
 
 if [ ! -f "$TEMPLATE_FILE" ]; then
   echo "[ERROR] service 模板不存在：$TEMPLATE_FILE"
@@ -97,6 +134,8 @@ sed \
   -e "s|@RUN_GROUP@|$(escape_sed_replacement "$RUN_GROUP")|g" \
   -e "s|@RUN_HOME@|$(escape_sed_replacement "$RUN_HOME")|g" \
   -e "s|@START_SCRIPT@|$(escape_sed_replacement "$START_SCRIPT")|g" \
+  -e "s|@LOCALIZATION_ALGORITHM@|$LOCALIZATION_ALGORITHM|g" \
+  -e "s|@LOCALIZATION_NODE@|$LOCALIZATION_NODE|g" \
   "$TEMPLATE_FILE" > "$TEMP_SERVICE"
 
 # Use exactly the same user as User= in the rendered service. Abort on failure.
@@ -108,6 +147,8 @@ systemctl enable "$SERVICE_NAME"
 
 echo "[DONE] 已安装并启用：$SERVICE_NAME"
 echo "[INFO] 启动方案：$LIDAR_TYPE"
+echo "[INFO] 定位算法：$LOCALIZATION_ALGORITHM"
+echo "[INFO] 定位配置：$LOCALIZATION_CONFIG"
 echo "[INFO] 运行用户：$RUN_USER"
 echo "[INFO] 启动脚本：$START_SCRIPT"
 echo "[INFO] 客户端重启权限已就绪"

@@ -3,23 +3,36 @@
 set -euo pipefail
 
 CHECK_ONLY=false
-case "${1:-}" in
-  --check) CHECK_ONLY=true; shift ;;
-  --finish-session)
-    # systemd calls this after shutdown. Keep the session across failures so
-    # automatic retries append to the same logs; a clean stop/restart ends it.
-    if [[ "${SERVICE_RESULT:-}" == success && -n "${RUNTIME_DIRECTORY:-}" ]]; then
-      rm -f -- "$RUNTIME_DIRECTORY/log-session"
-    fi
-    exit 0
-    ;;
-  "") ;;
-  *) echo "Usage: bash $0 [--check]" >&2; exit 1 ;;
+LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
+while (( $# )); do
+  case "$1" in
+    --check) CHECK_ONLY=true; shift ;;
+    --localization)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --localization requires fastlio or super_lio" >&2
+        exit 1
+      fi
+      LOCALIZATION_ALGORITHM="$2"
+      shift 2
+      ;;
+    --finish-session)
+      # Preserve the session across automatic failure retries.
+      if [[ "${SERVICE_RESULT:-}" == success && -n "${RUNTIME_DIRECTORY:-}" ]]; then
+        rm -f -- "$RUNTIME_DIRECTORY/log-session"
+      fi
+      exit 0
+      ;;
+    *) echo "Usage: bash $0 [--check] [--localization fastlio|super_lio]" >&2; exit 1 ;;
+  esac
+done
+case "$LOCALIZATION_ALGORITHM" in
+  fastlio|super_lio) ;;
+  *) echo "[ERROR] Unsupported localization algorithm: $LOCALIZATION_ALGORITHM" >&2; exit 1 ;;
 esac
-if (( $# != 0 )); then
-  echo "Usage: bash $0 [--check]" >&2
-  exit 1
-fi
+LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
+# Config filenames use fastlio/superlio; node and worker names retain super_lio.
+LOCALIZATION_CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"
+LOCALIZATION_WORKER="/${LOCALIZATION_ALGORITHM}_localization_worker/set_state"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${OTA_ROOT:-}" ]]; then
@@ -58,7 +71,9 @@ NAV_SERVER_SOURCE_CONFIG="$MANAGER_DIR/config/server.yaml"
 LIVOX_CONFIG="$SLAM_DIR/config/MID360s_driver.yaml"
 LIVOX_JSON_CONFIG="$SLAM_DIR/config/MID360s_config.json"
 MAPPING_CONFIG="$SLAM_DIR/config/mapping_mid360s.yaml"
-LOCALIZATION_CONFIG="$SLAM_DIR/config/reloc_mid360s.yaml"
+LOCALIZATION_CONFIG="$SLAM_DIR/config/${LOCALIZATION_CONFIG_PREFIX}_mid360s.yaml"
+echo "[CONFIG] localization: $LOCALIZATION_ALGORITHM ($LOCALIZATION_WORKER)"
+echo "[CONFIG] localization parameters: $LOCALIZATION_CONFIG"
 
 # Every process is a driver or a ManagedWorker. Manager starts the algorithms
 # through set_state services when the APP requests mapping/localization/navigation.
@@ -66,7 +81,7 @@ BINARIES=(
   "$SLAM_DIR/lidar/livox_ros_driver2_node"
   "$SLAM_DIR/mapping/fastlio_mapping_node"
   "$SLAM_DIR/pgo_sc/pgo_sc_node"
-  "$SLAM_DIR/localization/fastlio_localization_node"
+  "$SLAM_DIR/localization/$LOCALIZATION_NODE"
   "$NAV_DIR/terrain_filter/terrain_filter_node"
   "$NAV_DIR/obstacle_stop/obstacle_stop_node"
   "$NAV_DIR/costmap_2d/costmap_2d_node"
@@ -278,7 +293,7 @@ trap 'exit 0' INT TERM
 # Clear processes left by the previous profile/script. Match executable command
 # lines, not shell commands or GUI names containing a node name as an argument.
 LEGACY_NAMES=(livox_ros_driver2_node rslidar_sdk_node dual_airy_fusion_node
-  woodox_imu_bridge_node fastlio_mapping_node pgo_sc_node fastlio_localization_node
+  woodox_imu_bridge_node fastlio_mapping_node pgo_sc_node fastlio_localization_node super_lio_localization_node
   terrain_filter_node obstacle_stop_node costmap_2d_node global_path_planner_node
   path_smoother_node pure_pursuit_node scan_planner_node slam_manager_node nav_server_node)
 for signal in INT TERM KILL; do
@@ -312,8 +327,9 @@ start_node fastlio_mapping "$SLAM_LIB_PATH" "$SLAM_DIR/mapping/fastlio_mapping_n
   --ros-args --params-file "$MAPPING_CONFIG" --params-file "$ROBOT_PARAM_CONFIG"
 start_node pgo_sc "$SLAM_LIB_PATH" "$SLAM_DIR/pgo_sc/pgo_sc_node" \
   --ros-args --params-file "$SLAM_DIR/config/pgo_mid360s.yaml" -p basic.package_path:="$DATA_ROOT/map"
-start_node localization "$SLAM_LIB_PATH" "$SLAM_DIR/localization/fastlio_localization_node" \
-  --ros-args --params-file "$LOCALIZATION_CONFIG" --params-file "$ROBOT_PARAM_CONFIG" -p map_path:="$DATA_ROOT/map/"
+start_node localization "$SLAM_LIB_PATH" "$SLAM_DIR/localization/$LOCALIZATION_NODE" \
+  --ros-args --params-file "$LOCALIZATION_CONFIG" --params-file "$ROBOT_PARAM_CONFIG" \
+  -p runtime_profile:=platform -p map_path:="$DATA_ROOT/map/"
 # Match the 2D data flow; all geometry consumers receive the P2.5 dimensions.
 start_node terrain_filter "$NAV_LIB_PATH" "$NAV_DIR/terrain_filter/terrain_filter_node" \
   --ros-args --params-file "$NAV_DIR/config/terrain_filter.yaml" --params-file "$ROBOT_PARAM_CONFIG"
@@ -329,6 +345,7 @@ start_node pure_pursuit "$NAV_LIB_PATH" "$NAV_DIR/pure_pursuit/pure_pursuit_node
   --ros-args --params-file "$NAV_DIR/config/pure_pursuit_params.yaml" --params-file "$ROBOT_PARAM_CONFIG"
 start_node slam_manager "$MANAGER_LIB_PATH" "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
+  -p localization.worker_service:="$LOCALIZATION_WORKER" \
   -p map_storage.root_directory:="$DATA_ROOT" -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver"
 start_node nav_server_console "$MANAGER_LIB_PATH" "$MANAGER_DIR/nav_server/nav_server_node" \
   "$NAV_SERVER_CONFIG"

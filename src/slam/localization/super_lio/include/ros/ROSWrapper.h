@@ -65,6 +65,9 @@ public:
   }
 
   void pub_odom(const NavState&, double match_score = 0.0);
+  void log_localization(const NavState &state, bool valid,
+                         std::size_t feats_down, double match_score,
+                         double cost_time_ms, double input_delay_ms);
   void publish_status(bool valid);
   void publish_imu_localization(const DynamicState &state);
   void pub_cloud_body(const BASIC::CloudPtr &pc, double time);
@@ -128,7 +131,7 @@ private:
   /// relocalization
   bool use_gnss_ = false;
   std::string gnss_topic_ = "/gnss/odom";
-  bool print_pose_ = false;   /// publish.print_pose: echo the world pose to the terminal
+  bool print_pose_ = false;   /// publish.print_pose: print per-frame base pose and diagnostics
 
   std::deque<IMUData>   imu_buffer_;
   std::deque<LidarData> lidar_buffer_;

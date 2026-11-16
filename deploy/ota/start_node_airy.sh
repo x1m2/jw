@@ -2,15 +2,29 @@
 
 set -u
 CHECK_ONLY=false
-case "${1:-}" in
-  --check) CHECK_ONLY=true; shift ;;
-  "") ;;
-  *) echo "Usage: bash $0 [--check]" >&2; exit 1 ;;
+LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
+while (( $# )); do
+  case "$1" in
+    --check) CHECK_ONLY=true; shift ;;
+    --localization)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --localization requires fastlio or super_lio" >&2
+        exit 1
+      fi
+      LOCALIZATION_ALGORITHM="$2"
+      shift 2
+      ;;
+    *) echo "Usage: bash $0 [--check] [--localization fastlio|super_lio]" >&2; exit 1 ;;
+  esac
+done
+case "$LOCALIZATION_ALGORITHM" in
+  fastlio|super_lio) ;;
+  *) echo "[ERROR] Unsupported localization algorithm: $LOCALIZATION_ALGORITHM" >&2; exit 1 ;;
 esac
-if [[ $# -ne 0 ]]; then
-  echo "Usage: bash $0 [--check]" >&2
-  exit 1
-fi
+LOCALIZATION_NODE="${LOCALIZATION_ALGORITHM}_localization_node"
+# Config filenames use fastlio/superlio; node and worker names retain super_lio.
+LOCALIZATION_CONFIG_PREFIX="reloc_${LOCALIZATION_ALGORITHM//_/}"
+LOCALIZATION_WORKER="/${LOCALIZATION_ALGORITHM}_localization_worker/set_state"
 
 # Resolve payloads independently of the deployment scripts location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +57,9 @@ AIRY_MAPPING_CONFIG="$SLAM_DIR/config/mapping_airy96.yaml"
 FUSION_CONFIG="$SLAM_DIR/config/dual_airy_fusion.yaml"
 IMU_BRIDGE_CONFIG="$SLAM_DIR/config/woodox_imu_bridge.yaml"
 NAV_FASTDDS_CONFIG="$NAV_DIR/config/fastshm.xml"
-LOCALIZATION_CONFIG="$SLAM_DIR/config/reloc_airy96.yaml"
+LOCALIZATION_CONFIG="$SLAM_DIR/config/${LOCALIZATION_CONFIG_PREFIX}_airy96.yaml"
+echo "[CONFIG] localization: $LOCALIZATION_ALGORITHM ($LOCALIZATION_WORKER)"
+echo "[CONFIG] localization parameters: $LOCALIZATION_CONFIG"
 
 ROBOT_PARAM_CONFIG="$MANAGER_DIR/config/p3_airy96.yaml"
 NAV_SERVER_DIR="$MANAGER_DIR/nav_server"
@@ -81,7 +97,7 @@ BINARIES=(
   "$SLAM_DIR/imu/woodox_imu_bridge_node"
   "$SLAM_DIR/mapping/fastlio_mapping_node"
   "$SLAM_DIR/pgo_sc/pgo_sc_node"
-  "$SLAM_DIR/localization/fastlio_localization_node"
+  "$SLAM_DIR/localization/$LOCALIZATION_NODE"
 
   "$NAV_DIR/global_path_planner/global_path_planner_node"
   "$NAV_DIR/path_smoother/path_smoother_node"
@@ -190,6 +206,7 @@ NODE_PATTERNS=(
   "fastlio_mapping_node"
   "pgo_sc_node"
   "fastlio_localization_node"
+  "super_lio_localization_node"
   "global_path_planner_node"
   "path_smoother_node"
   "scan_planner_node"
@@ -405,8 +422,9 @@ sleep 2
 echo "[START] localization"
 
 stdbuf -oL -eL \
-  "$SLAM_DIR/localization/fastlio_localization_node" \
+  "$SLAM_DIR/localization/$LOCALIZATION_NODE" \
   --ros-args \
+  -p runtime_profile:=platform \
   --params-file "$LOCALIZATION_CONFIG" \
   --params-file "$ROBOT_PARAM_CONFIG" \
   2>&1 | tee -a "$LOG_DIR/localization.log" &
@@ -476,6 +494,7 @@ stdbuf -oL -eL \
   "$MANAGER_DIR/slam_manager/slam_manager_node" \
   --ros-args \
   --params-file "$MANAGER_DIR/config/slam_manager.yaml" \
+  -p localization.worker_service:="$LOCALIZATION_WORKER" \
   -p localization.bbs.saver_executable:="$SLAM_DIR/localization/voxelmaps_saver" \
   2>&1 | tee -a "$LOG_DIR/slam_manager.log" &
 
@@ -504,6 +523,8 @@ echo "[CHECK] runtime node status"
 echo "========================================"
 
 for node in "${NODE_PATTERNS[@]}"; do
+  # Both localization algorithms are cleaned up, but only the selected one runs.
+  [[ "$node" == *_localization_node && "$node" != "$LOCALIZATION_NODE" ]] && continue
   # Inactive sensor drivers remain in the cleanup list only.
   [[ "$node" == "dual_airy_fusion_node" || "$node" == "livox_ros_driver2_node" ]] && continue
   if pgrep -f "$node" >/dev/null 2>&1; then
@@ -535,6 +556,7 @@ while true; do
   running=0
 
   for node in "${NODE_PATTERNS[@]}"; do
+    [[ "$node" == *_localization_node && "$node" != "$LOCALIZATION_NODE" ]] && continue
     # Inactive sensor drivers remain in the cleanup list only.
     [[ "$node" == "dual_airy_fusion_node" || "$node" == "livox_ros_driver2_node" ]] && continue
     if pgrep -f "$node" >/dev/null 2>&1; then

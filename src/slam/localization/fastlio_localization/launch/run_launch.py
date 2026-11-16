@@ -45,7 +45,7 @@ def generate_launch_description():
 
     config_file_arg = DeclareLaunchArgument(
         'config_file',
-        default_value='reloc_mid360s.yaml',
+        default_value='reloc_fastlio_mid360s.yaml',
         description='Localization ROS 2 parameter file in the config directory'
     )
 

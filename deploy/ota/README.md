@@ -36,15 +36,58 @@ bash deploy/ota/start_node_mid360s_2d.sh
 
 默认 OTA 目录为 `/home/jw/ota`；可通过 `OTA_ROOT=/路径` 指定。加 `--check` 只检查文件，不启动节点。
 
+三个启动脚本均支持 `--localization fastlio|super_lio`，默认 `fastlio`。
+也可设置环境变量 `LOCALIZATION_ALGORITHM`；命令行选项优先。
+例如 Airy 使用 Super LIO，先检查再启动：
+
+```bash
+bash deploy/ota/start_node_airy.sh --localization super_lio --check
+bash deploy/ota/start_node_airy.sh --localization super_lio
+```
+
+选择会同步切换定位程序、传感器配置和 `slam_manager` 的
+`localization.worker_service`。定位 Worker 以 `platform` 模式启动，等待 Manager 激活。
+建图仍使用 FAST-LIO 和 PGO。
+
+两种定位算法的 OTA 文件分开存放，避免同名 YAML 相互覆盖：
+
+| 算法 | `slam/pack/content/localization/` 下的程序 | `slam/pack/content/config/` 下的配置 |
+| --- | --- | --- |
+| `fastlio` | `fastlio_localization_node` | `reloc_fastlio_airy96.yaml`、`reloc_fastlio_mid360s.yaml` |
+| `super_lio` | `super_lio_localization_node` | `reloc_superlio_airy96.yaml`、`reloc_superlio_mid360s.yaml` |
+
+两套配置分别来源于 `src/slam/localization/fastlio_localization/config/reloc_fastlio_*.yaml`
+和 `src/slam/localization/super_lio/config/reloc_superlio_*.yaml`，部署时保留原文件名。
+Super LIO 程序编译安装后位于
+`install/super_lio/lib/super_lio/super_lio_localization_node`；
+同时将所需的 `liblio`、`basic`、BBS 等动态库及其依赖部署到 `slam/pack/content/lib/`。
+使用目标板对应架构构建，并检查动态库依赖。安装服务不会替你编译或复制程序。
+机器人尺寸和 `lidar_to_base_T/R` 仍使用对应雷达的共享机器人配置。
+
 ## 开机自启动
+
+以下安装、权限和卸载脚本命令在 `systemd` 目录执行：仓库中为
+`deploy/ota/systemd/`，部署到板端后通常为 `ota/systemd/`。
 
 按导航方案选择一个：
 
 ```bash
-sudo bash deploy/ota/systemd/install_nav_autostart.sh airy
-sudo bash deploy/ota/systemd/install_nav_autostart.sh mid360s_3d
-sudo bash deploy/ota/systemd/install_nav_autostart.sh mid360s_2d
+sudo bash  install_nav_autostart.sh airy
+sudo bash  install_nav_autostart.sh mid360s_3d
+sudo bash  install_nav_autostart.sh mid360s_2d
 ```
+
+安装时同时选择定位算法，例如：
+
+```bash
+sudo bash  install_nav_autostart.sh airy --localization super_lio
+sudo bash  install_nav_autostart.sh mid360s_3d --localization fastlio
+sudo bash  install_nav_autostart.sh mid360s_2d --localization super_lio jw /home/jw/ota
+```
+
+未指定算法时保持 `fastlio`，兼容原安装命令。算法保存在 systemd 服务环境中，
+重启和开机启动均使用同一选择；安装前检查所选定位程序和对应配置是否存在。
+切换算法后需重新安装并重启服务。
 
 默认使用 sudo 调用者及其主目录下的 `ota`。自定义时在雷达参数后加 `用户名 OTA目录`。
 安装器同时为运行用户配置客户端免密重启权限，三个方案共用此流程。
@@ -63,13 +106,13 @@ sudo bash deploy/ota/systemd/install_nav_autostart.sh mid360s_2d
 ```bash
 systemctl show nav-runtime.service --property=User --value
 # 以下 jw 替换为上面输出的用户
-sudo bash deploy/ota/systemd/install_runtime_restart_permission.sh jw
+sudo bash  install_runtime_restart_permission.sh jw
 ```
 
 检查配置或权限，不实际重启：
 
 ```bash
-bash deploy/ota/systemd/install_runtime_restart_permission.sh --check jw
+bash  install_runtime_restart_permission.sh --check jw
 # 以下命令以服务运行用户执行
 sudo -n -l -- /usr/bin/systemctl --no-block restart nav-runtime.service
 ```
@@ -91,7 +134,7 @@ sudo journalctl -u nav-runtime.service -f
 卸载自启动（保留程序和数据）：
 
 ```bash
-sudo bash deploy/ota/systemd/uninstall_nav_autostart.sh
+sudo bash  uninstall_nav_autostart.sh
 ```
 
 ## 更新程序

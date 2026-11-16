@@ -12,7 +12,7 @@ def generate_launch_description():
 
     declare_config_arg = DeclareLaunchArgument(
         'config',
-        default_value='reloc_mid360s.yaml',
+        default_value='reloc_superlio_mid360s.yaml',
         description='Complete sensor and relocalization config yaml'
     )
     config_file_arg = DeclareLaunchArgument('config_file', default_value=LaunchConfiguration('config'))

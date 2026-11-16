@@ -746,7 +746,7 @@ void ROSWrapper::load_backend_param(Backend &backend)
             << ", enough_score=" << backend.relocalization->bnb_option.enough_score << ")"
             << RESET;
 
-  this->declare_parameter("publish.print_pose", false);  // echo world pose to terminal (debug)
+  this->declare_parameter("publish.print_pose", false);  // per-frame base pose and diagnostics
   this->get_parameter("publish.print_pose", print_pose_);
 }
 
@@ -872,8 +872,35 @@ void ROSWrapper::pub_odom(const NavState &state, double match_score) {
     if (path_.poses.size() > 300) path_.poses.erase(path_.poses.begin());
     pub_path_->publish(path_);
   }
-  if (print_pose_)
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000, "base position: %.3f %.3f %.3f", map_base(0,3), map_base(1,3), map_base(2,3));
+}
+
+void ROSWrapper::log_localization(const NavState &state, bool valid,
+                                   std::size_t feats_down, double match_score,
+                                   double cost_time_ms, double input_delay_ms) {
+  const double pose_delay_ms = (now().seconds() - state.timestamp) * 1000.0;
+  if (!valid) {
+    RCLCPP_ERROR(get_logger(),
+        "location invalid! feats_down = %zu, match_score = %.3f, "
+        "cost time = %.1fms. input_delay = %.1fms. pose_delay = %.1fms.",
+        feats_down, match_score, cost_time_ms, input_delay_ms, pose_delay_ms);
+    return;
+  }
+  if (!print_pose_) return;
+
+  const Eigen::Matrix4d map_base = base_pose(state.GetSE3().matrix().cast<double>());
+  const auto rotation = map_base.topLeftCorner<3, 3>();
+  constexpr double rad_to_deg = 180.0 / 3.14159265358979323846;
+  const double roll = std::atan2(rotation(2, 1), rotation(2, 2)) * rad_to_deg;
+  const double pitch = std::atan2(-rotation(2, 0),
+      std::hypot(rotation(0, 0), rotation(1, 0))) * rad_to_deg;
+  const double yaw = std::atan2(rotation(1, 0), rotation(0, 0)) * rad_to_deg;
+  RCLCPP_INFO(get_logger(),
+      "/pose_stamped_localization (xyz, rpy): (%.5f, %.5f, %.5f, %.5f, %.5f, %.5f)",
+      map_base(0, 3), map_base(1, 3), map_base(2, 3), roll, pitch, yaw);
+  RCLCPP_INFO(get_logger(),
+      "location valid. feats_down = %zu, match_score = %.3f, "
+      "cost time = %.1fms. input_delay = %.1fms. pose_delay = %.1fms.",
+      feats_down, match_score, cost_time_ms, input_delay_ms, pose_delay_ms);
 }
 
 void ROSWrapper::publish_imu_localization(const DynamicState &state) {

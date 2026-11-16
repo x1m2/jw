@@ -8,7 +8,7 @@ Type=simple
 
 # Run permission setup as root, including the map conversion helper.
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/lidar/livox_ros_driver2_node"
-ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/fastlio_localization_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/@LOCALIZATION_NODE@"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/voxelmaps_saver"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/mapping/fastlio_mapping_node"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/pgo_sc/pgo_sc_node"
@@ -28,6 +28,7 @@ User=@RUN_USER@
 Group=@RUN_GROUP@
 Environment="HOME=@RUN_HOME@"
 Environment="OTA_ROOT=@OTA_ROOT@"
+Environment="LOCALIZATION_ALGORITHM=@LOCALIZATION_ALGORITHM@"
 WorkingDirectory=@OTA_ROOT@
 ExecStart=/bin/bash "@START_SCRIPT@"
 

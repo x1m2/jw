@@ -114,7 +114,7 @@ src/run_offline_reloc.sh \
 离线重定位支持两种雷达，默认使用 Airy：
 
 ```bash
-# MID360：/livox/lidar (CustomMsg) 和 /livox/imu，使用 reloc_mid360s.yaml
+# MID360：/livox/lidar (CustomMsg) 和 /livox/imu，使用 reloc_fastlio_mid360s.yaml
 src/run_offline_reloc.sh --lidar mid360 --bag /path/to/mid360_bag
 
 # Airy：/rslidar_points 和 /rslidar_imu_data
