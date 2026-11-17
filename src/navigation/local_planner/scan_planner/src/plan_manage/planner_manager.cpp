@@ -75,6 +75,16 @@ namespace scan_planner
     visualization_ = vis;
   }
 
+  void SCANPlannerManager::setObstacleAvoidanceEnabled(bool enabled)
+  {
+    bspline_optimizer_rebound_->setObstacleAvoidanceEnabled(enabled);
+  }
+
+  void SCANPlannerManager::setStopDistance(double distance)
+  {
+    bspline_optimizer_rebound_->setStopDistance(distance);
+  }
+
   // !SECTION
 
   // SECTION rebond replanning

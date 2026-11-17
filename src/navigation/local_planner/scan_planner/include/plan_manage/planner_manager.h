@@ -35,6 +35,8 @@ namespace scan_planner
                                  const std::vector<Eigen::Vector3d> &waypoints, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc);
 
     void initPlanModules(rclcpp::Node *node, PlanningVisualization::Ptr vis = nullptr);
+    void setObstacleAvoidanceEnabled(bool enabled);
+    void setStopDistance(double distance);
 
     PlanParameters pp_;
     LocalTrajData local_data_;

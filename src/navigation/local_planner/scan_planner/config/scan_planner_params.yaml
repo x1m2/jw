@@ -8,7 +8,7 @@
       body_pose: /pose_stamped_localization
       sensor_pose: /pose_stamped_localization
       cloud: /cloud_registered
-      initial_path: /smoothed_global_path
+      initial_path: /smoothed_global_path_with_policy
       goal: /move_base_simple/goal
       cmd_vel: /cmd_vel_planned
 
@@ -21,6 +21,8 @@
       emergency_time: 1.0
       fail_safe: true
       max_replan_fail_count: 1000
+      replan_retry_interval: 1.0
+      stop_distance: 0.30 # stop-only mode: desired clearance from the modeled front footprint to an obstacle (m)
       waypoints: [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
     # 原版射线融合、滑动窗口、占据概率和膨胀；尺寸按实机保留。
@@ -37,12 +39,12 @@
       ground_height: 0.0
       frame_id: map
       sliding_map_frame_id: ""
-      double_cylinder_radius: 0.50
+      double_cylinder_radius: 0.45
       double_cylinder_offset: 0.275
       obstacles_inflation_z_up: 0.1
       obstacles_inflation_z_down: 0.1
       body_height: 0.0
-      pose_z_offset: 0.3 # SCAN内部body_pose和sensor_pose共用的map坐标z偏移；0关闭。
+      pose_z_offset: 0.0 # SCAN内部body_pose和sensor_pose共用的map坐标z偏移；0关闭。
       sensor_type: lidar
       cloud_frame: map
       cloud_is_world: true

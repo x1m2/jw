@@ -79,12 +79,15 @@ namespace scan_planner
 
     std::vector<std::vector<Eigen::Vector3d>> initControlPoints(Eigen::MatrixXd &init_points, bool flag_first_init = true);
     bool BsplineOptimizeTrajRebound(Eigen::MatrixXd &optimal_points, double ts); // must be called after initControlPoints()
+    void setObstacleAvoidanceEnabled(bool enabled) { obstacle_avoidance_enabled_ = enabled; }
+    void setStopDistance(double distance) { stop_distance_ = distance; }
     bool BsplineOptimizeTrajRefine(const Eigen::MatrixXd &init_points, const double ts, Eigen::MatrixXd &optimal_points);
 
     inline int getOrder(void) { return order_; }
 
   private:
     GridMap::Ptr grid_map_;
+    double stop_distance_{0.0};
 
     enum FORCE_STOP_OPTIMIZE_TYPE
     {
@@ -116,6 +119,7 @@ namespace scan_planner
     int a;
     //
     double dist0_;             // safe distance
+    bool obstacle_avoidance_enabled_{true};
     double max_vel_, max_acc_; // dynamic limits
 
     int variable_num_;              // optimization variables

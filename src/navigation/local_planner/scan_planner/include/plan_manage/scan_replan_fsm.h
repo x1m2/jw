@@ -17,6 +17,7 @@
 #include <plan_env/grid_map.h>
 #include <navigation_interfaces/msg/bspline.hpp>
 #include <navigation_interfaces/msg/data_disp.hpp>
+#include <navigation_interfaces/msg/path_with_policy.hpp>
 #include <plan_manage/planner_manager.h>
 #include <traj_utils/planning_visualization.h>
 #include <plan_manage/controller.h>
@@ -59,9 +60,12 @@ namespace scan_planner
     int waypoint_num_;
     double planning_horizon_;
     double emergency_time_;
+    double replan_retry_interval_;
+    rclcpp::Time retry_not_before_;
     double rviz_goal_height_;
     double self_inflation_z_up_, self_inflation_z_down_;
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
+    double stop_distance_{0.30};
     double body_height_;
     std::string self_inflation_frame_id_;
 
@@ -71,10 +75,13 @@ namespace scan_planner
     bool rviz_height_ready_;
     bool go2_execution_frozen_;
     bool enable_fail_safe_, need_hover_stop_;
+    bool obstacle_avoidance_enabled_{true};
+    bool stop_obstacle_hold_{false};
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
     int replan_fail_count_{0};
     int max_replan_fail_count_{1000};
+    bool recovery_retry_attempt_{false};
     rclcpp::Time last_freeze_update_time_;
 
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_; // odometry state
@@ -91,7 +98,7 @@ namespace scan_planner
     /* ROS utils */
     rclcpp::Node *node_{nullptr};
     Controller *controller_{nullptr}; // Same node/default callback group: no cross-thread algorithm access.
-    nav_msgs::msg::Path::ConstSharedPtr pending_path_;
+    navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr pending_path_;
     int64_t accepted_path_stamp_{0}, minimum_path_stamp_{0};
     bool terminal_active_{false};
     bool awaiting_path_{false};
@@ -107,7 +114,7 @@ namespace scan_planner
     rclcpp::TimerBase::SharedPtr exec_timer_, safety_timer_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr odom_sub_;
-    rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
+    rclcpp::Subscription<navigation_interfaces::msg::PathWithPolicy>::SharedPtr path_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr go2_execution_frozen_sub_;
     rclcpp::Publisher<navigation_interfaces::msg::Bspline>::SharedPtr bspline_pub_;
     rclcpp::Publisher<navigation_interfaces::msg::DataDisp>::SharedPtr data_disp_pub_;
@@ -141,7 +148,7 @@ namespace scan_planner
     void checkCollisionCallback();
     void rvizGoalCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr &msg);
     void waypointCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg);
-    void pathCallback(const nav_msgs::msg::Path::ConstSharedPtr &msg);
+    void pathCallback(const navigation_interfaces::msg::PathWithPolicy::ConstSharedPtr &msg);
     void odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
     void go2ExecutionFrozenCallback(const std_msgs::msg::Bool::ConstSharedPtr &msg);
 

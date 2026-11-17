@@ -68,6 +68,9 @@ namespace scan_planner
       cps_.points = init_points;
     }
 
+    if (!obstacle_avoidance_enabled_)
+      return {};
+
     /*** Segment the initial trajectory according to obstacles ***/
     constexpr int ENOUGH_INTERVAL = 2;
     double step_size = grid_map_->getResolution() / ((init_points.col(0) - init_points.rightCols(1)).norm() / (init_points.cols() - 1)) / 2;
@@ -963,6 +966,14 @@ namespace scan_planner
 
   bool BsplineOptimizer::rebound_optimize()
   {
+    if (!obstacle_avoidance_enabled_)
+    {
+      // Stop-only mode checks clearance at the robot's current pose in the FSM.
+      // Do not reject the whole local trajectory because an obstacle is farther
+      // ahead; that would stop the robot at the start of the planning horizon.
+      return true;
+    }
+
     iter_num_ = 0;
     int start_id = order_;
     int end_id = this->cps_.size - order_;

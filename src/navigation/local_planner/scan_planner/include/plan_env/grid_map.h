@@ -171,6 +171,7 @@ public:
   inline int getOccupancy(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3i id);
   inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
+  inline int getStopOccupancy(Eigen::Vector3d pos, double yaw, double distance);
 
   inline void boundIndex(Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3i& id);
@@ -378,6 +379,17 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
   if (front_occ != 0) return front_occ;
 
   return getInflateOccupancyFromBuffer(rear, md_.occupancy_buffer_inflate_);
+}
+
+inline int GridMap::getStopOccupancy(Eigen::Vector3d pos, double yaw, double distance) {
+  const Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
+  const double margin = std::max(0.0, distance);
+  const double step = std::max(mp_.resolution_, 1e-3);
+  for (double offset = 0.0; offset < margin; offset += step) {
+    const int occupancy = getInflateOccupancy(pos + offset * heading, yaw);
+    if (occupancy != 0) return occupancy;
+  }
+  return getInflateOccupancy(pos + margin * heading, yaw);
 }
 
 inline int GridMap::getInflateOccupancyFromBuffer(Eigen::Vector3d pos, const std::vector<char>& buffer) {
