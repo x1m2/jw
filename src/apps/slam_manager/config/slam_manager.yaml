@@ -36,7 +36,7 @@ slam_manager:
         y_min: -1.5
         y_max: 1.5
         # base_link原点到地面的垂直距离，单位米，填正数。
-        base_height_m: 0.5
+        base_height_m: 0.3
         # 地面取点允许的上下偏差，单位米。
         height_tolerance_m: 0.4
 
