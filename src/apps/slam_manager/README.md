@@ -312,25 +312,44 @@ ros2 action send_goal /robot/navigate_to_pose slam_manager_interfaces/action/Nav
 
 ## 雷达倾角标定
 
-`/robot/calibrate_lidar_tilt`在收到Service请求后临时订阅车型配置中的IMU话题，默认采集
-200个有效加速度样本，计算雷达相对水平面的roll和pitch并返回。标定完成
-或超过5秒后都会销毁IMU订阅。标定时车体须静止并放在水平地面上。
-该接口返回弧度，不计算yaw，也不修改配置文件。
-`imu_calibration.extrinsic_R`表示LiDAR坐标到IMU坐标的旋转矩阵，与FAST-LIO
-的`mapping.extrinsic_R`方向一致。计算前会用其转置将IMU加速度转换到LiDAR
-坐标系；Mid-360S的内置IMU使用单位矩阵。
+`/robot/calibrate_lidar_tilt` 使用静止 IMU 校准雷达相对 base_link 的倾斜，兼容
+MID360 和 Airy。标定前须用水平仪将底盘基准面调平，并让机器人保持静止。
+该接口不独立测量 yaw，也不标定平移，不自动修改配置或运行中的 Worker。
 
-硬件参数`imu_calibration.topic`和`imu_calibration.extrinsic_R`放在
-`src/config/`的车型YAML中，`imu_calibration`与`lidars`同级。
-静止倾角标定只需要话题和旋转，不配置平移。
-P2.5和S01使用`/livox/imu`及单位旋转矩阵；P3仅标定前雷达，使用
-`/rslidar_front/imu`，旋转矩阵与`mapping_airy96.yaml`一致。
-建图、重定位和纯定位继续读取各自算法YAML中的传感器话题和外参，
-不读取机体YAML的`imu_calibration`参数；硬件外参变化时需同步更新相应配置。
-通用`sample_count`、`timeout_sec`保留在`slam_manager.yaml`中。
-启动时先加载通用配置，再加载车型配置；参数启动时读取，修改后需重启节点。
-缺少话题、旋转矩阵无效或采样参数无效时禁用标定，服务返回`success=false`，
-其他Manager功能仍可运行。启动日志打印实际使用的话题、旋转矩阵和采样参数。
+节点读取机体 YAML 的 `lidar_to_base` 作为朝向参考（MID360 为 `rpy_rad`，
+Airy 为 `matrix`）。收到空请求后临时订阅 `imu_calibration.topic`，默认采集
+200 个有效样本；完成或超过 5 秒后销毁订阅。
+`imu_calibration.extrinsic_R` 表示 LiDAR → IMU 旋转，先用其转置把平均加速度
+转到雷达坐标系，再用当前机体旋转 `R0` 转到 base。通过最小旋转 `delta_R`
+将重力对齐 base 的 -Z，结果为 `R_new = delta_R * R0`，直接在矩阵上计算，
+不经过 RPY。当前外参只提供朝向参考，不代表完成了 yaw 标定。
+
+响应保留 `success`、`roll_rad`、`pitch_rad`，新增：
+
+- `rotation_matrix`：LiDAR → base 的 9 个矩阵元素，按行排列，double 精度。
+- `message`：失败原因或结果应用说明。
+
+MID360 使用返回的 roll、pitch（弧度）替换 `rpy_rad` 的前两项，yaw 沿用原值；
+Airy 直接使用 `rotation_matrix`，接近 pitch = ±90° 时不要通过返回的 RPY 重建矩阵。
+日志打印可复制的矩阵 YAML，MID360 另打印保留原 yaw 的 RPY YAML；小数保留 6 位。
+写回相应机体 YAML 后重启 Manager 和使用该文件的建图、定位、避障节点。
+仅调用服务不会改变它们当前的外参，重复采样仍以 Manager 启动时的配置为参考。
+
+采样质量门限在 `slam_manager.yaml` 的 `imu_calibration` 中配置：
+`max_gyro_rms_rad_s` 默认 0.05 rad/s，`max_accel_relative_std` 默认 0.02，
+后者为加速度向量标准差与平均加速度模长之比，兼容加速度使用 m/s² 或 g 的输入。
+超出门限返回失败。这些检查不能判断底盘是否调平，也不能排除匀加速，
+仍须人为保证静止。`sample_count` 至少为 2，超时和门限须为正有限数。
+
+机体 YAML 同时提供 `lidar_to_base`、`imu_calibration.topic` 和
+`imu_calibration.extrinsic_R`。P2.5、S01 使用 `/livox/imu` 和单位 IMU 外参；
+P3 仅校准前雷达，使用 `/rslidar_front/imu` 及其内部 IMU 外参。
+后雷达需要它自己的 IMU 话题和内部外参，不能直接套用前雷达标定结果。
+建图、定位、避障仍读取 `lidar_to_base`；算法自己的 LiDAR/IMU 外参也须与硬件一致。
+无效配置只禁用标定，服务返回 `success=false`，Manager 的其他功能继续工作。
+
+服务定义已扩展，必须重新编译 `slam_manager_interfaces`、`slam_manager` 和相关
+外部客户端，重新 source 工作区，并重启旧节点，避免新旧接口混用。
 
 launch默认加载随包安装的P2.5配置，切换车型可指定源文件或其他配置路径：
 

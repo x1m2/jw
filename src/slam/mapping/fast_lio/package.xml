@@ -30,6 +30,7 @@
   <depend>livox_ros_driver2</depend>
   <depend>slam_manager_interfaces</depend>
   <depend>slam_manager</depend>
+  <depend>robot_geometry</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>

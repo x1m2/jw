@@ -63,6 +63,7 @@ find_package(pcl_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(slam_manager REQUIRED)
+find_package(robot_geometry REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
 
 find_package(Eigen3 REQUIRED NO_MODULE)
@@ -100,6 +101,7 @@ ament_target_dependencies(lio PUBLIC
   livox_ros_driver2
   tf2_ros
   slam_manager
+  robot_geometry
   slam_manager_interfaces
   basic
 )

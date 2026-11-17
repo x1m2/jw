@@ -1,3 +1,4 @@
+#include "robot_geometry/lidar_extrinsics.hpp"
 #include "ros2_main.hpp"
 
 #include <pcl/common/transforms.h>
@@ -756,22 +757,8 @@ void FastlioLocalizationNode::initialize() {
   std::string last_pose_record_path;
   std::string location_log_save_path;
 
-  node->declare_parameter<std::vector<double>>("lidar_to_base_T",
-                                               std::vector<double>(3, 0.0));
-  node->declare_parameter<std::vector<double>>("lidar_to_base_R",
-                                               std::vector<double>(3, 0.0));
-  node->get_parameter("lidar_to_base_T", lidar_to_base_T);
-  node->get_parameter("lidar_to_base_R", lidar_to_base_R);
-
-  // Fixed LiDAR pose in base_link, ^B T_L, from robot_param.yaml.
-  T_base_lidar.setIdentity();
-  T_base_lidar.topLeftCorner<3, 3>() =
-      (Eigen::AngleAxisd(lidar_to_base_R[2], Eigen::Vector3d::UnitZ()) *
-       Eigen::AngleAxisd(lidar_to_base_R[1], Eigen::Vector3d::UnitY()) *
-       Eigen::AngleAxisd(lidar_to_base_R[0], Eigen::Vector3d::UnitX()))
-          .toRotationMatrix();
-  T_base_lidar.topRightCorner(3, 1) = Eigen::Vector3d(
-      lidar_to_base_T[0], lidar_to_base_T[1], lidar_to_base_T[2]);
+  // Fixed LiDAR pose in base_link: p_base = R * p_lidar + t.
+  T_base_lidar = robot_geometry::lidar_extrinsics::load(*node);
 
   load_log_parameters(node, relocate_use_last_pose, last_pose_record_path,
                       location_log_enable, location_log_save_path);

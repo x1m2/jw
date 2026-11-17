@@ -1,3 +1,4 @@
+#include "robot_geometry/lidar_extrinsics.hpp"
 #include "obstacle_stop/obstacle_stop.hpp"
 
 #include <algorithm>
@@ -143,32 +144,11 @@ void ObstacleStop::loadParameters() {
   topology_map_file_ =
       node_->declare_parameter<std::string>("topology_map_file", "");
 
-  const auto translation = node_->declare_parameter<std::vector<double>>(
-      "lidar_to_base_T", std::vector<double>());
-  const auto rotation = node_->declare_parameter<std::vector<double>>(
-      "lidar_to_base_R", std::vector<double>());
-  const Eigen::AngleAxisd roll(rotation[0], Eigen::Vector3d::UnitX());
-  const Eigen::AngleAxisd pitch(rotation[1], Eigen::Vector3d::UnitY());
-  const Eigen::AngleAxisd yaw(rotation[2], Eigen::Vector3d::UnitZ());
-  lidar_to_base_ =
-      Eigen::Translation3d(translation[0], translation[1], translation[2]) *
-      yaw * pitch * roll;
-
-  const auto rear_translation = node_->declare_parameter<std::vector<double>>(
-      "rear_lidar_to_base_T", std::vector<double>{-0.4, 0.0, 0.55});
-  const auto rear_rotation = node_->declare_parameter<std::vector<double>>(
-      "rear_lidar_to_base_R",
-      std::vector<double>{0.0, 0.0, 0.0});
-  const Eigen::AngleAxisd rear_roll(rear_rotation[0],
-                                    Eigen::Vector3d::UnitX());
-  const Eigen::AngleAxisd rear_pitch(rear_rotation[1],
-                                     Eigen::Vector3d::UnitY());
-  const Eigen::AngleAxisd rear_yaw(rear_rotation[2],
-                                   Eigen::Vector3d::UnitZ());
-  rear_lidar_to_base_ =
-      Eigen::Translation3d(rear_translation[0], rear_translation[1],
-                           rear_translation[2]) *
-      rear_yaw * rear_pitch * rear_roll;
+  lidar_to_base_.matrix() = robot_geometry::lidar_extrinsics::load(*node_);
+  Eigen::Matrix4d rear_default = Eigen::Matrix4d::Identity();
+  rear_default.topRightCorner<3, 1>() = Eigen::Vector3d(-0.4, 0.0, 0.55);
+  rear_lidar_to_base_.matrix() = robot_geometry::lidar_extrinsics::load(
+      *node_, "rear_lidar_to_base", rear_default);
 
   config_.min_height =
       node_->declare_parameter<double>("min_height", config_.min_height);

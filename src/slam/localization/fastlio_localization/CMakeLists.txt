@@ -83,6 +83,7 @@ find_package(pcl_conversions REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(slam_manager REQUIRED)
+find_package(robot_geometry REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
 
 include_directories(
@@ -120,7 +121,7 @@ else()
 endif()
 ament_target_dependencies(fastlio_localization_node
   rclcpp sensor_msgs nav_msgs tf2_ros livox_ros_driver2 slam_manager_interfaces
-  slam_manager)
+  slam_manager robot_geometry)
 set_target_properties(fastlio_localization_node PROPERTIES
   INSTALL_RPATH "$ORIGIN/../lib;${bbs3d_LIBRARY_DIR}")
 

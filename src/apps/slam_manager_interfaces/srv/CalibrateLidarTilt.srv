@@ -2,3 +2,7 @@
 bool success
 float64 roll_rad
 float64 pitch_rad
+# Valid on success: LiDAR -> base, row-major. Use for Airy near pitch +/- pi/2.
+float64[9] rotation_matrix
+# Failure reason, or instructions for applying a successful result.
+string message

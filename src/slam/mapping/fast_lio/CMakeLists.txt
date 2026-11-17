@@ -64,6 +64,7 @@ find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
 find_package(slam_manager REQUIRED)
+find_package(robot_geometry REQUIRED)
 
 set(dependencies
   rclcpp
@@ -80,6 +81,7 @@ set(dependencies
   livox_ros_driver2
   slam_manager_interfaces
   slam_manager
+  robot_geometry
 )
 
 # Thirdparty libraries

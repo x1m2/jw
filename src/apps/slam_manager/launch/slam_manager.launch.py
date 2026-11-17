@@ -31,7 +31,7 @@ def generate_launch_description():
             'robot_param_file',
             default_value=os.path.join(
                 package_share, 'config', 'robots', 'P2.5_mid360s.yaml'),
-            description='Robot YAML containing the IMU topic and LiDAR-to-IMU rotation',
+            description='Robot YAML containing the LiDAR mount, IMU topic and LiDAR-to-IMU rotation',
         ),
         DeclareLaunchArgument(
             'use_sim_time',

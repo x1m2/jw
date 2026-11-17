@@ -77,6 +77,32 @@ src/
 LIBGL_ALWAYS_SOFTWARE=1 pcl_viewer globalmap.pcd --no-vbo
 ```
 
+## 使用 OTA 程序独立建图
+
+`run_mapping.sh` 默认使用源码工作空间。指定 `--ota-root` 后，直接启动 OTA
+目录中的雷达驱动、FAST-LIO 和 PGO，不依赖工作空间的 `install/setup.bash`，
+也不启动定位、导航或 slam_manager。Airy 和 MID360 均支持：
+
+```bash
+# 只检查程序和配置文件，不启动节点。
+bash src/run_mapping.sh --lidar airy --ota-root /实际/ota --check
+
+# 启动独立建图；DATA_DIR/map 保存本次地图。
+DATA_DIR=/实际/建图目录 bash src/run_mapping.sh --lidar airy --ota-root /实际/ota
+```
+
+OTA 模式默认在 `OTA_ROOT/data/slam_data/standalone_<时间>_<进程号>` 保存数据。
+机体配置为 `slam_manager/pack/content/config/p3_airy96.yaml` 或
+`p2.5_mid360s.yaml`；算法配置为 `slam/pack/content/config/mapping_*.yaml`、
+`pgo_*.yaml`。FAST-LIO 和 PGO 显式使用 `runtime_profile:=test` 自动激活。
+已有雷达或建图进程运行时会退出，请先停止对应 OTA 服务，避免重复启动。
+
+此模式不自动打开 RViz；在相同 ROS_DOMAIN_ID、DDS 环境下运行 RViz，设置
+Fixed Frame 为 `base_link`，添加 PointCloud2 话题 `/cloud_body_downsampled`。
+终端 Ctrl+C 触发地图保存，确认 `/save_done` 后调用 OTA 的
+`slam/pack/content/localization/voxelmaps_saver` 生成 BBS 数据，最后停止本次
+启动的节点。无桌面环境下不依赖弹窗或额外键盘脚本。
+
 ## 手动保存地图
 
 ```bash

@@ -24,6 +24,9 @@ slam_manager:
       # topic和extrinsic_R由后加载的机体YAML提供；静止倾角标定不需要平移。
       sample_count: 200
       timeout_sec: 5.0
+      # 静止采样质量门限：角速度RMS（rad/s）、加速度向量标准差/均值模长。
+      max_gyro_rms_rad_s: 0.05
+      max_accel_relative_std: 0.02
 
     # 导航Worker启停、暂停控制和单个目标点执行超时。
     navigation:

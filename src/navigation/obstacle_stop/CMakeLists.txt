@@ -18,6 +18,7 @@ find_package(nlohmann_json REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(slam_manager REQUIRED)
+find_package(robot_geometry REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
@@ -41,6 +42,7 @@ ament_target_dependencies(obstacle_stop_node
   rclcpp
   sensor_msgs
   slam_manager
+  robot_geometry
   std_msgs
   visualization_msgs
 )

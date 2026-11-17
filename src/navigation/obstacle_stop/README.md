@@ -43,7 +43,9 @@ lidars:
 
 P2.5的front使用`/livox/lidar`和`livox_frame`，rear只需`enabled: false`。
 `lidar_type`保留：1表示前输入为Livox CustomMsg，其它值表示PointCloud2；后输入为PointCloud2。
-雷达外参继续使用公共机型文件的`lidar_to_base_T/R`、`rear_lidar_to_base_T/R`，与其它模块共享。
+雷达外参使用公共机型文件的 `lidar_to_base`、`rear_lidar_to_base`，与建图和定位共用解析器。
+`translation` 单位为米；`rotation.type: rpy_rad` 表示弧度制 RPY，`matrix` 表示按行排列的九个矩阵元素。
+变换方向统一为 `p_base = R * p_lidar + t`。详见 [机体配置](../../config/README.md)。
 每个启用输入只订阅一次。关闭输入后，对应启用区域不能再引用它，否则初始化失败。
 不写`sources`时，前区默认front、后区默认rear，左右区默认使用当前所有启用输入。
 区域开关省略时，前/后区跟随对应雷达开关，左右区在至少一个雷达开启时默认开启。

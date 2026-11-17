@@ -12,6 +12,7 @@ find_package(nlohmann_json REQUIRED)
 find_package(navigation_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(robot_geometry REQUIRED)
 find_package(slam_manager_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -40,6 +41,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
   navigation_interfaces
   rclcpp
   rclcpp_action
+  robot_geometry
   slam_manager_interfaces
   sensor_msgs
   std_msgs
@@ -88,6 +90,6 @@ ament_export_include_directories(include)
 ament_export_dependencies(
   geometry_msgs navigation_interfaces rclcpp rclcpp_action
   slam_manager_interfaces sensor_msgs std_msgs std_srvs tf2 tf2_geometry_msgs
-  woodox_ros2_interface nlohmann_json)
+  woodox_ros2_interface nlohmann_json robot_geometry)
 
 ament_package()

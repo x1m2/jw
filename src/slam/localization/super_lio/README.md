@@ -44,7 +44,9 @@ Airy 的 `lio.sensor.lidar_type` 为 `8`（RSAIRY）。输入校验与 FAST-LIO 
 逐点偏移采用秒制的 `timestamp - 原始首点timestamp`；同步时按偏移排序，
 以最大偏移计算帧结束时间并等待 IMU 覆盖。
 `config:=...` 仍可作为配置文件参数使用。
-机器人配置提供弧度制 `lidar_to_base_R` 和米制 `lidar_to_base_T`，即雷达在 base_link 中的位姿。
+机器人配置通过 `lidar_to_base.translation`（米）和 `lidar_to_base.rotation` 提供雷达在 base_link 中的位姿。
+MID360 使用 `type: rpy_rad`（弧度制 RPY），Airy 使用 `type: matrix`（按行排列的九个元素）；两者共用建图、定位和避障的外参解析器。
+统一方向为 `p_base = R * p_lidar + t`，详见 [机体配置](../../../config/README.md)。
 `lio.extrinsic_T` 为三维平移，`lio.extrinsic_R` 为按行展开的九元素旋转矩阵，
 表示 `p_imu = R * p_lidar + t`；数值格式与 FAST-LIO 的 `extrinsic_T`、`extrinsic_R` 一致。
 未提供时采用零平移、零旋转；实际机器人应传入正确的外参文件。

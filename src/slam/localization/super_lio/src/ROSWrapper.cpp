@@ -1,3 +1,4 @@
+#include "robot_geometry/lidar_extrinsics.hpp"
 
 #include "ros/ROSWrapper.h"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
@@ -782,18 +783,7 @@ void ROSWrapper::setup_localization_interface() {
   sensor_timeout_sec_ = declare_parameter<double>("sensor_timeout_sec", 1.0);
   if (!std::isfinite(sensor_timeout_sec_) || sensor_timeout_sec_ <= 0.0)
     throw std::invalid_argument("sensor_timeout_sec must be finite and positive");
-  const auto t = declare_parameter<std::vector<double>>("lidar_to_base_T", {0., 0., 0.});
-  const auto r = declare_parameter<std::vector<double>>("lidar_to_base_R", {0., 0., 0.});
-  if (t.size() != 3 || r.size() != 3)
-    throw std::invalid_argument("lidar_to_base_T/R must contain three values");
-  for (const auto *values : {&t, &r})
-    for (double value : *values)
-      if (!std::isfinite(value)) throw std::invalid_argument("Nonfinite LiDAR/base extrinsic");
-  T_base_lidar_.topLeftCorner<3, 3>() =
-      (Eigen::AngleAxisd(r[2], Eigen::Vector3d::UnitZ()) *
-       Eigen::AngleAxisd(r[1], Eigen::Vector3d::UnitY()) *
-       Eigen::AngleAxisd(r[0], Eigen::Vector3d::UnitX())).toRotationMatrix();
-  T_base_lidar_.topRightCorner<3, 1>() = Eigen::Vector3d(t[0], t[1], t[2]);
+  T_base_lidar_ = robot_geometry::lidar_extrinsics::load(*this);
   // Keep high-rate ESKF robot output consistent with the same rigid transform.
   const Eigen::Matrix4d imu_base = g_lidar_imu.matrix().cast<double>() * T_base_lidar_.inverse();
   const BASIC::M3 imu_base_rotation = imu_base.topLeftCorner<3, 3>().cast<BASIC::scalar>();

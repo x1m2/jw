@@ -210,8 +210,7 @@ class LaserMappingNode : public rclcpp::Node {
   vector<PointVector> Nearest_Points;
   vector<double> extrinT;
   vector<double> extrinR;
-  vector<double> lidar_to_base_T;
-  vector<double> lidar_to_base_R;
+  Eigen::Matrix4d T_base_lidar_ = Eigen::Matrix4d::Identity();
   bool output_origin_initialized_ = false;
   Eigen::Matrix4d T_output_origin_inv_ = Eigen::Matrix4d::Identity();
   deque<double> time_buffer;

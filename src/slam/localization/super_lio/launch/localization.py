@@ -18,7 +18,7 @@ def generate_launch_description():
     config_file_arg = DeclareLaunchArgument('config_file', default_value=LaunchConfiguration('config'))
     config_yaml = PathJoinSubstitution([pkg_super_lio, 'config', LaunchConfiguration('config_file')])
     robot_param_arg = DeclareLaunchArgument('robot_param_file', default_value='',
-        description='Optional robot YAML providing lidar_to_base_T/R')
+        description='Optional robot YAML providing lidar_to_base.translation/rotation')
     map_path_arg = DeclareLaunchArgument('map_path', default_value='',
         description='Prior map directory; empty uses the selected YAML')
     runtime_arg = DeclareLaunchArgument('runtime_profile', default_value='test',

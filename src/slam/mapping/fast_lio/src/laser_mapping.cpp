@@ -1,3 +1,4 @@
+#include "robot_geometry/lidar_extrinsics.hpp"
 #include "laser_mapping.hpp"
 
 #include <stdexcept>
@@ -78,10 +79,6 @@ void LaserMappingNode::readParameters() {
                                           vector<double>());
   this->declare_parameter<vector<double>>("mapping.extrinsic_R",
                                           vector<double>());
-  this->declare_parameter<vector<double>>("lidar_to_base_T",
-                                          vector<double>(3, 0.0));
-  this->declare_parameter<vector<double>>("lidar_to_base_R",
-                                          vector<double>(3, 0.0));
 
   this->get_parameter_or<bool>("publish.path_en", path_en, true);
   this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -127,13 +124,7 @@ void LaserMappingNode::readParameters() {
                                          vector<double>());
   this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR,
                                          vector<double>());
-  this->get_parameter_or<vector<double>>("lidar_to_base_T", lidar_to_base_T,
-                                         vector<double>(3, 0.0));
-  this->get_parameter_or<vector<double>>("lidar_to_base_R", lidar_to_base_R,
-                                         vector<double>(3, 0.0));
-
-  RCLCPP_INFO(this->get_logger(), "lidar_to_base_R: [%.6f, %.6f, %.6f]",
-              lidar_to_base_R[0], lidar_to_base_R[1], lidar_to_base_R[2]);
+  T_base_lidar_ = robot_geometry::lidar_extrinsics::load(*this);
 
   RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 }
@@ -1120,23 +1111,14 @@ void LaserMappingNode::h_share_model(
 }
 
 Eigen::Matrix4d LaserMappingNode::get_imu_to_base_transform() {
-  // Common mount config: LiDAR pose in base_link, ^B T_L.
-  Eigen::Matrix4d T_base_lidar = Eigen::Matrix4d::Identity();
-  T_base_lidar.block<3, 3>(0, 0) =
-      (Eigen::AngleAxisd(lidar_to_base_R[2], Eigen::Vector3d::UnitZ()) *
-       Eigen::AngleAxisd(lidar_to_base_R[1], Eigen::Vector3d::UnitY()) *
-       Eigen::AngleAxisd(lidar_to_base_R[0], Eigen::Vector3d::UnitX()))
-          .toRotationMatrix();
-  T_base_lidar.block<3, 1>(0, 3) = Eigen::Vector3d(
-      lidar_to_base_T[0], lidar_to_base_T[1], lidar_to_base_T[2]);
-
+  // T_base_lidar_ is the fixed LiDAR mount pose in base_link, ^B T_L.
   // FAST-LIO extrinsic: LiDAR pose in IMU, ^I T_L.
   Eigen::Matrix4d T_imu_lidar = Eigen::Matrix4d::Identity();
   T_imu_lidar.block<3, 3>(0, 0) = state_point.offset_R_L_I.toRotationMatrix();
   T_imu_lidar.block<3, 1>(0, 3) = state_point.offset_T_L_I;
 
   // Convert points expressed in imu_link into base_link.
-  return T_base_lidar * T_imu_lidar.inverse();
+  return T_base_lidar_ * T_imu_lidar.inverse();
 }
 
 Eigen::Matrix4d LaserMappingNode::get_odom_to_base_transform() {

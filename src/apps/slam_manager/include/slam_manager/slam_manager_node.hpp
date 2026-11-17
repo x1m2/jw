@@ -235,7 +235,12 @@ class SlamManagerNode : public rclcpp::Node {
   bool imu_calibration_config_valid_{false};
   std::size_t imu_calibration_sample_count_{200U};
   double imu_calibration_timeout_sec_{5.0};
+  double imu_calibration_max_gyro_rms_{0.05};
+  double imu_calibration_max_accel_relative_std_{0.02};
   Eigen::Matrix3d imu_from_lidar_rotation_{Eigen::Matrix3d::Identity()};
+  Eigen::Matrix3d calibration_base_from_lidar_{Eigen::Matrix3d::Identity()};
+  std::string calibration_rotation_type_;
+  double calibration_yaw_rad_{0.0};
   bool enable_set_mode_{true};
   double body_cloud_publish_hz_{5.0};
   double last_body_cloud_publish_time_{-1.0};

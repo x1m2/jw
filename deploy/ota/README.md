@@ -49,6 +49,21 @@ bash deploy/ota/start_node_airy.sh --localization superlio
 `localization.worker_service`。定位 Worker 以 `platform` 模式启动，等待 Manager 激活。
 建图仍使用 FAST-LIO 和 PGO。
 
+只需独立建图或检查车体系点云时，可在源码仓库根目录运行：
+
+```bash
+bash src/run_mapping.sh --lidar airy --ota-root /实际/ota --check
+DATA_DIR=/实际/建图目录 bash src/run_mapping.sh --lidar airy --ota-root /实际/ota
+```
+
+此模式直接执行 OTA 驱动、FAST-LIO 和 PGO，并以 `runtime_profile:=test`
+自动激活，不需要 `slam_manager` 或源码工作空间的 `install/setup.bash`。
+脚本也可单独复制到板端运行。MID360 使用 `--lidar mid360`。
+Airy 加载 OTA 中的 `mapping_airy96.yaml` 和小写 `p3_airy96.yaml`；配置路径与
+本页的完整 OTA 启动脚本一致。RViz 使用 `base_link` 和 `/cloud_body_downsampled`。
+先停止已有雷达/建图服务；退出时 Ctrl+C 保存地图并生成 BBS 数据，默认保存到
+`OTA_ROOT/data/slam_data/standalone_<时间>_<进程号>`，可通过 `DATA_DIR` 指定。
+
 两种定位算法的 OTA 文件分开存放，避免同名 YAML 相互覆盖：
 
 | 算法 | `slam/pack/content/localization/` 下的程序 | `slam/pack/content/config/` 下的配置 |
