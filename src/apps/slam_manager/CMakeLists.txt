@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(livox_ros_driver2 REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(navigation_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -29,6 +30,7 @@ add_library(${PROJECT_NAME}_core STATIC
   src/navigation_task.cpp
   src/uwb_follow.cpp
   src/slam_manager_node.cpp
+  src/lidar_calibration.cpp
   src/worker_runtime.cpp
 )
 
@@ -38,6 +40,7 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
 )
 ament_target_dependencies(${PROJECT_NAME}_core
   geometry_msgs
+  livox_ros_driver2
   navigation_interfaces
   rclcpp
   rclcpp_action
@@ -90,6 +93,6 @@ ament_export_include_directories(include)
 ament_export_dependencies(
   geometry_msgs navigation_interfaces rclcpp rclcpp_action
   slam_manager_interfaces sensor_msgs std_msgs std_srvs tf2 tf2_geometry_msgs
-  woodox_ros2_interface nlohmann_json robot_geometry)
+  woodox_ros2_interface nlohmann_json robot_geometry livox_ros_driver2)
 
 ament_package()

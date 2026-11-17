@@ -318,7 +318,7 @@ MID360 和 Airy。标定前须用水平仪将底盘基准面调平，并让机�
 
 节点读取机体 YAML 的 `lidar_to_base` 作为朝向参考（MID360 为 `rpy_rad`，
 Airy 为 `matrix`）。收到空请求后临时订阅 `imu_calibration.topic`，默认采集
-200 个有效样本；完成或超过 5 秒后销毁订阅。
+2000 个有效样本；完成或超过 20 秒后销毁订阅。
 `imu_calibration.extrinsic_R` 表示 LiDAR → IMU 旋转，先用其转置把平均加速度
 转到雷达坐标系，再用当前机体旋转 `R0` 转到 base。通过最小旋转 `delta_R`
 将重力对齐 base 的 -Z，结果为 `R_new = delta_R * R0`，直接在矩阵上计算，
@@ -331,7 +331,7 @@ Airy 为 `matrix`）。收到空请求后临时订阅 `imu_calibration.topic`，
 
 MID360 使用返回的 roll、pitch（弧度）替换 `rpy_rad` 的前两项，yaw 沿用原值；
 Airy 直接使用 `rotation_matrix`，接近 pitch = ±90° 时不要通过返回的 RPY 重建矩阵。
-日志打印可复制的矩阵 YAML，MID360 另打印保留原 yaw 的 RPY YAML；小数保留 6 位。
+日志按机体配置类型打印可复制的矩阵或保留原 yaw 的 RPY YAML；小数保留 6 位。
 写回相应机体 YAML 后重启 Manager 和使用该文件的建图、定位、避障节点。
 仅调用服务不会改变它们当前的外参，重复采样仍以 Manager 启动时的配置为参考。
 
@@ -340,6 +340,67 @@ Airy 直接使用 `rotation_matrix`，接近 pitch = ±90° 时不要通过返�
 后者为加速度向量标准差与平均加速度模长之比，兼容加速度使用 m/s² 或 g 的输入。
 超出门限返回失败。这些检查不能判断底盘是否调平，也不能排除匀加速，
 仍须人为保证静止。`sample_count` 至少为 2，超时和门限须为正有限数。
+
+标定实现集中在 `src/lidar_calibration.cpp`，MID360 和 Airy 共用以下流程：
+先做 IMU 初标定，再由 `imu_calibration.ground_fitting.enabled` 决定是否继续
+拟合前雷达地面。默认 `true`，MID360 和 Airy 均启用地面精修；显式设为
+`false` 可使用纯 IMU 模式。配置示例：
+
+```yaml
+imu_calibration:
+  ground_fitting:
+    enabled: true
+    x_min: 2.0
+    x_max: 5.0
+    y_min: -1.5
+    y_max: 1.5
+    base_height_m: 0.5       # base_link原点离地高度，单位米，填正数，按实测修改
+    height_tolerance_m: 0.4  # 预期地面上下各允许0.4米的取点偏差
+```
+
+例如 `base_height_m: 0.5`、`height_tolerance_m: 0.4`，表示预期地面在
+base_link 的 Z=-0.5 m，仅选取 Z 在 [-0.9, -0.1] m 内的点。
+该容差用于采样选区，不是拟合精度门限。旧配置迁移时，
+`base_height_m = -ground_z`，`height_tolerance_m = z_half_width`，并删除旧键。
+
+点云话题和坐标系读取机体 YAML 的 `lidars.front.topic/frame`；
+`imu_calibration.pointcloud_type` 支持 `pointcloud2`（Airy）和 `livox`
+（MID360 CustomMsg），如果 MID360 驱动输出 PointCloud2，应改成 `pointcloud2`。
+目前统一只处理前雷达，不订阅后雷达。接收的是原始雷达坐标系点云，不能换成
+已转换到 base 或地图坐标系的话题。两种输入共享同一个地面计算实现，不新增 PCL 依赖。
+
+在 IMU 初值转换后的 base 坐标中截取选区，体素降采样后用 RANSAC 找地面，
+再用最小二乘精细拟合朝上的法向量 `n`。求将 `n` 对齐 +Z 的最小旋转
+`delta_R`，得到 `R_final = delta_R * R_imu`。平移保持不变，yaw 不独立标定；
+MID360 输出时保留配置中的 Euler yaw，返回矩阵与所打印的 RPY 一致。
+
+默认采集 5 秒用于拟合，再采集两段各 1.5 秒的独立点云用于验收。
+每段都检查 IMU 波动和角速度，点云要求正确 frame、递增非零时间戳、
+足够帧数与空间覆盖。RANSAC 距离阈值 3 cm；至少 200 个地面内点，
+内点比例至少 60%，纵向跨度至少 1.5 m、横向至少 1 m，且覆盖包围盒 3×3
+划分中的至少 6 格。修正不得超过 5°，三段平面 RMS 不超过 2 cm，
+验证平面修正后倾角不超过 0.3°，两段验证法向量差异不超过 0.2°。
+日常 YAML 仅保留开关、地面高度和取点范围；采样、拟合与验收参数使用
+Airy/MID360 共用的代码默认值，无需按雷达型号分别设置。特殊工位若确需调整，
+仍可通过同名 ROS 参数覆盖；这些默认值并不保证适合所有地面和噪声条件。
+选区应能满足上述纵横跨度要求。覆盖格数固定为 6，体素数量上限固定为 50000。
+开启地面拟合后，任何阶段失败都返回 `success=false` 和原因，**不会回退成纯 IMU 成功**。
+响应的 `rotation_matrix` 为最终结果，`message` 同时给出修正量与验收指标。
+
+RViz 设置 Fixed Frame=`base_link`，添加以下 PointCloud2：
+
+- `/robot/calibration/ground_roi`：参与拟合的选区，仍使用 IMU 初值。
+- `/robot/calibration/ground_corrected`：独立验证点云，使用响应中最终输出的旋转矩阵，
+  MID360 同样在保留配置 yaw 后发布，与写入 YAML 后的变换一致。
+
+可视化数据 `/robot/keyframe_cloud`、`/robot/current_pose`、`/robot/cloud_body`
+及两路标定调试点云均仅在有订阅者时发布；内部导航位姿缓存始终更新。
+标定调试点云使用 `Volatile`，不缓存历史帧；请先打开 RViz 并确认订阅建立，
+再调用标定。RViz 的 Durability 设置为 `Volatile`。
+有订阅时每次请求先清空调试点云，验收成功才发布修正结果。
+只有片区、平整地面及底盘基准面都符合工位条件时，地面法向才能作为安装倾角参考。
+在坡面或车身倾斜时，本方法会把它们混入安装外参，不能用“拟合成功”替代工位调平。
+地面模式总耗时还需加上点云采集和计算，客户端超时应预留至少 40 秒。
 
 机体 YAML 同时提供 `lidar_to_base`、`imu_calibration.topic` 和
 `imu_calibration.extrinsic_R`。P2.5、S01 使用 `/livox/imu` 和单位 IMU 外参；

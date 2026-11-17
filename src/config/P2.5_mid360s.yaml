@@ -24,6 +24,7 @@
           value: [0.0, 0.363, 0.0]
 
       imu_calibration:
+        pointcloud_type: livox
         topic: "/livox/imu"
         # LiDAR到IMU的旋转；静止倾角标定不需要平移。
         extrinsic_R: [1.0, 0.0, 0.0,

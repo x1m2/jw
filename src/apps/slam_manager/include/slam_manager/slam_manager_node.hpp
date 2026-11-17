@@ -170,6 +170,10 @@ class SlamManagerNode : public rclcpp::Node {
   void handleNavigateToPoseAccepted(
       const std::shared_ptr<NavigateToPoseGoalHandle> goal_handle);
 
+  void configureLidarCalibration();
+  bool refineLidarTiltWithGround(
+      Eigen::Matrix3d &rotation, std::string &message,
+      std::vector<Eigen::Vector3d> &validation_points_lidar);
   void calibrateLidarTiltCallback(
       const CalibrateLidarTilt::Request::SharedPtr request,
       CalibrateLidarTilt::Response::SharedPtr response);
@@ -233,14 +237,33 @@ class SlamManagerNode : public rclcpp::Node {
   double localization_stop_timeout_sec_{10.0};
   std::string imu_calibration_topic_;
   bool imu_calibration_config_valid_{false};
-  std::size_t imu_calibration_sample_count_{200U};
-  double imu_calibration_timeout_sec_{5.0};
+  std::size_t imu_calibration_sample_count_{2000U};
+  double imu_calibration_timeout_sec_{20.0};
   double imu_calibration_max_gyro_rms_{0.05};
   double imu_calibration_max_accel_relative_std_{0.02};
   Eigen::Matrix3d imu_from_lidar_rotation_{Eigen::Matrix3d::Identity()};
   Eigen::Matrix3d calibration_base_from_lidar_{Eigen::Matrix3d::Identity()};
   std::string calibration_rotation_type_;
   double calibration_yaw_rad_{0.0};
+  Eigen::Vector3d calibration_translation_{Eigen::Vector3d::Zero()};
+  struct GroundCalibrationConfig {
+    bool enabled{true};
+    std::string topic;
+    std::string frame;
+    std::string cloud_type{"pointcloud2"};
+    double collection_sec{5.0};
+    double validation_sec{3.0};
+    double x_min{2.0}, x_max{5.0}, y_min{-1.5}, y_max{1.5};
+    double base_height_m{0.5}, height_tolerance_m{0.4};
+    double voxel_size{0.05}, distance_threshold{0.03};
+    double min_inlier_ratio{0.6}, min_x_span{1.5}, min_y_span{1.0};
+    double max_correction_deg{5.0}, max_residual_deg{0.3}, max_rmse{0.02};
+    double max_repeat_deg{0.2};
+    int min_points{200}, min_frames{5}, ransac_iterations{500};
+  } ground_calibration_;
+  bool ground_calibration_config_valid_{true};
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr calibration_roi_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr calibration_corrected_pub_;
   bool enable_set_mode_{true};
   double body_cloud_publish_hz_{5.0};
   double last_body_cloud_publish_time_{-1.0};

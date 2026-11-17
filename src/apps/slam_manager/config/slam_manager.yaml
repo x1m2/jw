@@ -27,6 +27,18 @@ slam_manager:
       # 静止采样质量门限：角速度RMS（rad/s）、加速度向量标准差/均值模长。
       max_gyro_rms_rad_s: 0.05
       max_accel_relative_std: 0.02
+      # IMU初标定后默认继续拟合前雷达地面。
+      ground_fitting:
+        enabled: true
+        # 地面选区需有足够覆盖：纵向至少1.5 m、横向至少1.0 m。
+        x_min: 2.0
+        x_max: 5.0
+        y_min: -1.5
+        y_max: 1.5
+        # base_link原点到地面的垂直距离，单位米，填正数。
+        base_height_m: 0.5
+        # 地面取点允许的上下偏差，单位米。
+        height_tolerance_m: 0.4
 
     # 导航Worker启停、暂停控制和单个目标点执行超时。
     navigation:

@@ -9,13 +9,11 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
-#include <sensor_msgs/msg/imu.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 #include "slam_manager/pose_utils.hpp"
-#include "robot_geometry/lidar_extrinsics.hpp"
 
 namespace slam_manager {
 
@@ -93,73 +91,7 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       declare_parameter<double>("localization.tracking_pose_timeout_sec", 2.0);
   localization_stop_timeout_sec_ =
       declare_parameter<double>("localization.stop_timeout_sec", 10.0);
-  imu_calibration_topic_ =
-      declare_parameter<std::string>("imu_calibration.topic", "");
-  const auto configured_imu_calibration_sample_count =
-      declare_parameter<int64_t>("imu_calibration.sample_count", 200);
-  imu_calibration_timeout_sec_ =
-      declare_parameter<double>("imu_calibration.timeout_sec", 5.0);
-  imu_calibration_max_gyro_rms_ =
-      declare_parameter<double>("imu_calibration.max_gyro_rms_rad_s", 0.05);
-  imu_calibration_max_accel_relative_std_ =
-      declare_parameter<double>("imu_calibration.max_accel_relative_std", 0.02);
-  bool mount_valid = false;
-  try {
-    calibration_base_from_lidar_ =
-        robot_geometry::lidar_extrinsics::load(*this).topLeftCorner<3, 3>();
-    calibration_rotation_type_ =
-        get_parameter("lidar_to_base.rotation.type").as_string();
-    if (calibration_rotation_type_ == "rpy_rad") {
-      calibration_yaw_rad_ =
-          get_parameter("lidar_to_base.rotation.value").as_double_array()[2];
-    }
-    mount_valid = !calibration_rotation_type_.empty();
-  } catch (const std::exception &error) {
-    RCLCPP_ERROR(get_logger(), "Invalid calibration mount: %s", error.what());
-  }
-  const auto imu_calibration_extrinsic_rotation =
-      declare_parameter<std::vector<double>>(
-          "imu_calibration.extrinsic_R",
-          std::vector<double>{});
-  if (mount_valid && !imu_calibration_topic_.empty() &&
-      configured_imu_calibration_sample_count >= 2 &&
-      std::isfinite(imu_calibration_timeout_sec_) &&
-      imu_calibration_timeout_sec_ > 0.0 &&
-      std::isfinite(imu_calibration_max_gyro_rms_) &&
-      imu_calibration_max_gyro_rms_ > 0.0 &&
-      std::isfinite(imu_calibration_max_accel_relative_std_) &&
-      imu_calibration_max_accel_relative_std_ > 0.0 &&
-      imu_calibration_extrinsic_rotation.size() == 9U) {
-    imu_from_lidar_rotation_ =
-        Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(
-            imu_calibration_extrinsic_rotation.data());
-    imu_calibration_config_valid_ =
-        imu_from_lidar_rotation_.allFinite() &&
-        (imu_from_lidar_rotation_.transpose() * imu_from_lidar_rotation_)
-            .isApprox(Eigen::Matrix3d::Identity(), 1e-3) &&
-        std::abs(imu_from_lidar_rotation_.determinant() - 1.0) < 1e-3;
-  }
-  if (imu_calibration_config_valid_) {
-    imu_calibration_sample_count_ =
-        static_cast<std::size_t>(configured_imu_calibration_sample_count);
-    RCLCPP_INFO(get_logger(),
-                "LiDAR tilt calibration configured: topic=%s, samples=%zu, "
-                "timeout=%.3fs, extrinsic_R=[%.8f, %.8f, %.8f; "
-                "%.8f, %.8f, %.8f; %.8f, %.8f, %.8f]",
-                imu_calibration_topic_.c_str(), imu_calibration_sample_count_,
-                imu_calibration_timeout_sec_,
-                imu_from_lidar_rotation_(0, 0), imu_from_lidar_rotation_(0, 1),
-                imu_from_lidar_rotation_(0, 2), imu_from_lidar_rotation_(1, 0),
-                imu_from_lidar_rotation_(1, 1), imu_from_lidar_rotation_(1, 2),
-                imu_from_lidar_rotation_(2, 0), imu_from_lidar_rotation_(2, 1),
-                imu_from_lidar_rotation_(2, 2));
-  } else {
-    RCLCPP_ERROR(get_logger(),
-                 "LiDAR tilt calibration disabled: load a robot YAML with a "
-                 "nonempty imu_calibration.topic and a valid 3x3 imu_calibration.extrinsic_R; "
-                 "a valid lidar_to_base mount is required; sample_count must be >= 2, "
-                 "timeout and motion thresholds must be positive and finite");
-  }
+  configureLidarCalibration();
   body_cloud_publish_hz_ =
       declare_parameter<double>("publish.body_cloud_hz", 5.0);
 
@@ -419,149 +351,6 @@ SlamManagerNode::~SlamManagerNode() {
   std::lock_guard<std::mutex> lock(localization_action_thread_mutex_);
   if (localization_action_thread_.joinable())
     localization_action_thread_.join();
-}
-
-void SlamManagerNode::calibrateLidarTiltCallback(
-    const CalibrateLidarTilt::Request::SharedPtr,
-    CalibrateLidarTilt::Response::SharedPtr response) {
-  if (!imu_calibration_config_valid_) {
-    response->success = false;
-    response->message = "Invalid IMU calibration or lidar_to_base configuration";
-    RCLCPP_ERROR(get_logger(),
-                 "LiDAR tilt calibration rejected: invalid configuration");
-    return;
-  }
-  struct CalibrationData {
-    std::mutex mutex;
-    std::condition_variable cv;
-    Eigen::Vector3d acceleration_sum{Eigen::Vector3d::Zero()};
-    double acceleration_squared_norm_sum{0.0};
-    double gyro_squared_norm_sum{0.0};
-    std::size_t sample_count{0U};
-  };
-  const auto data = std::make_shared<CalibrationData>();
-
-  rclcpp::SubscriptionOptions options;
-  options.callback_group = imu_calibration_callback_group_;
-  auto imu_subscription = create_subscription<sensor_msgs::msg::Imu>(
-      imu_calibration_topic_, rclcpp::SensorDataQoS(),
-      [data, target_samples = imu_calibration_sample_count_](
-          const sensor_msgs::msg::Imu::SharedPtr message) {
-        const Eigen::Vector3d acceleration(message->linear_acceleration.x,
-                                           message->linear_acceleration.y,
-                                           message->linear_acceleration.z);
-        const Eigen::Vector3d gyro(message->angular_velocity.x,
-                                   message->angular_velocity.y,
-                                   message->angular_velocity.z);
-        if (!acceleration.allFinite() || !gyro.allFinite()) return;
-
-        std::lock_guard<std::mutex> lock(data->mutex);
-        if (data->sample_count >= target_samples) return;
-        data->acceleration_sum += acceleration;
-        data->acceleration_squared_norm_sum += acceleration.squaredNorm();
-        data->gyro_squared_norm_sum += gyro.squaredNorm();
-        ++data->sample_count;
-        if (data->sample_count >= target_samples) data->cv.notify_one();
-      },
-      options);
-
-  RCLCPP_INFO(get_logger(),
-              "LiDAR tilt calibration started: topic=%s, samples=%zu",
-              imu_calibration_topic_.c_str(), imu_calibration_sample_count_);
-
-  std::unique_lock<std::mutex> lock(data->mutex);
-  const bool completed = data->cv.wait_for(
-      lock, std::chrono::duration<double>(imu_calibration_timeout_sec_),
-      [data, target_samples = imu_calibration_sample_count_]() {
-        return data->sample_count >= target_samples;
-      });
-  const Eigen::Vector3d acceleration_sum = data->acceleration_sum;
-  const std::size_t collected_samples = data->sample_count;
-  const double acceleration_squared_norm_sum = data->acceleration_squared_norm_sum;
-  const double gyro_squared_norm_sum = data->gyro_squared_norm_sum;
-  lock.unlock();
-  imu_subscription.reset();
-
-  if (!completed || collected_samples < imu_calibration_sample_count_) {
-    response->success = false;
-    response->message = "IMU sampling timed out; check topic and IMU data";
-    RCLCPP_WARN(get_logger(),
-                "LiDAR tilt calibration timed out after %zu samples",
-                collected_samples);
-    return;
-  }
-
-  const Eigen::Vector3d mean_acc_imu =
-      acceleration_sum / static_cast<double>(collected_samples);
-  const Eigen::Vector3d mean_acc_lidar =
-      imu_from_lidar_rotation_.transpose() * mean_acc_imu;
-  if (!mean_acc_lidar.allFinite() || mean_acc_lidar.norm() <= 1e-3) {
-    response->success = false;
-    response->message = "Invalid mean IMU acceleration";
-    RCLCPP_ERROR(get_logger(),
-                 "LiDAR tilt calibration failed: invalid mean acceleration");
-    return;
-  }
-
-  const double accel_variance = acceleration_squared_norm_sum / collected_samples -
-                                mean_acc_imu.squaredNorm();
-  const double accel_relative_std =
-      std::sqrt(std::max(0.0, accel_variance)) / mean_acc_imu.norm();
-  const double gyro_rms = std::sqrt(gyro_squared_norm_sum / collected_samples);
-  if (!std::isfinite(accel_variance) || !std::isfinite(accel_relative_std) ||
-      !std::isfinite(gyro_rms) ||
-      accel_relative_std > imu_calibration_max_accel_relative_std_ ||
-      gyro_rms > imu_calibration_max_gyro_rms_) {
-    response->success = false;
-    response->message = "IMU motion/noise too high; keep the leveled robot stationary";
-    RCLCPP_WARN(get_logger(), "%s: accel_relative_std=%.6f, gyro_rms=%.6f rad/s",
-                response->message.c_str(), accel_relative_std, gyro_rms);
-    return;
-  }
-
-  Eigen::Matrix3d rotation = robot_geometry::lidar_extrinsics::levelRotation(
-      calibration_base_from_lidar_, mean_acc_lidar);
-  response->roll_rad = std::atan2(rotation(2, 1), rotation(2, 2));
-  response->pitch_rad =
-      std::atan2(-rotation(2, 0), std::hypot(rotation(0, 0), rotation(1, 0)));
-  if (calibration_rotation_type_ == "rpy_rad") {
-    // Match the MID360 YAML output exactly: gravity fixes tilt, not Euler yaw.
-    rotation = robot_geometry::lidar_extrinsics::decode(
-        {0.0, 0.0, 0.0}, "rpy_rad",
-        {response->roll_rad, response->pitch_rad, calibration_yaw_rad_})
-                   .topLeftCorner<3, 3>();
-  }
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 3; ++col) {
-      response->rotation_matrix[row * 3 + col] = rotation(row, col);
-    }
-  }
-  response->success = true;
-  response->message =
-      "Tilt calibrated using the configured heading reference; yaw and translation "
-      "are not calibrated. Copy the result to the robot YAML and restart workers. "
-      "For matrix mounts use rotation_matrix; for rpy_rad use roll_rad/pitch_rad "
-      "and retain the configured yaw. The robot base must have been level.";
-  RCLCPP_INFO(get_logger(),
-              "LiDAR tilt calibration succeeded: samples=%zu, roll=%.6f, "
-              "pitch=%.6f",
-              collected_samples, response->roll_rad, response->pitch_rad);
-  if (calibration_rotation_type_ == "rpy_rad") {
-    RCLCPP_INFO(get_logger(),
-                "MID360 lidar_to_base.rotation:\n"
-                "  type: rpy_rad\n  value: [%.6f, %.6f, %.6f]",
-                response->roll_rad, response->pitch_rad, calibration_yaw_rad_);
-  } else {
-    RCLCPP_INFO(get_logger(),
-                "lidar_to_base.rotation (row-major, copy to robot YAML):\n"
-                "  type: matrix\n"
-                "  value: [%.6f, %.6f, %.6f,\n"
-                "          %.6f, %.6f, %.6f,\n"
-                "          %.6f, %.6f, %.6f]",
-                rotation(0, 0), rotation(0, 1), rotation(0, 2),
-                rotation(1, 0), rotation(1, 1), rotation(1, 2),
-                rotation(2, 0), rotation(2, 1), rotation(2, 2));
-  }
 }
 
 uint64_t SlamManagerNode::beginLifecycleCommand(const char *command_name) {
@@ -1793,7 +1582,10 @@ void SlamManagerNode::keyframeCloudCallback(
   // 协议2.12：PGO负责关键帧选择、ID和map坐标变换，Runtime只做转发。
   // PGO仅在新增关键帧时发布一次；回环后不重发旧关键帧。
   // APP实时拼接结果用于建图预览，最终地图以保存后的globalmap.pcd为准。
-  keyframe_cloud_pub_->publish(*message);
+  if (keyframe_cloud_pub_->get_subscription_count() > 0U ||
+      keyframe_cloud_pub_->get_intra_process_subscription_count() > 0U) {
+    keyframe_cloud_pub_->publish(*message);
+  }
 }
 
 void SlamManagerNode::deleteMapCallback(
@@ -2302,6 +2094,10 @@ void SlamManagerNode::publishCurrentPose(
     current_pose_ = pose;
     has_current_pose_ = true;
   }
+  if (current_pose_pub_->get_subscription_count() == 0U &&
+      current_pose_pub_->get_intra_process_subscription_count() == 0U) {
+    return;
+  }
   RobotPose robot_pose;
   robot_pose.map_id =
       !active_map_id_.empty() ? active_map_id_ : selected_map_id_;
@@ -2316,6 +2112,10 @@ void SlamManagerNode::publishCurrentPose(
 void SlamManagerNode::bodyCloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr message) {
   // 协议2.11：按APP配置频率转发FAST-LIO的降采样机体点云。
+  if (body_cloud_pub_->get_subscription_count() == 0U &&
+      body_cloud_pub_->get_intra_process_subscription_count() == 0U) {
+    return;
+  }
   const double message_time = rclcpp::Time(message->header.stamp).seconds();
   const double publish_period = 1.0 / body_cloud_publish_hz_;
   const bool timestamp_reset = last_body_cloud_publish_time_ > message_time;
