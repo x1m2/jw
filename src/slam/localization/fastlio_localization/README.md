@@ -56,7 +56,7 @@ the sensor that recorded the bag.
 定位节点保持原来的名称、Manager/Worker 控制、重定位成功后的缓存清理、
 重力对齐及 NDT/GICP 精配准流程。只替换 BBS 粗定位中的候选搜索/评分后端。
 
-默认 `ENABLE_OPENCL_BBS=ON`，链接由 `src/depd/3d_bbs/build_opencl.sh`
+默认 `ENABLE_OPENCL_BBS=ON`，链接由 `src/third_party/3d_bbs/build_opencl.sh`
 预先构建并安装的配套 CPU/OpenCL 库；定位包本身不再生成 BBS 库。
 CPU 板子先运行 `build_cpu.sh`，然后传 `-DENABLE_OPENCL_BBS=OFF` 编译定位。
 默认库安装目录是工作区 `install/bbs3d`，自定义目录使用 `-DBBS3D_ROOT=/安装目录`。
@@ -87,7 +87,7 @@ bbs3d_opencl_verify: false           # 对比验证时逐候选核对 CPU/GPU �
 构建示例（在已加载 ROS 和本工作区依赖的终端）：
 
 ```bash
-./src/depd/3d_bbs/build_opencl.sh
+./src/third_party/3d_bbs/build_opencl.sh
 colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=ON
 ```
 

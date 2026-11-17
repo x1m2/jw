@@ -220,7 +220,7 @@ RViz默认开启完整base_link点云（前黄色、后青色），裁剪彩色�
 
 ## IMU倾斜期间屏蔽减速
 
-stop直接订阅`woodox_imu_bridge`发布的`/imu/data`，进程内调用`src/depd/imu_stair_detector`公共库，不启动额外检测节点，也不依赖`imu_tools`。bridge应使用其默认参数文件（`orientation_format: wxyz`），提供有效设备姿态；裸运行bridge时其代码默认禁用姿态。
+stop直接订阅`woodox_imu_bridge`发布的`/imu/data`，进程内调用`src/third_party/imu_stair_detector`公共库，不启动额外检测节点，也不依赖`imu_tools`。bridge应使用其默认参数文件（`orientation_format: wxyz`），提供有效设备姿态；裸运行bridge时其代码默认禁用姿态。
 
 两个机型配置均设置`imu_stairs.enabled: true`。使用有效车体pitch与固定平地基准的绝对偏差，默认持续超过/等于14°达0.15秒进入，持续低于/等于10°达0.40秒退出；滤波时间常数为0.15秒。默认阈值和时间需要按实际姿态噪声、上下楼动作验证。坡道也可能触发；该算法不能提前识别第一阶。
 

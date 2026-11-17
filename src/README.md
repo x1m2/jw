@@ -8,8 +8,8 @@ ROS 2 机器人建图、定位、导航和任务控制工作空间。
 
 ```bash
 # CPU 板子
-./src/depd/3d_bbs/build_cpu.sh
-# OpenCL 板子改用：./src/depd/3d_bbs/build_opencl.sh
+./src/third_party/3d_bbs/build_cpu.sh
+# OpenCL 板子改用：./src/third_party/3d_bbs/build_opencl.sh
 ```
 
 默认安装到 `install/bbs3d`。后续编译定位包只链接这份库；CPU 板子须在
@@ -59,7 +59,7 @@ source install/setup.bash
 src/
 ├── apps/          # SlamManager、接口和客户端通信
 ├── config/        # 机器人公共配置
-├── depd/          # Nano-GICP、PatchWork++、Quatro 等依赖库
+├── third_party/          # Nano-GICP、PatchWork++、Quatro 等依赖库
 ├── drivers/       # Livox 和 UWB 驱动
 ├── navigation/    # 全局规划、局部规划和自主跟随
 ├── scripts/       # 辅助脚本

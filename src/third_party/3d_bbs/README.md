@@ -85,11 +85,11 @@ For more information, you can check [docker_start.md](./docker/docker_start.md)
 
 ```bash
 # CPU 板子：只生成 CPU 库和地图转换工具，不依赖 OpenCL。
-./src/depd/3d_bbs/build_cpu.sh
+./src/third_party/3d_bbs/build_cpu.sh
 colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=OFF
 
 # OpenCL 板子：生成配套的 CPU/OpenCL 库和地图转换工具。
-./src/depd/3d_bbs/build_opencl.sh
+./src/third_party/3d_bbs/build_opencl.sh
 colcon build --packages-select fastlio_localization --cmake-args -DENABLE_OPENCL_BBS=ON
 
 ./install/bbs3d/bin/voxelmaps_saver /path/to/pcd_directory 1.0 6

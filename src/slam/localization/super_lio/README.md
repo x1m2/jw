@@ -1,20 +1,20 @@
 # Super-LIO 重定位与纯定位
 
 前端保留 Super-LIO 的 ESKF 和 OctVoxMap，只匹配已有地图，不插入新地图点，
-不执行建图、回环或图优化。基础库位于 `src/depd/basic`。
+不执行建图、回环或图优化。基础库位于 `src/third_party/basic`。
 
 ## BBS3D 后端与编译
 
-与 `fastlio_localization` 共用 `src/depd/3d_bbs` 安装的 CPU/OpenCL 库，
+与 `fastlio_localization` 共用 `src/third_party/3d_bbs` 安装的 CPU/OpenCL 库，
 不再内置另一套 CPU/CUDA 实现。
 
 ```bash
 # 仅 CPU
-bash src/depd/3d_bbs/build_cpu.sh
+bash src/third_party/3d_bbs/build_cpu.sh
 colcon build --packages-up-to super_lio --cmake-args -DENABLE_OPENCL_BBS=OFF
 
 # OpenCL（需要对应的开发环境及运行设备）
-bash src/depd/3d_bbs/build_opencl.sh
+bash src/third_party/3d_bbs/build_opencl.sh
 colcon build --packages-up-to super_lio --cmake-args -DENABLE_OPENCL_BBS=ON
 source install/setup.bash
 ```

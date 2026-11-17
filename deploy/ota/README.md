@@ -11,8 +11,8 @@
 同一会话的自动重试不重复占用记录；兼容已有的单行纯路径格式。
 这里只限制路径记录条数，历史日志目录不会自动删除。
 
-BBS 库统一由 `3d_bbs` 构建：CPU 板先运行 `./src/depd/3d_bbs/build_cpu.sh`，
-OpenCL 板先运行 `./src/depd/3d_bbs/build_opencl.sh`。定位包仅链接已安装的库，
+BBS 库统一由 `3d_bbs` 构建：CPU 板先运行 `./src/third_party/3d_bbs/build_cpu.sh`，
+OpenCL 板先运行 `./src/third_party/3d_bbs/build_opencl.sh`。定位包仅链接已安装的库，
 分别使用 `-DENABLE_OPENCL_BBS=OFF/ON` 编译。
 更新脚本默认从 `install/bbs3d/lib/` 获取 BBS 库，从
 `install/bbs3d/bin/voxelmaps_saver` 获取地图转换工具；自定义前缀通过
