@@ -100,7 +100,7 @@ fi
 case "${LIDAR_TYPE}" in
     airy)
         FASTLIO_CONFIG="mapping_airy96.yaml"
-        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/P3_airy96.yaml"
+        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/P3_airy96/P3_airy96.yaml"
         PGO_CONFIG="pgo_airy96.yaml"
         # Packet 解码为点云；Airy 的 IMU 已作为独立话题录入 bag，
         # rslidar_sdk 从 packet 回放时不会重新发布这一路 IMU。
@@ -126,7 +126,7 @@ PY
         ;;
     mid360)
         FASTLIO_CONFIG="mapping_mid360s.yaml"
-        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/P2.5_mid360s.yaml"
+        ROBOT_PARAM_FILE="${WORKSPACE_DIR}/src/config/P2.5_mid360s/P2.5_mid360s.yaml"
         PGO_CONFIG="pgo_mid360s.yaml"
         BAG_TOPICS=(/livox/lidar /livox/imu)
         ;;

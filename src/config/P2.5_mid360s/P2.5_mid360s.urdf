@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<!--
+  P2.5 MID360S fixed sensor transforms.
+
+  Source: P2.5_mid360s.yaml
+  lidar_to_base.translation = [0.28, 0.0, 0.10] m
+  lidar_to_base.rotation    = [0.0, 0.363, 0.0] rad (roll, pitch, yaw)
+
+  The YAML does not define a separate IMU frame or IMU translation.  The
+  MID360 IMU therefore remains represented by the driver's configured frame.
+  Add a separate fixed joint here once an explicit IMU frame and offset are
+  available.
+-->
+<robot name="p25_mid360s">
+
+  <link name="base_link"/>
+  <link name="livox_frame"/>
+
+  <joint name="base_to_livox" type="fixed">
+    <parent link="base_link"/>
+    <child link="livox_frame"/>
+    <origin xyz="0.28 0.0 0.10" rpy="0.0 0.363 0.0"/>
+  </joint>
+
+</robot>

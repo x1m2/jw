@@ -11,11 +11,11 @@ from launch_ros.actions import Node
 MODEL_FILES = {
     'p2.5_mid360s': (
         'obstacle_stop_p2.5_mid360s.yaml',
-        'P2.5_mid360s.yaml',
+        'P2.5_mid360s/P2.5_mid360s.yaml',
     ),
     'p3_airy96': (
         'obstacle_stop_p3_airy96.yaml',
-        'P3_airy96.yaml',
+        'P3_airy96/P3_airy96.yaml',
     ),
 }
 

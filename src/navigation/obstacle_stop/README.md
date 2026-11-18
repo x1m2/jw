@@ -10,8 +10,8 @@
 | `obstacle_stop_p2.5_mid360s.yaml` | `/livox/lidar`，Livox CustomMsg | 前、左、右；后方关闭 |
 | `obstacle_stop_p3_airy96.yaml` | `/rslidar_front/points`、`/rslidar_rear/points`，PointCloud2 | 前、后、左、右 |
 
-机器人外形尺寸、外参和`lidars`输入配置集中在`src/config/P2.5_mid360s.yaml`、
-`src/config/P3_airy96.yaml`；stop专用YAML保留过滤、栅格和检测区域等算法参数。
+机器人外形尺寸、外参和`lidars`输入配置集中在`src/config/P2.5_mid360s/P2.5_mid360s.yaml`、
+`src/config/P3_airy96/P3_airy96.yaml`；stop专用YAML保留过滤、栅格和检测区域等算法参数。
 
 ```bash
 source install/setup.bash
