@@ -4,7 +4,7 @@
 
 正常使用只需关心 **一个机器配置文件、一个录包目录、一个结果目录**。此工具只做离线空间标定；实时融合使用单独的 `dual_airy_deploy_cpp` 或 `dual_airy_deploy_cpp_v5` 部署包。
 
-仓库中的工具根目录为 `src/calibration/dual_airy_calibration/`。目录包含录包、离线数据准备、MLCC 三阶段优化、验证和导出所需的源码、配置及文档。以下命令均在此目录执行：
+仓库中的工具根目录为 `src/tools/dual_airy_calibration/`。目录包含录包、离线数据准备、MLCC 三阶段优化、验证和导出所需的源码、配置及文档。以下命令均在此目录执行：
 
 ```bash
 cd ~/slam_ws/existing_repo/robot_slam_ws_airy_test/src/calibration/dual_airy_calibration

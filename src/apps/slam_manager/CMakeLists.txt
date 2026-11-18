@@ -62,6 +62,7 @@ add_executable(slam_manager_node src/main.cpp)
 target_link_libraries(slam_manager_node ${PROJECT_NAME}_core)
 ament_target_dependencies(slam_manager_node rclcpp)
 
+
 install(
   TARGETS ${PROJECT_NAME}_core
   EXPORT export_${PROJECT_NAME}
@@ -74,6 +75,7 @@ install(
   TARGETS slam_manager_node
   DESTINATION lib/${PROJECT_NAME}
 )
+
 
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})

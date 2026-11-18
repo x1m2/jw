@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_urdf_generator</name>
+  <version>0.1.0</version>
+  <description>Generate fixed-joint robot URDF files from robot YAML parameters.</description>
+  <maintainer email="maintainer@example.com">robot</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>yaml-cpp</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
