@@ -111,6 +111,7 @@ class NavigationTaskExecutor {
       rclcpp_action::ServerGoalHandle<NavigateToPose>;
 
   struct Config {
+    std::string profile{"3d"};
     double control_timeout_sec{3.0};
     double worker_timeout_sec{30.0};
     double goal_timeout_sec{300.0};

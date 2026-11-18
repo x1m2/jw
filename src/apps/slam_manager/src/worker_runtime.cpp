@@ -158,6 +158,10 @@ void WorkerClient::request(uint8_t command, uint64_t session_id,
                            Completion completion, bool require_stopped) {
   // 服务未就绪时立即返回，避免控制流程无限等待。
   if (!client_->wait_for_service(std::chrono::seconds(3))) {
+    if (command == SetWorkerState::Request::STOP) {
+      completion(true, service_name_ + " is not available; treated as stopped");
+      return;
+    }
     completion(false, service_name_ + " is not ready");
     return;
   }

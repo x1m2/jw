@@ -20,7 +20,8 @@ class NavigationController {
   using Completion = std::function<void(bool, const std::string &)>;
 
   NavigationController(rclcpp::Node *node,
-                       rclcpp::CallbackGroup::SharedPtr callback_group);
+                       rclcpp::CallbackGroup::SharedPtr callback_group,
+                       const std::string &profile);
 
   void start(uint64_t session_id, const std::string &topology_file,
              const std::string &map_directory,
@@ -48,6 +49,9 @@ class NavigationController {
   WorkerClient global_planner_worker_;
   WorkerClient path_smoother_worker_;
   WorkerClient scan_planner_worker_;
+  WorkerClient terrain_filter_worker_;
+  WorkerClient costmap_worker_;
+  WorkerClient pure_pursuit_worker_;
   rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr pause_client_;
   // 启停顺序集中维护，便于明确导航模块之间的依赖关系。
   WorkerList start_order_;

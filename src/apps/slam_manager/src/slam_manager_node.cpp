@@ -106,6 +106,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       "localization.bbs.generation_timeout_sec", 120.0);
   const auto navigation_control_timeout_sec =
       declare_parameter<double>("navigation.control_timeout_sec", 3.0);
+  const auto navigation_profile =
+      declare_parameter<std::string>("navigation.profile", "3d");
   const auto navigation_worker_timeout_sec =
       declare_parameter<double>("navigation.worker_timeout_sec", 30.0);
   const auto navigation_goal_timeout_sec =
@@ -162,7 +164,8 @@ SlamManagerNode::SlamManagerNode() : Node("slam_manager") {
       this, worker_callback_group_, &state_machine_,
       topology_file_writer_.get(),
       NavigationTaskExecutor::Config{
-          navigation_control_timeout_sec, navigation_worker_timeout_sec,
+          navigation_profile, navigation_control_timeout_sec,
+          navigation_worker_timeout_sec,
           navigation_goal_timeout_sec, navigation_enable_skip_first_target,
           navigation_skip_first_target_threshold, default_edge_policy},
       NavigationTaskExecutor::Callbacks{

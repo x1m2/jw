@@ -2,13 +2,15 @@
 
 #include <chrono>
 #include <future>
+#include <stdexcept>
 #include <sstream>
 #include <utility>
 
 namespace slam_manager {
 
 NavigationController::NavigationController(
-    rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr callback_group)
+    rclcpp::Node *node, rclcpp::CallbackGroup::SharedPtr callback_group,
+    const std::string &profile)
     : obstacle_stop_worker_(node, "/obstacle_stop_worker/set_state",
                             callback_group),
       global_planner_worker_(node, "/global_path_planner_worker/set_state",
@@ -17,17 +19,32 @@ NavigationController::NavigationController(
                             callback_group),
       scan_planner_worker_(node, "/scan_planner_worker/set_state",
                            callback_group),
-      // 纯跟踪最后启动，避免依赖模块未就绪时提前输出速度。
-      // SCAN自行建图，停障独立消费原始雷达。
-      start_order_{&obstacle_stop_worker_,
-                   &global_planner_worker_,
-                   &path_smoother_worker_, &scan_planner_worker_},
-      // 停止时优先关闭运动控制，确保机器人先停下来。
-      stop_order_{&scan_planner_worker_, &path_smoother_worker_,
-                  &global_planner_worker_, &obstacle_stop_worker_} {
-  pause_client_ = node->create_client<std_srvs::srv::SetBool>(
-      "/scan_planner/set_paused", rmw_qos_profile_services_default,
-      callback_group);
+      terrain_filter_worker_(node, "/terrain_filter_worker/set_state",
+                             callback_group),
+      costmap_worker_(node, "/costmap_worker/set_state", callback_group),
+      pure_pursuit_worker_(node, "/pure_pursuit_worker/set_state",
+                           callback_group) {
+  if (profile == "3d") {
+    start_order_ = {&obstacle_stop_worker_, &global_planner_worker_,
+                    &path_smoother_worker_, &scan_planner_worker_};
+    stop_order_ = {&scan_planner_worker_, &path_smoother_worker_,
+                   &global_planner_worker_, &obstacle_stop_worker_};
+    pause_client_ = node->create_client<std_srvs::srv::SetBool>(
+        "/scan_planner/set_paused", rmw_qos_profile_services_default,
+        callback_group);
+  } else if (profile == "2d") {
+    start_order_ = {&obstacle_stop_worker_, &global_planner_worker_,
+                    &path_smoother_worker_, &terrain_filter_worker_,
+                    &costmap_worker_, &pure_pursuit_worker_};
+    stop_order_ = {&pure_pursuit_worker_, &costmap_worker_,
+                   &terrain_filter_worker_, &path_smoother_worker_,
+                   &global_planner_worker_, &obstacle_stop_worker_};
+    pause_client_ = node->create_client<std_srvs::srv::SetBool>(
+        "/pure_pursuit/set_paused", rmw_qos_profile_services_default,
+        callback_group);
+  } else {
+    throw std::invalid_argument("navigation.profile must be '2d' or '3d'");
+  }
 }
 
 void NavigationController::start(uint64_t session_id,

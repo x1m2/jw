@@ -844,7 +844,7 @@ NavigationTaskExecutor::NavigationTaskExecutor(
     : node_(node),
       state_machine_(state_machine),
       topology_writer_(topology_writer),
-      controller_(node, std::move(worker_callback_group)),
+      controller_(node, std::move(worker_callback_group), config.profile),
       config_(config),
       callbacks_(std::move(callbacks)) {
   if (!node_ || !state_machine_ || !topology_writer_ ||
@@ -860,7 +860,8 @@ NavigationTaskExecutor::NavigationTaskExecutor(
   }
   task_target_pub_ =
       node_->create_publisher<slam_manager_interfaces::msg::TaskTarget>(
-          "/navigation/task_target", 10);
+          "/navigation/task_target",
+          rclcpp::QoS(1).reliable().transient_local());
 }
 
 NavigationTaskExecutor::~NavigationTaskExecutor() {

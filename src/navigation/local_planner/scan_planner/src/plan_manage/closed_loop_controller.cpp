@@ -65,7 +65,8 @@ class ClosedLoopController : public Controller {
           pose_stamp_ = rclcpp::Time(message->header.stamp);
           last_odom_time_ = node_.now(); have_odom_ = true;
         });
-    task_sub_ = node_.create_subscription<slam_manager_interfaces::msg::TaskTarget>("/navigation/task_target", 10,
+    task_sub_ = node_.create_subscription<slam_manager_interfaces::msg::TaskTarget>(
+        "/navigation/task_target", rclcpp::QoS(1).reliable().transient_local(),
         [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr task) {
           if (!std::isfinite(task->target.x) || !std::isfinite(task->target.y) ||
               !std::isfinite(task->target.z) || !std::isfinite(task->target.theta)) return;

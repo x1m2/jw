@@ -269,7 +269,8 @@ bool GlobalPathPlanner::initialize() {
 
   task_target_sub_ =
       create_subscription<slam_manager_interfaces::msg::TaskTarget>(
-          "/navigation/task_target", 10,
+          "/navigation/task_target",
+          rclcpp::QoS(1).reliable().transient_local(),
           [this](slam_manager_interfaces::msg::TaskTarget::ConstSharedPtr msg) {
             resetDeviationTracking(!msg->use_topology);
             planning_pending_ = false;
