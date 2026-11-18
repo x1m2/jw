@@ -32,12 +32,12 @@ YAML 的 `bbs3d.backend` 选择 `cpu` 或 `opencl`；`opencl_batch_size`、
 ```bash
 ros2 launch super_lio localization.py \
   config_file:=reloc_superlio_mid360s.yaml \
-  robot_param_file:=$PWD/src/config/P2.5_mid360s/P2.5_mid360s.yaml \
+  robot_param_file:=$PWD/src/config/P2.5_mid360s.yaml \
   map_path:=/robotfs/data/slam_data/map_0/map rviz:=false
 ```
 
 Airy 使用 `config_file:=reloc_superlio_airy96.yaml`，并传入对应机器人配置，例如
-`robot_param_file:=$PWD/src/config/P3_airy96/P3_airy96.yaml`。
+`robot_param_file:=$PWD/src/config/P3_airy96.yaml`。
 Airy 的 `lio.sensor.lidar_type` 为 `8`（RSAIRY）。输入校验与 FAST-LIO 一致：
 `x/y/z/intensity` 为 float32、`ring` 为 uint16、`timestamp` 为 float64，
 拒绝空点云及首尾非有限时间戳或无效尾时间戳。帧开始采用消息头时间，

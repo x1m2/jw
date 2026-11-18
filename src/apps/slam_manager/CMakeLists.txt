@@ -78,19 +78,10 @@ install(
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(FILES
-  ../../config/P2.5_mid360s/P2.5_mid360s.yaml
-  ../../config/P2.5_mid360s/P2.5_mid360s.urdf
-  DESTINATION share/${PROJECT_NAME}/config/robots/P2.5_mid360s
-)
-install(FILES
-  ../../config/P3_airy96/P3_airy96.yaml
-  ../../config/P3_airy96/P3_airy96.urdf
-  DESTINATION share/${PROJECT_NAME}/config/robots/P3_airy96
-)
-install(FILES
-  ../../config/S01_mid360s/S01_mid360s.yaml
-  ../../config/S01_mid360s/S01_mid360s.urdf
-  DESTINATION share/${PROJECT_NAME}/config/robots/S01_mid360s
+  ../../config/P2.5_mid360s.yaml
+  ../../config/P3_airy96.yaml
+  ../../config/S01_mid360s.yaml
+  DESTINATION share/${PROJECT_NAME}/config/robots
 )
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 

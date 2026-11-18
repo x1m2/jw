@@ -416,7 +416,7 @@ launch默认加载随包安装的P2.5配置，切换车型可指定源文件或�
 
 ```bash
 ros2 launch slam_manager slam_manager.launch.py \
-  robot_param_file:=$PWD/src/config/P3_airy96/P3_airy96.yaml
+  robot_param_file:=$PWD/src/config/P3_airy96.yaml
 ```
 
 直接执行节点时，同样需要按顺序传入两个`--params-file`。OTA的Airy、

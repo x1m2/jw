@@ -15,14 +15,14 @@ def find_robot_param(package_share):
     current_path = os.path.abspath(package_share)
     while True:
         candidate = os.path.join(
-            current_path, 'src', 'config', 'P2.5_mid360s/P2.5_mid360s.yaml')
+            current_path, 'src', 'config', 'P2.5_mid360s.yaml')
         if os.path.isfile(candidate):
             return candidate
 
         parent_path = os.path.dirname(current_path)
         if parent_path == current_path:
             raise FileNotFoundError(
-                'Cannot find src/config/P2.5_mid360s/P2.5_mid360s.yaml from package share: '
+                'Cannot find src/config/P2.5_mid360s.yaml from package share: '
                 + package_share
             )
         current_path = parent_path

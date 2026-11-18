@@ -1,25 +1,4 @@
-# 机体配置
-
-每个机型的节点参数和固定传感器 TF 配置成对存放：
-
-```text
-config/
-├── P2.5_mid360s/
-│   ├── P2.5_mid360s.yaml
-│   └── P2.5_mid360s.urdf
-├── S01_mid360s/
-│   ├── S01_mid360s.yaml
-│   └── S01_mid360s.urdf
-└── P3_airy96/
-    ├── P3_airy96.yaml
-    └── P3_airy96.urdf
-```
-
-YAML 供算法节点读取话题、尺寸和标定参数；URDF 由
-`robot_state_publisher` 读取，只负责发布 `base_link` 到传感器 link 的固定 TF。
-新增机型时应同时新增同名目录下的 YAML 和 URDF。
-
-## 外参
+# 机体雷达外参
 
 建图、FAST-LIO 定位、Super-LIO 定位和避障通过公共包 `robot_geometry`
 中的 `robot_geometry/lidar_extrinsics.hpp` 读取机体 YAML。该包仅提供头文件，

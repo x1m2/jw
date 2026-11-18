@@ -30,7 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'robot_param_file',
             default_value=os.path.join(
-                package_share, 'config', 'robots', 'P2.5_mid360s/P2.5_mid360s.yaml'),
+                package_share, 'config', 'robots', 'P2.5_mid360s.yaml'),
             description='Robot YAML containing the LiDAR mount, IMU topic and LiDAR-to-IMU rotation',
         ),
         DeclareLaunchArgument(

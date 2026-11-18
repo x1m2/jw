@@ -75,13 +75,13 @@ AIRY_FASTDDS_PROFILE="${AIRY_SDK_DIR}/config/fastshm.xml"
 case "${LIDAR_TYPE}" in
     mid360)
         readonly FASTLIO_CONFIG="mapping_mid360s.yaml"
-        ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/P2.5_mid360s/P2.5_mid360s.yaml"
+        ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/P2.5_mid360s.yaml"
         readonly PGO_CONFIG="pgo_mid360s.yaml"
         readonly LIDAR_DRIVER_NAME="Livox ROS Driver2"
         ;;
     airy)
         readonly FASTLIO_CONFIG="mapping_airy96.yaml"
-        ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/P3_airy96/P3_airy96.yaml"
+        ROBOT_PARAM_FILE="${SCRIPT_DIR}/config/P3_airy96.yaml"
         readonly PGO_CONFIG="pgo_airy96.yaml"
         readonly LIDAR_DRIVER_NAME="Airy96 ROS Driver"
         ;;
