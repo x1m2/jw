@@ -54,7 +54,7 @@
       src_leaf_size: 2.0
       min_scan_range: 0.0
       max_scan_range: 100.0
-      timeout_msec: 0
+      timeout_msec: 30000 # 30 s; off: 0
       gravity_align: true
       backend: opencl
       opencl_batch_size: 10000
