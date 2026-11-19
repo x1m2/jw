@@ -12,17 +12,23 @@ SCAN_INDEX="${SCAN_INDEX:-100}"
 PLAY_RATE="${PLAY_RATE:-0.5}"
 RELOC_TIMEOUT_SEC="${RELOC_TIMEOUT_SEC:-300}"
 LIDAR_TYPE="${LIDAR_TYPE:-airy}"
+ALGORITHM="${ALGORITHM:-superlio}"
 PREPARE_ONLY=false
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
-usage() { printf '用法: %s --bag 数据包目录 [--lidar airy|mid360] [--rate 倍速] [--scan-index 帧号] [--prepare-only]\n' "$0"; }
+usage() { printf '用法: %s --bag 数据包目录 [--algorithm fastlio|superlio] [--lidar airy|mid360] [--rate 倍速] [--scan-index 帧号] [--prepare-only]\n' "$0"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bag)
             [[ $# -ge 2 ]] || fail "--bag 后需要填写 ROS 2 bag 目录"
             BAG_DIR="$2"
+            shift 2
+            ;;
+        --algorithm)
+            [[ $# -ge 2 ]] || fail "--algorithm 后需要填写 fastlio 或 superlio"
+            ALGORITHM="$2"
             shift 2
             ;;
         --lidar)
@@ -55,16 +61,34 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "${ALGORITHM}" in
+    fastlio)
+        LOCALIZATION_PACKAGE=fastlio_localization
+        LOCALIZATION_EXECUTABLE=fastlio_localization_node
+        LOCALIZATION_NODE=/fastlio_localization
+        LAUNCH_FILE=run_launch.py
+        LAUNCH_OPTIONS=(localization_use_rviz:=true)
+        ;;
+    superlio)
+        LOCALIZATION_PACKAGE=super_lio
+        LOCALIZATION_EXECUTABLE=superlio_localization_node
+        LOCALIZATION_NODE=/superlio_localization
+        LAUNCH_FILE=localization.py
+        LAUNCH_OPTIONS=(rviz:=true runtime_profile:=test)
+        ;;
+    *) fail "不支持的定位算法: ${ALGORITHM}，请选择 fastlio 或 superlio" ;;
+esac
+
 case "${LIDAR_TYPE}" in
     airy)
-        CONFIG_FILE=reloc_fastlio_airy96.yaml
+        CONFIG_FILE="reloc_${ALGORITHM}_airy96.yaml"
         ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/P3_airy96.yaml}"
         LIDAR_TOPIC=/rslidar_points
         IMU_TOPIC=/rslidar_imu_data
         CLOUD_MSG_TYPE=sensor_msgs/msg/PointCloud2
         ;;
     mid360)
-        CONFIG_FILE=reloc_fastlio_mid360s.yaml
+        CONFIG_FILE="reloc_${ALGORITHM}_mid360s.yaml"
         ROBOT_PARAM_FILE="${ROBOT_PARAM_FILE:-${WORKSPACE_DIR}/src/config/P2.5_mid360s.yaml}"
         LIDAR_TOPIC=/livox/lidar
         IMU_TOPIC=/livox/imu
@@ -72,6 +96,10 @@ case "${LIDAR_TYPE}" in
         ;;
     *) fail "不支持的雷达类型: ${LIDAR_TYPE}，请选择 airy 或 mid360" ;;
 esac
+
+# Pass an absolute source path so stale installed config names cannot be used.
+CONFIG_FILE="${SCRIPT_DIR}/slam/localization/${LOCALIZATION_PACKAGE}/config/${CONFIG_FILE}"
+[[ -s "${CONFIG_FILE}" ]] || fail "未找到定位配置文件: ${CONFIG_FILE}"
 
 [[ -n "${BAG_DIR}" ]] || { usage >&2; fail "必须通过 --bag 指定数据包目录"; }
 
@@ -101,6 +129,7 @@ export ROS_LOG_DIR="${ROS_LOG_DIR:-${LOG_ROOT}/ros}"
 mkdir -p "${ROS_LOG_DIR}"
 info "离线重定位日志目录: ${LOG_ROOT}"
 info "saver 日志: ${LOG_ROOT}/saver.log"
+info "定位配置: ${CONFIG_FILE}"
 if [[ "${PREPARE_ONLY}" != true ]]; then
     info "定位日志: ${LOG_ROOT}/localization.log"
     info "bag 回放日志: ${LOG_ROOT}/bag_play.log"
@@ -110,6 +139,11 @@ set +u
 source /opt/ros/humble/setup.bash
 source "${WORKSPACE_DIR}/install/setup.bash"
 set -u
+
+if [[ "${PREPARE_ONLY}" != true ]]; then
+    LOCALIZATION_PREFIX="$(ros2 pkg prefix "${LOCALIZATION_PACKAGE}")" || fail "未安装 ${LOCALIZATION_PACKAGE}，请先运行 colcon build --packages-up-to ${LOCALIZATION_PACKAGE} --symlink-install"
+    [[ -x "${LOCALIZATION_PREFIX}/lib/${LOCALIZATION_PACKAGE}/${LOCALIZATION_EXECUTABLE}" ]] || fail "未找到 ${LOCALIZATION_EXECUTABLE}，请重新编译 ${LOCALIZATION_PACKAGE}"
+fi
 
 # Use the same voxel resolution and levels as both Airy and MID360 ROS 2 configurations.
 info "根据 ${MAP_DIR}/globalmap.pcd 生成 BBS3D 体素地图"
@@ -252,10 +286,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-info "启动 ${LIDAR_TYPE} 全局重定位和连续定位"
-setsid ros2 launch fastlio_localization run_launch.py \
+info "启动 ${ALGORITHM} ${LIDAR_TYPE} 全局重定位和连续定位"
+setsid ros2 launch "${LOCALIZATION_PACKAGE}" "${LAUNCH_FILE}" \
     "config_file:=${CONFIG_FILE}" \
-    localization_use_rviz:=true \
+    "${LAUNCH_OPTIONS[@]}" \
     "map_path:=${MAP_DIR}" \
     "robot_param_file:=${ROBOT_PARAM_FILE}" \
     > "${LOG_ROOT}/localization.log" 2>&1 &
@@ -265,7 +299,11 @@ LOCALIZATION_PID=$!
 ready=false
 for _ in $(seq 1 60); do
     kill -0 "${LOCALIZATION_PID}" 2>/dev/null || fail "定位节点已退出，查看 ${LOG_ROOT}/localization.log"
-    if ros2 node list 2>/dev/null | grep -qx '/fastlio_localization'; then
+    if grep -q 'process has died' "${LOG_ROOT}/localization.log"; then
+        tail -n 20 "${LOG_ROOT}/localization.log" >&2
+        fail "定位进程启动失败，查看 ${LOG_ROOT}/localization.log"
+    fi
+    if ros2 node list 2>/dev/null | grep -Fxq "${LOCALIZATION_NODE}"; then
         ready=true
         break
     fi
@@ -281,7 +319,8 @@ setsid ros2 bag play "${BAG_DIR}" --rate "${PLAY_RATE}" \
     > "${LOG_ROOT}/bag_play.log" 2>&1 &
 BAG_PID=$!
 
-python3 - "${RELOC_TIMEOUT_SEC}" <<'PY'
+python3 - "${RELOC_TIMEOUT_SEC}" "${LOG_ROOT}/localization.log" "${ALGORITHM}" <<'PY'
+import pathlib
 import sys
 import time
 
@@ -293,7 +332,7 @@ from std_msgs.msg import Bool
 rclpy.init()
 node = rclpy.create_node('offline_reloc_playback_controller')
 succeeded = False
-started = False
+localization_log = pathlib.Path(sys.argv[2])
 manual_pose_version = 0
 manual_pose_received_at = 0.0
 
@@ -304,11 +343,18 @@ def on_initial_pose(message):
     print('收到手动初始位姿，准备补送点云和 IMU 触发配准', flush=True)
 
 def on_status(message):
-    global succeeded, started
+    global succeeded
     if message.data:
         succeeded = True
-    else:
-        started = True
+
+def search_count():
+    # Super-LIO publishes false during initialization too. Only the explicit
+    # search log confirms that its 10-frame accumulation has completed.
+    log = localization_log.read_text(errors='replace')
+    if sys.argv[3] == 'superlio':
+        return log.count('RELOC start in background')
+    return (log.count('[Localize] bbs3d start localize.')
+            + log.count('scan context success!') + log.count('bnb_pose = '))
 
 subscription = node.create_subscription(Bool, '/reloc_success', on_status, 10)
 initial_pose_subscription = node.create_subscription(
@@ -329,34 +375,39 @@ try:
         if time.monotonic() >= deadline:
             raise RuntimeError('bag 播放器未启动')
 
-    # Feed a few synchronized LiDAR/IMU messages, then hold the bag still
-    # while the first global matching attempt runs.
+    # Feed enough synchronized data for Super-LIO's 10-frame initialization,
+    # then hold the bag still while the global matching attempt runs.
     for _ in range(20):
-        if started or succeeded:
+        if search_count() or succeeded:
             break
         response = await_result(burst_client.call_async(Burst.Request(num_messages=100)))
         if response.actually_burst == 0:
             raise RuntimeError('bag 中没有可用于重定位的后续消息')
         until = min(deadline, time.monotonic() + 2.0)
-        while not started and not succeeded and time.monotonic() < until:
+        while not search_count() and not succeeded and time.monotonic() < until:
             rclpy.spin_once(node, timeout_sec=0.2)
-    if not started and not succeeded:
+    if not search_count() and not succeeded:
         raise RuntimeError('已送入点云和 IMU，但定位节点没有开始重定位')
 
     print('等待重定位成功，bag 保持暂停；可在 RViz 设置初始位姿', flush=True)
     attempted_pose_version = 0
     manual_bursts_remaining = 0
     next_manual_burst_at = 0.0
+    manual_search_count = 0
     while rclpy.ok() and not succeeded and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
         if succeeded:
             break
         if manual_pose_version != attempted_pose_version:
             attempted_pose_version = manual_pose_version
-            manual_bursts_remaining = 3
+            manual_bursts_remaining = 20
+            manual_search_count = search_count()
             # Allow the localization node to receive the same /initialpose
             # before new sensor data triggers its matching callback.
             next_manual_burst_at = manual_pose_received_at + 0.3
+        if manual_bursts_remaining and search_count() > manual_search_count:
+            manual_bursts_remaining = 0
+            print('已开始新的重定位，bag 保持暂停等待结果', flush=True)
         if manual_bursts_remaining and time.monotonic() >= next_manual_burst_at:
             response = await_result(burst_client.call_async(
                 Burst.Request(num_messages=100)))
