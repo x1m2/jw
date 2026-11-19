@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     std::cout << "Generated " << output_path << " from " << yaml_path << "\n";
     return 0;
   } catch (const std::exception &error) {
-    std::cerr << "robot_urdf_generator: " << error.what() << "\n";
+    std::cerr << "urdf_generator_node: " << error.what() << "\n";
     return 1;
   }
 }

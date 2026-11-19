@@ -8,10 +8,10 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
-add_executable(robot_urdf_generator src/main.cpp)
-target_link_libraries(robot_urdf_generator yaml-cpp)
+add_executable(urdf_generator_node src/main.cpp)
+target_link_libraries(urdf_generator_node yaml-cpp)
 
-install(TARGETS robot_urdf_generator
+install(TARGETS urdf_generator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
