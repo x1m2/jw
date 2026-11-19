@@ -53,9 +53,7 @@ fastlio_localization:
         map_path: "/robotfs/data/slam_data/map/"
 
         relocate_use_last_pose: false
-        # last_pose_record_path: "/home/will/last_pose_record.txt"
         location_log_enable: false
-        # location_log_save_path: "/home/will/location.log"
 
 # ============relocalization_cfg============
         algorithm_type: "bbs3d"
