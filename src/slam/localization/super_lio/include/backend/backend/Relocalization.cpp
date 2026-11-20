@@ -48,6 +48,7 @@ bool Relocalization::compute_gravity_alignment(
 
 bool Relocalization::run_gnss_relocalization(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const double &lidar_beg_time, const Eigen::Matrix4d &lidar_ext, double &score)
 {
+    if (isCancelled()) return false;
     Timer2 timer;
     // Snapshot under the lock: the subscription callback runs in a different
     // callback group and otherwise races this assignment.
@@ -112,6 +113,7 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
                                const Eigen::Matrix4d &lidar_ext,
                                const V3D &mean_acc, double &score)
 {
+    if (isCancelled()) return false;
     pcl::PointCloud<pcl::PointXYZ>::Ptr bbs_input(new pcl::PointCloud<pcl::PointXYZ>());
 
     Eigen::Matrix4d gravity_from_imu = Eigen::Matrix4d::Identity();
@@ -128,6 +130,7 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
     pcl::PointXYZ tmp;
     for (auto &point : scan->points)
     {
+        if (isCancelled()) return false;
         auto norm = pcl::euclideanDistance(point, pcl::PointXYZ(0, 0, 0));
         if (norm < bbs3d.min_scan_range || norm > bbs3d.max_scan_range)
           continue;
@@ -158,8 +161,10 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
         voxel_filtered_points, bbs3d.src_leaf_size, score_threshold,
         bbs3d.score_threshold_percentage);
 
+    if (isCancelled()) return false;
     if (!bbs3d.run(bbs_input, rough_mat))
     {
+        if (isCancelled()) return false;
         LOG_ERROR("bbs3d failed! Please move the vehicle to another position and try again.");
         return false;
     }
@@ -184,6 +189,7 @@ bool Relocalization::run_bbs3d(PointCloudType::Ptr scan,
 
 bool Relocalization::run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score)
 {
+    if (isCancelled()) return false;
     Timer2 timer;
     PointCloudType::Ptr scanDS(new PointCloudType());
     pcl::PointCloud<SCPointType>::Ptr sc_input(new pcl::PointCloud<SCPointType>());
@@ -245,6 +251,7 @@ bool Relocalization::run_manually_set(PointCloudType::Ptr scan,
                                       const Eigen::Matrix4d &lidar_ext,
                                       const V3D &mean_acc, double &score)
 {
+    if (isCancelled()) return false;
     if (!prior_pose_inited)
     {
         LOG_WARN("wait for the boot position to be manually set!");
@@ -299,16 +306,19 @@ bool Relocalization::run_manually_set(PointCloudType::Ptr scan,
 
 bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &result, const double &lidar_beg_time, const V3D &mean_acc)
 {
+    if (isCancelled()) return false;
     Eigen::Matrix4d lidar_ext = lidar_extrinsic.toMatrix4d();
     bool success_flag = true;
     double score = 0;
 
     if (run_gnss_relocalization(scan, result, lidar_beg_time, lidar_ext, score) && fine_tune_pose(scan, result, lidar_ext, score))
     {
+        if (isCancelled()) return false;
         LOG_WARN("relocalization successfully!!!!!!");
         return true;
     }
 
+    if (isCancelled()) return false;
     if (algorithm_type.compare("bbs3d") == 0)
     {
         if (!run_bbs3d(scan, result, lidar_ext, mean_acc, score) || !fine_tune_pose(scan, result, lidar_ext, score))
@@ -319,6 +329,7 @@ bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &resul
             success_flag = false;
         }
     }
+    if (isCancelled()) return false;
     if (algorithm_type.compare("scan_context") == 0)
     {
         if (!run_scan_context(scan, result, lidar_ext, score) || !fine_tune_pose(scan, result, lidar_ext, score))
@@ -329,6 +340,7 @@ bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &resul
             success_flag = false;
         }
     }
+    if (isCancelled()) return false;
     if (algorithm_type.compare("manually_set") == 0 || !success_flag)
     {
         success_flag = true;
@@ -341,6 +353,7 @@ bool Relocalization::run(const PointCloudType::Ptr &scan, Eigen::Matrix4d &resul
         }
     }
 
+    if (isCancelled()) return false;
     if (!success_flag)
     {
         LOG_ERROR("relocalization failed!");
@@ -396,6 +409,7 @@ bool Relocalization::load_prior_map(const PointCloudType::Ptr &global_map)
 
 bool Relocalization::fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &result, const Eigen::Matrix4d &lidar_ext, const double &score)
 {
+    if (isCancelled()) return false;
     Timer2 timer;
     result = EigenMath::CreateAffineMatrix(V3D(rough_pose.x, rough_pose.y, rough_pose.z), V3D(rough_pose.roll, rough_pose.pitch, rough_pose.yaw));
     if (score >= bnb_option.enough_score)
@@ -417,7 +431,9 @@ bool Relocalization::fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &r
 
     PointCloudType::Ptr aligned(new PointCloudType());
     ndt.setInputSource(filter);
+    if (isCancelled()) return false;
     ndt.align(*aligned, result.cast<float>());
+    if (isCancelled()) return false;
 
     if (!ndt.hasConverged())
     {
@@ -449,7 +465,9 @@ bool Relocalization::fine_tune_pose(PointCloudType::Ptr scan, Eigen::Matrix4d &r
     if (use_gicp)
     {
         gicp.setInputSource(filter);
+        if (isCancelled()) return false;
         gicp.align(*aligned, ndt.getFinalTransformation());
+        if (isCancelled()) return false;
 
         if (!gicp.hasConverged())
         {

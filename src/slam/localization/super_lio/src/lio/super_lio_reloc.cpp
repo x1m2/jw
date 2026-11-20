@@ -117,8 +117,19 @@ void SuperLIOReLoc::init(){
   state_fn_ = &SuperLIOReLoc::stateWaitKFInit;
 }
 
+SuperLIOReLoc::~SuperLIOReLoc() {
+  requestStop();
+  // std::future otherwise waits after later-declared members start destruction.
+  if (reloc_future_.valid()) reloc_future_.wait();
+}
+
+void SuperLIOReLoc::requestStop() {
+  if (data_wrapper_) data_wrapper_->backend().relocalization->requestCancel();
+  stopping_ = true;
+}
+
 bool SuperLIOReLoc::process(){
-  if (stopping_) return false;
+  if (stopping_ || data_wrapper_->backend().relocalization->isCancelled()) return false;
   if (data_wrapper_->initial_pose_requested()) {
     data_wrapper_->consume_initial_pose_request();
     if (kf_->init_) tracking_failed();
@@ -166,6 +177,10 @@ bool SuperLIOReLoc::kf_init(){
 
     RelocTaskResult result = reloc_future_.get();
     reloc_inflight_ = false;
+    // Serialize result injection/publication with requestCancel().
+    std::lock_guard<std::mutex> commit_lock(
+        data_wrapper_->backend().relocalization->cancellationMutex());
+    if (stopping_ || data_wrapper_->backend().relocalization->isCancelled()) return false;
 
     /// /initialpose arrived while the search was running: prefer the manual pose.
     if (data_wrapper_->backend().relocalization->apply_pending_manual_pose())
@@ -300,6 +315,7 @@ bool SuperLIOReLoc::kf_init(){
   LOG(INFO) << YELLOW << " ---> RELOC start in background... obs_data size: " << scan_copy->size()
             << ", prior map size: " << point_map_->size()
             << ", algorithm_type: " << data_wrapper_->backend().relocalization->algorithm_type << RESET;
+  if (stopping_ || data_wrapper_->backend().relocalization->isCancelled()) return false;
   try
   {
     reloc_future_ = std::async(std::launch::async, [this, scan_copy, lidar_time, mean_acc]() {

@@ -8,6 +8,7 @@
 namespace oclbbs {
 class ScoreMismatch:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 void CudaStyleSearch::cpu_scores(std::vector<Transform>& ts,size_t first,size_t count,const std::vector<cpu::AngularInfo>& angles,SearchResult& result){
+  if(cpu_.cancel_requested())return;
   if(options_.use_opencl && !options_.fallback_cpu)
     throw std::runtime_error("OpenCL scoring unavailable and CPU fallback is disabled");
   double start=clock_ms();int threads=Access::threads(cpu_);
@@ -28,6 +29,7 @@ bool CudaStyleSearch::pose_supported(const std::vector<Pose>& poses) {
  }
 
 void CudaStyleSearch::score_range(std::vector<Transform>& ts,size_t first,size_t count,const std::vector<cpu::AngularInfo>& angles,SearchResult& result){
+  if(cpu_.cancel_requested())return;
   result.scored+=count;
   if(!gpu_||!eligible_||count<options_.gpu_min_batch){cpu_scores(ts,first,count,angles,result);return;}
   double begin=clock_ms();
@@ -35,22 +37,27 @@ void CudaStyleSearch::score_range(std::vector<Transform>& ts,size_t first,size_t
    std::vector<Transform> chunk(ts.begin()+first,ts.begin()+first+count);
    auto poses=make_poses(chunk,angles,Access::map(cpu_));
    if(!pose_supported(poses)){cpu_scores(ts,first,count,angles,result);return;}
+   if(cpu_.cancel_requested())return;
    auto raw=gpu_->score(poses,false);
+   if(cpu_.cancel_requested())return;
    double correction_start=clock_ms();auto scores=correct(cpu_,chunk,angles,points_,raw);
    result.boundary_ms+=clock_ms()-correction_start;
    result.gpu_kernel_ms+=raw.kernel_ms;
    for(const auto& value:raw.values)result.boundary_points+=value[2];
+   if(cpu_.cancel_requested())return;
    if(options_.verify_gpu){
     double verify_start=clock_ms();size_t mismatches=0;int threads=Access::threads(cpu_);
 #pragma omp parallel for num_threads(threads) reduction(+:mismatches)
     for(int i=0;i<int(count);++i)if(scores[i]!=Access::score(cpu_,chunk[i],angles[chunk[i].level],points_))mismatches++;
     result.verify_ms+=clock_ms()-verify_start;result.verified_candidates+=count;
+    if(cpu_.cancel_requested())return;
     if(mismatches)throw ScoreMismatch("Corrected OpenCL score differs from original CPU: "+std::to_string(mismatches));
    }
    for(size_t i=0;i<count;++i)ts[first+i].score=scores[i];
    result.gpu_batches++;result.gpu_candidates+=count;result.gpu_score_ms+=clock_ms()-begin;
   }catch(const ScoreMismatch&){throw;}
   catch(const std::exception& error){
+   if(cpu_.cancel_requested())return;
    result.gpu_failures++;result.gpu_error=error.what();gpu_.reset();
    cpu_scores(ts,first,count,angles,result);
   }
@@ -71,6 +78,7 @@ double CudaStyleSearch::prepare(const std::vector<Eigen::Vector3d>& points){
   points_=points;abs_point_max_.setZero();eligible_=true;double max_norm=0;
   std::vector<Float4> floats;floats.reserve(points.size());
   for(const auto& p:points){
+   if(cpu_.cancel_requested())return clock_ms()-start;
    if(!p.allFinite())throw std::runtime_error("Nonfinite source point");
    abs_point_max_=abs_point_max_.cwiseMax(p.cwiseAbs());max_norm=std::max(max_norm,p.norm());
    Float4 value={float(p.x()),float(p.y()),float(p.z()),0};
@@ -80,6 +88,7 @@ double CudaStyleSearch::prepare(const std::vector<Eigen::Vector3d>& points){
   if(max_norm<1e-9)throw std::runtime_error("Degenerate zero-radius scan");
   for(double res:Access::map(cpu_).voxelmaps_res_)if(!std::isfinite(res)||res<=0||double(float(1.0/res))!=1.0/res)eligible_=false;
   cpu_.set_src_points(points);
+  if(cpu_.cancel_requested())return clock_ms()-start;
   if(gpu_&&eligible_){
    try{gpu_->set_points(floats);}
    catch(const std::exception& error){setup_error_=error.what();gpu_.reset();}
@@ -93,6 +102,10 @@ SearchResult CudaStyleSearch::localize(){
   result.gpu_eligible=eligible_;result.gpu_error=setup_error_;
   const double start=clock_ms();
   int budget=options_.budget_ms>=0?options_.budget_ms:(Access::timeout_enabled(cpu_)?Access::timeout_ms(cpu_):0);
+  auto cancelled=[&](){
+   result.cancelled=cpu_.cancel_requested();
+   return result.cancelled;
+  };
   auto expired=[&](){if(budget>0&&clock_ms()-start>=budget){result.timed_out=true;return true;}return false;};
   auto angles=Access::angles(cpu_);auto& map=Access::map(cpu_);
   const int rate=int(Access::rate(cpu_));
@@ -101,11 +114,11 @@ SearchResult CudaStyleSearch::localize(){
   int best=result.threshold;Transform best_transform(best);bool found=false;
   auto initial=Access::initial(cpu_,angles.back());result.generated=initial.size();
   for(size_t first=0;first<initial.size();first+=options_.batch_size){
-   if(expired())break;
+   if(cancelled()||expired())break;
    score_range(initial,first,std::min(options_.batch_size,initial.size()-first),angles,result);
   }
   std::priority_queue<Transform> queue;
-  if(!result.timed_out)queue=std::priority_queue<Transform>(initial.begin(),initial.end());
+  if(!result.timed_out&&!cancelled())queue=std::priority_queue<Transform>(initial.begin(),initial.end());
   std::vector<Transform> stock;stock.reserve(options_.batch_size);
   auto queue_check=[&](){
    result.max_queue=std::max(result.max_queue,queue.size());
@@ -117,10 +130,12 @@ SearchResult CudaStyleSearch::localize(){
   // Score all pending children before any further queue pop.
   auto flush=[&](){
    for(size_t first=0;first<stock.size();first+=options_.batch_size){
-    if(expired())return false;
+    if(cancelled()||expired())return false;
     size_t count=std::min(options_.batch_size,stock.size()-first);
     score_range(stock,first,count,angles,result);
+    if(cancelled())return false;
     for(size_t i=first;i<first+count;++i){
+     if(cancelled())return false;
      if(stock[i].score<best){result.pruned++;continue;}
      queue.push(stock[i]);
     }
@@ -130,8 +145,8 @@ SearchResult CudaStyleSearch::localize(){
   };
   // The original CUDA loop tests only queue.empty(). Including stock here
   // also submits children created from the very last popped parent.
-  while((!queue.empty()||!stock.empty())&&!result.timed_out&&!result.resource_limit){
-   if(expired())break;
+  while((!queue.empty()||!stock.empty())&&!result.timed_out&&!result.cancelled&&!result.resource_limit){
+   if(cancelled()||expired())break;
    if(queue.empty()){
     if(!flush())break;
     if(queue.empty())continue;
@@ -146,17 +161,19 @@ SearchResult CudaStyleSearch::localize(){
    }else{
     size_t before=stock.size();int child_level=trans.level-1;
 
-    trans.branch(stock,child_level,rate,angles[child_level].num_division);
+    trans.branch(stock,child_level,rate,angles[child_level].num_division,
+                 [this](){return cpu_.cancel_requested();});
     result.generated+=stock.size()-before;
    }
    if(stock.size()>=options_.batch_size&&!flush())break;
   }
-  result.completed=!result.timed_out&&!result.resource_limit;
+  result.cancelled=cpu_.cancel_requested();
+  result.completed=!result.cancelled&&!result.timed_out&&!result.resource_limit;
   result.success=result.completed&&found&&best>result.threshold;
   result.score=result.success?best:0;
   if(result.success)result.pose=best_transform.create_matrix(map.get_min_res(),angles[0].rpy_res,angles[0].min_rpy);
   result.search_ms=clock_ms()-start;
-  Access::publish(cpu_,result.success,result.timed_out,result.score,result.search_ms,result.pose);
+  Access::publish(cpu_,result.success,result.timed_out,result.score,result.search_ms,result.pose,result.cancelled);
   return result;
  }
 

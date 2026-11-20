@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 #include <exception>
@@ -51,6 +52,10 @@ struct BBS3DOptions
 class BBS3D
 {
 public:
+    // Sticky for this algorithm instance; a new START creates a fresh instance.
+    void request_cancel() { cancelled_.store(true); }
+    bool is_cancelled() const { return cancelled_.load(); }
+
     bool load_config(const BBS3DOptions &bbs3d_option)
     {
         backend_ = bbs3d_option.backend;
@@ -101,6 +106,7 @@ public:
         std::cout << "[Localize] USE CUDA!" << std::endl;
 #else
         bbs3d_ptr = std::make_unique<cpu::BBS3D>();
+        bbs3d_ptr->set_cancel_check([this]() { return is_cancelled(); });
         std::cout << "[Localize] NOT USE CUDA!" << std::endl;
 #endif
 
@@ -182,6 +188,7 @@ public:
 #else
         std::vector<Eigen::Vector3d> src_points;
 #endif
+        if (is_cancelled()) return false;
         pciof::pcl_to_eigen(src_cloud, src_points);
         if (src_points.empty() || !bbs3d_ptr)
         {
@@ -201,6 +208,7 @@ public:
             if (opencl_engine_)
             {
                 opencl_engine_->prepare(src_points);
+                if (is_cancelled()) return false;
                 const auto result = opencl_engine_->localize();
                 const bool gpu_used = result.gpu_candidates != 0;
                 std::cout << "[BBS_SEARCH_STATS] requested=opencl active="
@@ -213,7 +221,12 @@ public:
                           << " cpu_batches=" << result.cpu_batches
                           << " gpu_failures=" << result.gpu_failures
                           << " success=" << result.success
+                          << " cancelled=" << result.cancelled
                           << " timed_out=" << result.timed_out << std::endl;
+                if (result.cancelled || is_cancelled()) {
+                    std::cout << "[BBS_CANCELLED] backend=opencl" << std::endl;
+                    return false;
+                }
                 if (!gpu_used || result.gpu_failures || result.cpu_batches)
                     std::cerr << "[BBS_CPU_FALLBACK] reason="
                               << (!result.gpu_error.empty() ? result.gpu_error :
@@ -241,6 +254,10 @@ public:
         std::cout << "[Localize] Execution time: " << bbs3d_ptr->get_elapsed_time() << "[msec] " << std::endl;
         std::cout << "[Localize] Score: " << bbs3d_ptr->get_best_score() << std::endl;
 
+        if (is_cancelled()) {
+            std::cout << "[BBS_CANCELLED] backend=" << backend_ << std::endl;
+            return false;
+        }
         if (!bbs3d_ptr->has_localized())
         {
             if (bbs3d_ptr->has_timed_out())
@@ -296,6 +313,7 @@ public:
     int timeout_msec;
 
 private:
+    std::atomic<bool> cancelled_{false};
     std::string backend_ = "cpu";
     bool fallback_cpu_ = true;
     std::string fallback_reason_;

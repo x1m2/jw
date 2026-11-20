@@ -187,6 +187,8 @@ void FastlioLocalizationNode::publish_odometry(
 }
 
 void FastlioLocalizationNode::publish_module_status(bool level) {
+  std::lock_guard<std::mutex> commit_lock(slam.relocation_commit_mutex);
+  if (stopping.load() || slam.relocalization->isCancelled()) return;
   // robot_msgs::ModuleStatus status;
   // status.header.frame_id = "LOCATION";
   // status.level = level;
@@ -314,7 +316,7 @@ bool FastlioLocalizationNode::load_last_pose(const PointCloudType::Ptr &scan) {
 }
 
 void FastlioLocalizationNode::sensor_data_process() {
-  if (stopping.load()) return;
+  if (stopping.load() || slam.relocalization->isCancelled()) return;
 
   if (!slam.frontend->sync_sensor_data()) return;
 
@@ -327,6 +329,7 @@ void FastlioLocalizationNode::sensor_data_process() {
     if (last_pose_record && load_last_pose(slam.frontend->measures->lidar)) {
       // only for restart!
     } else if (!slam.run_relocalization_thread) {
+      if (stopping.load() || slam.relocalization->isCancelled()) return;
       if (slam.relocalization_thread.joinable()) {
         slam.relocalization_thread.join();
         measures_cache.clear();
@@ -337,12 +340,19 @@ void FastlioLocalizationNode::sensor_data_process() {
       *cur_scan = *slam.frontend->measures->lidar;
       const V3D mean_acc = System::mean_acceleration(*slam.frontend->measures);
       const double lidar_beg_time = slam.frontend->measures->lidar_beg_time;
+      slam.run_relocalization_thread = true;
       slam.relocalization_thread =
           std::thread([this, cur_scan, lidar_beg_time, mean_acc]() {
-            if (slam.run_relocalization(cur_scan, lidar_beg_time, mean_acc)) {
-              // Report completion even when offline playback is paused.
-              publish_module_status(true);
+            try {
+              if (slam.run_relocalization(cur_scan, lidar_beg_time, mean_acc)) {
+                // Report completion even when offline playback is paused.
+                publish_module_status(true);
+              }
+            } catch (const std::exception &error) {
+              RCLCPP_ERROR(get_logger(), "Relocalization worker failed: %s", error.what());
             }
+            // Set only after publication: the sensor callback may join this thread.
+            slam.run_relocalization_thread = false;
           });
     }
     // publish_module_status(slam.frontend->measures->lidar_end_time,
@@ -871,6 +881,8 @@ FastlioLocalizationNode::~FastlioLocalizationNode() {
 }
 
 void FastlioLocalizationNode::requestStop() {
+  // Notify the BBS search before stopping callbacks.
+  slam.requestStop();
   if (stopping.exchange(true)) return;
   if (timer) timer->cancel();
 }

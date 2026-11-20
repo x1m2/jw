@@ -9,7 +9,8 @@ struct BbsBenchmarkAccess {
  static double threshold(const BBS3D& b){return b.score_threshold_percentage_;}
  static bool timeout_enabled(const BBS3D& b){return b.use_timeout_;}
  static int timeout_ms(const BBS3D& b){return int(b.timeout_duration_.count());}
- static void publish(BBS3D& b,bool success,bool timeout,int score,double ms,const Eigen::Matrix4d& pose){
+ static void publish(BBS3D& b,bool success,bool timeout,int score,double ms,const Eigen::Matrix4d& pose,bool cancelled=false){
+  b.has_cancelled_=cancelled;
   b.has_localized_=success;b.has_timed_out_=timeout;b.best_score_=success?score:0;b.elapsed_time_=ms;
   if(success)b.global_pose_=pose;
  }

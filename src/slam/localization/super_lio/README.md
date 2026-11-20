@@ -106,3 +106,9 @@ launch 默认 `runtime_profile:=test`，自动启动算法；`platform` 模式�
 使用 Super-LIO 时，改为 `/superlio_localization_worker/set_state`，并启动 Super-LIO Worker 的 platform 模式。
 
 上游项目：https://github.com/Liansheng-Wang/Super-LIO （GPLv3，见 LICENSE）。
+
+### BBS 重定位取消
+
+Worker STOP 将取消标志传入 CPU/OpenCL BBS 搜索，退出后丢弃结果，不再精配准或重试。
+销毁实例前等待后台 future；已提交的 OpenCL 批次需返回后退出。
+部署时需配套重编译 BBS 库和定位节点。

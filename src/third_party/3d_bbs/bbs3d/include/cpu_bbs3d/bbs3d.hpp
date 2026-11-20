@@ -5,6 +5,7 @@
 #include <queue>
 #include <memory>
 #include <chrono>
+#include <functional>
 #include <Eigen/Dense>
 
 #include <discrete_transformation/discrete_transformation.hpp>
@@ -79,6 +80,12 @@ public:
 
   bool has_localized() { return has_localized_; }
 
+  // Install before starting a search. The callback must be thread-safe and must
+  // remain valid until all scoring threads have returned; never replace it in flight.
+  void set_cancel_check(std::function<bool()> check) { cancel_check_ = std::move(check); }
+  bool cancel_requested() const { return cancel_check_ && cancel_check_(); }
+  bool has_cancelled() const { return has_cancelled_; }
+
   void localize();
 
   // pcd iof
@@ -105,6 +112,8 @@ private:
     const std::vector<Eigen::Vector3d>& points);
 
 private:
+  std::function<bool()> cancel_check_;
+  bool has_cancelled_ = false;
   Eigen::Matrix4d global_pose_;
   bool has_timed_out_, has_localized_;
   double elapsed_time_;

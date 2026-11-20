@@ -156,3 +156,12 @@ I sincerely appreciate the authors for generously sharing their public code.
 [hdl_global_localization](https://github.com/koide3/hdl_global_localization)  
 [cartographer](https://github.com/cartographer-project/cartographer)  
 [TEASER-plusplus](https://github.com/MIT-SPARK/TEASER-plusplus)   
+
+## Cooperative cancellation
+
+Install a thread-safe `cpu::BBS3D::set_cancel_check()` callback before searching
+and keep its captured state valid until the search returns. CPU and OpenCL host
+searches check it during candidate generation, scoring and branching. Submitted
+OpenCL batches finish before returning. Cancelled searches have no valid pose;
+check `has_cancelled()` or `SearchResult::cancelled`. Rebuild dependent binaries
+when updating this library.

@@ -13,11 +13,11 @@ namespace LI2Sup{
 class SuperLIOReLoc : public SuperLIO {
 public:
   SuperLIOReLoc(){};
-  ~SuperLIOReLoc(){};
+  ~SuperLIOReLoc() override;
 
   void init() override;
   bool process() override;
-  void requestStop() { stopping_ = true; }
+  void requestStop();
 
 private:
   struct RelocTaskResult

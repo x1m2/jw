@@ -1,5 +1,6 @@
 #pragma once
 #include <Eigen/Core>
+#include <functional>
 
 template <typename T>
 class DiscreteTransformation {
@@ -34,13 +35,15 @@ public:
     return (translation * yawAngle * pitchAngle * rollAngle).matrix();
   }
 
-  void branch(std::vector<DiscreteTransformation>& b, const int child_level, const int v_rate, const Eigen::Vector3i& num_division) {
+  void branch(std::vector<DiscreteTransformation>& b, const int child_level, const int v_rate, const Eigen::Vector3i& num_division,
+              const std::function<bool()>& should_stop = {}) {
     for (int i = 0; i < v_rate; i++) {
       for (int j = 0; j < v_rate; j++) {
         for (int k = 0; k < v_rate; k++) {
           for (int l = 0; l < num_division.x(); l++) {
             for (int m = 0; m < num_division.y(); m++) {
               for (int n = 0; n < num_division.z(); n++) {
+                if (should_stop && should_stop()) return;
                 b.emplace_back(DiscreteTransformation(
                   0,
                   child_level,
@@ -58,8 +61,10 @@ public:
     }
   }
 
-  std::vector<DiscreteTransformation> branch(const int child_level, const int v_rate, const Eigen::Vector3i& num_division) {
+  std::vector<DiscreteTransformation> branch(const int child_level, const int v_rate, const Eigen::Vector3i& num_division,
+              const std::function<bool()>& should_stop = {}) {
     std::vector<DiscreteTransformation> b;
+    if (should_stop && should_stop()) return b;
     b.reserve(v_rate * v_rate * v_rate * num_division.x() * num_division.y() * num_division.z());
     for (int i = 0; i < v_rate; i++) {
       for (int j = 0; j < v_rate; j++) {
@@ -67,6 +72,7 @@ public:
           for (int l = 0; l < num_division.x(); l++) {
             for (int m = 0; m < num_division.y(); m++) {
               for (int n = 0; n < num_division.z(); n++) {
+                if (should_stop && should_stop()) return b;
                 b.emplace_back(DiscreteTransformation(
                   0,
                   child_level,

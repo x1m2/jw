@@ -3,6 +3,8 @@
 #include <omp.h>
 
 #include <thread>
+#include <atomic>
+#include <mutex>
 
 #include "Relocalization.hpp"
 #include "frontend/FastlioOdometry.hpp"
@@ -96,20 +98,30 @@ class System {
   bool run_relocalization(PointCloudType::Ptr scan,
                           const double &lidar_beg_time,
                           const V3D &mean_acc) {
-    run_relocalization_thread = true;
+    if (relocalization->isCancelled()) {
+      return false;
+    }
     if (!system_state_vaild) {
       Eigen::Matrix4d imu_pose;
       if (relocalization->run(scan, imu_pose, lidar_beg_time, mean_acc)) {
-        frontend->reset_state(imu_pose);
-        system_state_vaild = true;
+        std::lock_guard<std::mutex> lock(relocation_commit_mutex);
+        if (!relocalization->isCancelled()) {
+          frontend->reset_state(imu_pose);
+          system_state_vaild = true;
+        }
       } else {
 #ifdef DEDUB_MODE
-        frontend->reset_state(imu_pose);
+        std::lock_guard<std::mutex> lock(relocation_commit_mutex);
+        if (!relocalization->isCancelled()) frontend->reset_state(imu_pose);
 #endif
       }
     }
-    run_relocalization_thread = false;
-    return system_state_vaild;
+    return !relocalization->isCancelled() && system_state_vaild.load();
+  }
+
+  void requestStop() {
+    std::lock_guard<std::mutex> lock(relocation_commit_mutex);
+    relocalization->requestCancel();
   }
 
   static V3D mean_acceleration(const MeasureCollection &measures) {
@@ -123,8 +135,9 @@ class System {
 
 
  public:
-  bool system_state_vaild = false;  // true: system ok
-  bool run_relocalization_thread = false;
+  std::mutex relocation_commit_mutex;
+  std::atomic<bool> system_state_vaild{false}; // true: system ok
+  std::atomic<bool> run_relocalization_thread{false};
   std::thread relocalization_thread;
 
   /*** module ***/

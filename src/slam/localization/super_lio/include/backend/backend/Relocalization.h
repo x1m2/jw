@@ -25,6 +25,12 @@ class Relocalization
 public:
     Relocalization();
     ~Relocalization();
+    void requestCancel() {
+        std::lock_guard<std::mutex> lock(cancellation_mutex_);
+        bbs3d.request_cancel();
+    }
+    std::mutex &cancellationMutex() { return cancellation_mutex_; }
+    bool isCancelled() const { return bbs3d.is_cancelled(); }
     void set_extrinsic(const V3D &transl, const M3D &rot);
     bool load_prior_map(const PointCloudType::Ptr &global_map);
     bool load_keyframe_descriptor(const std::string &path);
@@ -64,6 +70,7 @@ private:
     bool run_scan_context(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, double &score);
     bool run_manually_set(PointCloudType::Ptr scan, Eigen::Matrix4d &rough_mat, const Eigen::Matrix4d &lidar_ext, const V3D &mean_acc, double &score);
 
+    std::mutex cancellation_mutex_;
     bool prior_pose_inited = false;
 
     std::mutex manual_pose_mutex;

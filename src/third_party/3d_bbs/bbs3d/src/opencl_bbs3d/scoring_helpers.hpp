@@ -17,17 +17,21 @@ inline std::vector<int> correct(cpu::BBS3D& b,const std::vector<Transform>& ts,c
  std::vector<int> corrected(ts.size());int bad_masks=0;
 #pragma omp parallel for num_threads(6) reduction(+:bad_masks)
  for(int i=0;i<int(ts.size());++i){
+  if(b.cancel_requested())continue;
   int score=gpu.values[i][0];
   if(gpu.values[i][2]){
    std::vector<Eigen::Vector3d> uncertain;uncertain.reserve(gpu.values[i][2]);
    for(size_t word=0;word<gpu.words;++word){
+    if(b.cancel_requested())break;
     uint32_t bits=gpu.masks[i*gpu.words+word];
     while(bits){int bit=__builtin_ctz(bits);size_t p=word*32+bit;if(p<points.size())uncertain.push_back(points[p]);else bad_masks++;bits&=bits-1;}
    }
+   if(b.cancel_requested())continue;
    if(uncertain.size()!=size_t(gpu.values[i][2]))bad_masks++;
    score=score-gpu.values[i][1]+Access::score(b,ts[i],a[ts[i].level],uncertain);
   }corrected[i]=score;
  }
+ if(b.cancel_requested())return corrected;
  if(bad_masks)throw std::runtime_error("Invalid boundary mask");return corrected;
 }
 

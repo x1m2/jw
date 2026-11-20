@@ -20,7 +20,7 @@ struct SearchOptions {
  std::string kernel_path; // Empty selects the built-in kernel.
 };
 struct SearchResult {
- bool completed=false,success=false,timed_out=false,resource_limit=false,gpu_available=false,gpu_eligible=false;
+ bool completed=false,success=false,timed_out=false,cancelled=false,resource_limit=false,gpu_available=false,gpu_eligible=false;
  int score=0,threshold=0;
  Eigen::Matrix4d pose=Eigen::Matrix4d::Identity();
  double search_ms=0,scan_setup_ms=0,cpu_score_ms=0,gpu_score_ms=0,gpu_kernel_ms=0,boundary_ms=0,verify_ms=0;

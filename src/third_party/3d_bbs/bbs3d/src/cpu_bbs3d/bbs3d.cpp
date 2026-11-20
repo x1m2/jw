@@ -61,8 +61,10 @@ void BBS3D::set_trans_search_range(const Eigen::Vector3d& min_xyz, const Eigen::
 }
 
 void BBS3D::calc_angular_info(std::vector<AngularInfo>& ang_info_vec) {
+  if (cancel_requested() || src_points_.empty()) return;
   double max_norm = src_points_[0].norm();
   for (const auto& point : src_points_) {
+    if (cancel_requested()) return;
     double norm = point.norm();
     if (norm > max_norm) {
       max_norm = norm;
@@ -71,6 +73,7 @@ void BBS3D::calc_angular_info(std::vector<AngularInfo>& ang_info_vec) {
 
   const int max_level = voxelmaps_ptr_->get_max_level();
   for (int i = max_level; i >= 0; i--) {
+    if (cancel_requested()) return;
     const double cosine = 1 - (std::pow(voxelmaps_ptr_->voxelmaps_res_[i], 2) / std::pow(max_norm, 2)) * 0.5;
     double ori_res = std::acos(std::max(cosine, -1.0));
     ori_res = std::floor(ori_res * 10000) / 10000;
@@ -107,6 +110,7 @@ void BBS3D::calc_angular_info(std::vector<AngularInfo>& ang_info_vec) {
 }
 
 std::vector<DiscreteTransformation<double>> BBS3D::create_init_transset(const AngularInfo& init_ang_info) {
+  if (cancel_requested()) return {};
   const int init_transset_size = (init_tx_range_.second - init_tx_range_.first + 1) * (init_ty_range_.second - init_ty_range_.first + 1) *
                                  (init_tz_range_.second - init_tz_range_.first + 1) * (init_ang_info.num_division.x()) *
                                  (init_ang_info.num_division.y()) * (init_ang_info.num_division.z());
@@ -114,6 +118,7 @@ std::vector<DiscreteTransformation<double>> BBS3D::create_init_transset(const An
   const int max_level = voxelmaps_ptr_->get_max_level();
 
   std::vector<DiscreteTransformation<double>> transset;
+  if (cancel_requested()) return transset;
   transset.reserve(init_transset_size);
   for (int tx = init_tx_range_.first; tx <= init_tx_range_.second; tx++) {
     for (int ty = init_ty_range_.first; ty <= init_ty_range_.second; ty++) {
@@ -121,6 +126,7 @@ std::vector<DiscreteTransformation<double>> BBS3D::create_init_transset(const An
         for (int roll = 0; roll < init_ang_info.num_division.x(); roll++) {
           for (int pitch = 0; pitch < init_ang_info.num_division.y(); pitch++) {
             for (int yaw = 0; yaw < init_ang_info.num_division.z(); yaw++) {
+              if (cancel_requested()) return {};
               transset.emplace_back(DiscreteTransformation<double>(0, max_level, tx, ty, tz, roll, pitch, yaw));
             }
           }
@@ -139,12 +145,14 @@ void BBS3D::calc_score(
   const std::vector<Eigen::Vector4i>& buckets,
   const int max_bucket_scan_count,
   const std::vector<Eigen::Vector3d>& points) {
+  if (cancel_requested()) return;
   const int num_buckets = buckets.size();
   const double inv_res = 1.0 / trans_res;
   Eigen::Transform<double, 3, Eigen::Affine> transform;
   transform = trans.create_matrix(trans_res, rpy_res, min_rpy);
 
   for (int i = 0; i < points.size(); i++) {
+    if ((i & 63) == 0 && cancel_requested()) return;
     const Eigen::Vector3d transed_point = transform * points[i];
     const Eigen::Vector3i coord = (transed_point.array() * inv_res).floor().cast<int>();
     const std::uint32_t hash = (coord[0] * 73856093) ^ (coord[1] * 19349669) ^ (coord[2] * 83492791);
@@ -172,8 +180,10 @@ void BBS3D::localize() {
   const auto start_time = std::chrono::system_clock::now();
   const auto time_limit = start_time + timeout_duration_;
   has_timed_out_ = false;
-
+  has_cancelled_ = false;
+  has_localized_ = false;
   best_score_ = 0;
+
   const int score_threshold = std::floor(src_points_.size() * score_threshold_percentage_);
   int best_score = score_threshold;
   DiscreteTransformation<double> best_trans(best_score);
@@ -195,9 +205,13 @@ void BBS3D::localize() {
     calc_score(init_transset[i], init_trans_res, rpy_res, min_rpy, top_buckets, max_bucket_scan_count, src_points_);
   }
 
-  std::priority_queue<DiscreteTransformation<double>> trans_queue(init_transset.begin(), init_transset.end());
+  std::priority_queue<DiscreteTransformation<double>> trans_queue;
+  if (!cancel_requested()) {
+    trans_queue = decltype(trans_queue)(init_transset.begin(), init_transset.end());
+  }
 
   while (!trans_queue.empty()) {
+    if (cancel_requested()) break;
     if (use_timeout_ && std::chrono::system_clock::now() > time_limit) {
       has_timed_out_ = true;
       break;
@@ -219,7 +233,8 @@ void BBS3D::localize() {
       const Eigen::Vector3i& num_division = ang_info_vec[child_level].num_division;
       const Eigen::Vector3d& rpy_res = ang_info_vec[child_level].rpy_res;
       const Eigen::Vector3d& min_rpy = ang_info_vec[child_level].min_rpy;
-      auto children = trans.branch(child_level, static_cast<int>(v_rate_), num_division);
+      auto children = trans.branch(child_level, static_cast<int>(v_rate_), num_division,
+                                   [this]() { return cancel_requested(); });
 
       const auto& buckets = voxelmaps_ptr_->multi_buckets_[child_level];
       double trans_res = voxelmaps_ptr_->voxelmaps_res_[child_level];
@@ -230,6 +245,7 @@ void BBS3D::localize() {
       }
 
       for (const auto& child : children) {
+        if (cancel_requested()) break;
         // pruning
         if (child.score < best_score) {
           continue;
@@ -245,7 +261,8 @@ void BBS3D::localize() {
   elapsed_time_ = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - start_time).count() / 1e6;
 
   // Not localized
-  if (best_score == score_threshold || has_timed_out_) {
+  has_cancelled_ = cancel_requested();
+  if (best_score == score_threshold || has_timed_out_ || has_cancelled_) {
     has_localized_ = false;
     return;
   }
