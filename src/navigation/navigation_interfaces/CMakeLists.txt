@@ -10,6 +10,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AvoidanceState.msg"
+  "msg/ObstacleStopStatus.msg"
+  "msg/PlannerMotionMode.msg"
   "msg/EdgePolicy.msg"
   "msg/PathWithPolicy.msg"
   "msg/Bspline.msg"

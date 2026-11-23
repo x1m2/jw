@@ -50,12 +50,11 @@
     hard_stop_clear_delay: 0.30
     slowdown_clear_delay: 0.50
 
-    directional_release_enabled: false
-    directional_center_half_width: 0.20
-    directional_escape_velocity_threshold: 0.05
-    center_lateral_escape_enabled: false
-    center_escape_max_forward_velocity: 0.02
-    center_escape_max_angular_velocity: 0.10
+    # STOP仅检测净空、反馈状态并校验SCAN速度；脱困动作流程由SCAN负责。
+    planner_velocity_guard_enabled: true  # 允许校验并放行规划器横移/后退模式；没有模式消息不自动横移。
+    planner_velocity_limit: 0.25  # 规划器横移/后退速度上限(m/s)；指令+y向右、-y向左。
+    clearance_check_distance: 0.50 # 从目标方向停止区外边界再向外预检的距离(m)，不含停止区。
+    planner_motion_mode_timeout_sec: 0.30 # 模式源时间和接收心跳超时(s)，模式话题须持续发布。
 
     lidar_timeout_sec: 0.30
     command_timeout_sec: 0.30

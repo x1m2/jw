@@ -13,11 +13,57 @@ bool ObstacleStop::sourceRequired(unsigned source) const {
       [source](const DetectionZoneConfig &zone) { return zone.enabled && (zone.sources & source); });
 }
 
+ObstacleStop::DirectionPrecheck ObstacleStop::directionPrecheck(std::size_t direction) const {
+  DirectionPrecheck result;
+  const auto &zone = config_.zones[direction];
+  const auto &guard = config_.velocity_guard;
+  const auto box = clearanceCheckRectangle(direction, zone_runtime_[direction].hard_box,
+      config_.robot_width, config_.robot_length, guard.check_distance);
+  // Refuse a precheck that is silently cropped by grid/range/angle filters.
+  const double half_grid_x = config_.grid_width * config_.grid_resolution * 0.5;
+  const double half_grid_y = config_.grid_height * config_.grid_resolution * 0.5;
+  if (!zone.enabled || guard.check_distance <= 0.0 ||
+      box.x_min <= -half_grid_x || box.x_max >= half_grid_x ||
+      box.y_min <= -half_grid_y || box.y_max >= half_grid_y) return result;
+  for (double x : {box.x_min, std::clamp(0.0, box.x_min, box.x_max), box.x_max})
+    for (double y : {box.y_min, std::clamp(0.0, box.y_min, box.y_max), box.y_max})
+      if (!passesDetectionFilters(x, y, (config_.min_height + config_.max_height) * 0.5))
+        return result;
+  const auto size = static_cast<std::size_t>(config_.grid_width * config_.grid_height);
+  if (((zone.sources & 1U) && front_height_grid_.size() != size) ||
+      ((zone.sources & 2U) && rear_height_grid_.size() != size)) return result;
+  const double clearance = gridClearance(direction, box,
+      guard.check_distance, config_.grid_width, config_.grid_height,
+      config_.grid_resolution, config_.min_points_per_cell, zone.obstacle_cell_threshold,
+      zone.sources & 1U ? &front_height_grid_ : nullptr,
+      zone.sources & 2U ? &rear_height_grid_ : nullptr, result.occupied_cells);
+  // Destination precheck uses that side's configured occupied-cell threshold.
+  result.valid = true;
+  // Clearance is already measured beyond the stop zone; do not subtract it again.
+  result.available_distance = clearance;
+  return result;
+}
+
+void ObstacleStop::refreshDirectionPrechecks(bool sensors_valid) {
+  if (!sensors_valid || !config_.planner_velocity_guard_enabled) {
+    direction_prechecks_ = {};
+    prechecks_dirty_ = true;
+    return;
+  }
+  if (!prechecks_dirty_) return;
+  // Only REAR, LEFT, RIGHT have prechecks; FRONT stays unused.
+  for (std::size_t direction = 1; direction < 4; ++direction)
+    direction_prechecks_[direction] = directionPrecheck(direction);
+  prechecks_dirty_ = false;
+}
+
 void ObstacleStop::initializeGridLookup() {
   const auto size = static_cast<std::size_t>(config_.grid_width * config_.grid_height);
   for (auto &mask : detection_masks_) mask.assign(size, kFree);
   zone_runtime_ = {};
   occupancy_dirty_ = true;
+  direction_prechecks_ = {};
+  prechecks_dirty_ = true;
   for (std::size_t i = 0; i < config_.zones.size(); ++i) {
     const auto &zone = config_.zones[i];
     if (!zone.enabled) continue;
@@ -136,11 +182,11 @@ void ObstacleStop::processObstacleGrid(std::vector<HeightCell> &grid,
     if (rear_lidar) {
       rear_has_lidar_ = true;
       rear_lidar_valid_ = input_valid;
-      rear_last_lidar_time_ = node_->now();
+      rear_lidar_receive_steady_ = steadySeconds();
     } else {
       has_lidar_ = true;
       lidar_valid_ = input_valid;
-      last_lidar_time_ = node_->now();
+      front_lidar_receive_steady_ = steadySeconds();
     }
   }
   occupancy_dirty_ = true;
@@ -151,6 +197,9 @@ void ObstacleStop::processObstacleGrid(std::vector<HeightCell> &grid,
 
 void ObstacleStop::refreshZoneOccupancy(const std::array<bool, 2> &usable) {
   if (!occupancy_dirty_ && usable == cached_usable_) return;
+  // New cloud, changed source validity or a rebuilt configuration invalidates
+  // both occupancy and clearance. The control loop refreshes clearance once.
+  prechecks_dirty_ = true;
   const auto size = static_cast<std::size_t>(config_.grid_width * config_.grid_height);
   visual_height_grid_.assign(size, HeightCell{});
   visual_occupied_.clear();

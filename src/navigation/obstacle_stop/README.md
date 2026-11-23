@@ -93,7 +93,7 @@ left/right不声明该参数、不建立减速区，也不执行减速判断，�
 若给侧面配置`slowdown_distance`（包括0）会明确报错。
 区域基准由方向自动确定，不再配置`origin`；`start_distance`及旧的前后起始距离参数均已移除，
 不允许通过启动参数或地图区域覆盖改变0起点。
-启用方向引用不存在的后雷达、未知来源、非法距离或阈值时初始化失败，不会静默忽略配置。
+机型配置须确保启用方向引用有效雷达来源，并正确设置距离和占用格阈值。
 关闭的方向不发布区域框，不参与速度判断或点云显示裁剪；没有被启用方向引用的雷达不参与数据时效门控。
 
 ## 过滤与2.5D占用
@@ -118,20 +118,65 @@ Livox CustomMsg和PointCloud2均始终执行`base_link`高度过滤，UWB跟随�
 
 ## 速度策略与状态
 
-第一版机型配置均关闭方向脱困：
+普通停障与减速规则如下；规划器发布横移/后退模式时按后文审核速度：
 
-- 任一启用方向停止区触发：所有最终速度分量归零，`/obstacle_stop/stopped=true`。
+- 默认任一启用方向停止区触发：所有最终速度分量归零（规划器横移/后退模式见下文）。
 - 无停止区触发、任一减速区触发：linear.x/y乘`linear_velocity_factor`，angular.z乘`angular_velocity_factor`。
 - 停止区清空后等待`hard_stop_clear_delay`再解除停止；只有前后方向保留减速及`slowdown_clear_delay`清障过渡，左右停止解除后直接恢复正常速度。
 - 任一被引用的雷达尚未到达、超时、无效或原始空帧，以及规划速度超时：最终速度归零。
+- 雷达、规划速度和模式的接收心跳均使用本地单调时钟；即使ROS `/clock`暂停或跳变，接收超时仍生效。`lidar_timeout_sec`、`command_timeout_sec`和`planner_motion_mode_timeout_sec`的含义及默认值不变。模式消息`stamp`的源时间检查仍使用ROS时钟。
 - 外部急停或姿态封锁：最终速度归零；姿态封锁收到true时立即补发零速度。
 - `/obstacle_stop/enabled=false`透传规划速度，仍保留急停、姿态及指令超时保护。
 
-`/obstacle_stop/active`表示当前是否处于保护状态；`/obstacle_stop/stopped`仅在障碍停止状态为true，
-不把减速、传感器故障或姿态封锁当作障碍停止。
-保留`directional_release_enabled`用于旧的前后区左/中/右脱困策略；开启后前后区按子区阈值判断，
-左右方向仍按完整区域保守停车，不支持侧向区域放行。默认关闭。
-终端`[OBSTACLE_ZONES]`日志每秒最多一次打印前后停止/减速占用格数以及左右停止占用格数。
+`planner_velocity_guard_enabled`用于**规划器横移/后退模式的最终速度校验**。STOP不自主选择方向、等待或生成横移速度。SCAN planner负责动作距离、导航暂停、超时、重试和动作结束后的局部重规划。本次只接入STOP；旧规划器未发布模式时只能正常行驶/停障，不会自动横移。
+
+参数统一使用规划器速度保护和净空检测命名，横移及后退共用预检和安全限速参数。部署配置需使用下表中的新参数名。STOP不保存动作开始时间、方向锁或中断锁止，不决定启动、结束、持续时间及重试；这些流程全部由SCAN负责。
+
+### 状态及模式接口
+
+- `/obstacle_stop/status`：`navigation_interfaces/ObstacleStopStatus`，包含`bool[4] stop_triggered`、`bool[4] move_allowed`和`float32[4] available_distance`三个固定数组，每控制周期发布，可靠、volatile、队列1。数组顺序前、后、左、右；SCAN按接收时间判断超时，超时必须停车。
+- `stop_triggered`是各已启用停止区的原始阈值结果。`move_allowed`是当前方向的环境安全许可，不代表动作请求或命令确认。雷达失效、急停、姿态保护或STOP关闭时全部许可为false；停止工作前也发布全部false。前向许可沿用普通四区停车及清空等待，不做前向预检；后退、左右许可共用实际速度门的开关、区域启用、目标停止区与净空判断。许可与动作历史无关，不要求原侧障碍触发；模式/速度的新鲜度和纯运动分量仍需单独审核。可用距离通过状态数组反馈，数量、阈值和拒绝原因留在日志中。
+- `available_distance`与其他数组保持前/后/左/右对齐，但前向索引0仅占位，始终为0，即使前向`move_allowed=true`也不表示提供前向距离。只有后、左、右三个方向提供距离，单位为米，从停止区外侧的预检内边界起算，最大为`clearance_check_distance`。这三个方向`move_allowed=false`时距离严格为0，为true时给出正距离。有效空预检返回完整预检距离，达到占用阈值时按最近格近边界保守计算。距离是当前观测下的上限，SCAN须持续读取更新，不能按单帧距离直接执行到底。
+- `/scan_planner/motion_mode`：`navigation_interfaces/PlannerMotionMode`，可靠、volatile、队列1。消息仅含`builtin_interfaces/Time stamp`和`uint8 mode`；四种模式为`NORMAL=0`、`LATERAL_LEFT=1`、`LATERAL_RIGHT=2`、`BACKWARD=3`，方向固定相对`base_link`，不传`frame_id`。模式持续发布，每次更新`stamp`并与STOP使用同一ROS时钟；源时间与本地单调时钟接收心跳分别受`planner_motion_mode_timeout_sec`约束。
+- `/cmd_vel_planned`仍为Twist，由规划器持续发布。模式改变后，STOP须再收到一条新的速度消息才允许输出，避免把切换前缓存的速度用于新模式。没有申请编号或确认握手。
+- 首次尚未收到模式消息时，兼容旧规划器的普通速度门。收到过模式后，模式超时、非法值或无效时间戳均停车，**不能自动退回NORMAL**；重新发布新鲜NORMAL恢复普通判断。
+
+### 速度门规则
+
+- NORMAL或尚未接入模式：沿用普通四向停障、解除延迟、减速和开关逻辑。
+- LATERAL_RIGHT：只允许`linear.y >= 0`的纯横移；LATERAL_LEFT只允许`linear.y <= 0`。本底盘指令+y向右、−y向左；点云几何仍为ROS base_link的+y左、−y右。`linear.x/z`、`angular.x/y/z`须为0，所有分量必须有限。
+- 横移模式要求停障开关和`planner_velocity_guard_enabled`开启、左右区同时启用、雷达有效且速度与模式都新鲜。目标侧停止区触发、预检无效或净空耗尽时归零。不要求原侧障碍触发；前后停止区及其解除延时不阻止纯横移。
+- BACKWARD：前后及左右区均启用、后区和两侧均未触发；只允许`linear.x <= 0`且其他分量为0。不要求前区触发。后方预检从后停止区外边缘与车尾中更靠后的边界继续向后扩展，宽度为完整车宽；后区阈值用于预检，净空不再扣除停止距离，与横移共用固定安全限速。侧面停障仍阻止后退。
+- 只限幅规划器发来的速度，绝不自行生成非零速度：环境许可时使用固定上限`planner_velocity_limit`，不按剩余净空动态减速；目标停止区触发、预检无效或剩余净空不足时停车。正常减速由SCAN负责。规划器发0就输出0。
+- 不再检查首次启动的最小距离，不计动作持续时间，也不锁定恢复方向或锁止中断后的动作。SCAN持续发送新鲜且匹配的模式与速度，STOP每周期只依据当前环境及保护状态决定放行；模式切换仍须收到新的速度消息。保护解除后无需先回NORMAL复位。
+- 急停、姿态封锁、指令/模式超时、传感器异常始终输出零速。退出横移时规划器应先发零速并发布NORMAL，再从实际位姿重新规划；新轨迹成功前保持零速。STOP不决定何时重规划。
+
+### 运动方向净空预检
+
+四个普通停止区始终实时检测。雷达有效且`planner_velocity_guard_enabled`开启时，仅计算后、左、右三个方向的净空，不计算前向净空。前向状态沿用NORMAL停障规则，距离固定为0；三个预检方向的许可和距离每控制周期向SCAN反馈。净空结果在点云未更新时复用；新点云、雷达可用性变化或区域配置切换均使缓存失效。雷达失效时清空预检结果。模式、速度、急停和姿态保护仍每控制周期重新审核，不缓存放行结论。区域关闭、预检超出有效覆盖或净空不足时，对应许可为false。
+
+- 从目标方向停止区外边界再向外预检`clearance_check_distance`（默认0.50 m），不含停止区本身。侧向10 cm停止区加外侧50 cm预检，总覆盖车身外60 cm；横移预检覆盖侧区全长（包括前后停止区旁的角部），不额外前后扩展。四向普通停止区仍独立检测内侧障碍。
+- 使用该侧的雷达来源、高度/范围/角度过滤及`min_points_per_cell`。两路看到同一XY格只计1格，预检占用格数达到目标方向`zones.left/right/rear.obstacle_cell_threshold`才用最近占用格限制距离，不足阈值按完整预检宽度计算。
+- 预检格心必须落在停止区外的预检框内；位于共享内边界的格子归普通停止区，不重复计入预检。最近距离按有效格子的近边界保守计算。
+- 可用距离从预检内边界起算，等于min(预检距离, 最近达到阈值的占用格近边界距离)，负值取0。有效空预检按完整0.50 m计算，不再扣除停止距离；许可方向的距离通过`available_distance`反馈给SCAN，也用于STOP内部许可判断和日志，不用于动态限速。SCAN须自行配置动作距离和时间上限。
+- 预检框超出内部栅格、范围/角度过滤时标记无效。有效空预检只表示过滤点云未发现障碍，不识别遮挡或认证自由空间。
+
+| STOP参数 | 代码默认值 | 含义 |
+|---|---:|---|
+| `planner_velocity_guard_enabled` | false | 允许规划器横移/后退速度校验，机型YAML开启 |
+| `planner_velocity_limit` | 0.05 m/s | 横移/后退速度上限，机型YAML为0.25 |
+| `clearance_check_distance` | 0.50 m | 后/左/右停止区外额外预检距离，不含停止区 |
+| `planner_motion_mode_timeout_sec` | 0.30 s | 模式源时间和接收心跳超时 |
+
+STOP不提供动作计时、最小启动距离、等待或位姿进度参数，部署配置中应移除旧的动作流程参数。位姿订阅仅用于区域配置切换；动作距离、计时、方向选择、重试及重规划全部由SCAN负责。
+
+- `[STOP_EVENT]`：状态、拒绝原因或四向触发结果变化时立即打印；包含模式、原因和四向停止区占用格数/阈值。相同状态下原因改变也会打印。
+- `[STOP_STATUS]`：有占用格、保护状态或横移/后退指令时，每秒最多一次；打印前/后/左/右停止格数/阈值、前后减速格数/阈值、方向许可、前后雷达状态，以及规划速度和最终速度。雷达状态区分`unused/waiting/timeout/invalid/ok`。
+- `[STOP_CLEARANCE]`：与周期摘要一起按后/左/右(B/L/R)打印，不打印前向预检。`valid`为预检有效性，`cells`为预检占用格数/阈值，`measured`为停止区外侧测得的净空（m，无效时为-1），`available`与状态消息距离数组一致，不允许方向统一为0。
+
+日志中的`cells`均为去重XY占用格数，不是原始点数；每格至少达到`min_points_per_cell`才算占用。正常无障碍且无横移/后退指令时不持续打印周期摘要。周期日志使用单调时钟限频。
+
+部署时先构建/发布`navigation_interfaces`的新消息，再构建STOP。SCAN planner本次未接入；下一步需订阅status、发布带时间戳的motion_mode，并在横移前暂停旧轨迹、结束后重规划。
 
 ## ROS接口
 
@@ -143,8 +188,9 @@ Livox CustomMsg和PointCloud2均始终执行`base_link`高度过滤，UWB跟随�
 | `/emergency_stop` | Bool | 急停 |
 | `/navigation/posture_stop` | Bool | 姿态封锁 |
 | `/obstacle_stop/enabled` | Bool | 停障开关 |
+| `/obstacle_stop/status` | ObstacleStopStatus | 每周期四向停障、移动许可和可用距离（两个bool[4]及一个float32[4]数组） |
+| `/scan_planner/motion_mode` | PlannerMotionMode | 输入：NORMAL/左横移/右横移/后退模式及时间戳 |
 | `/cmd_vel` | Twist | 最终速度，可配置 |
-| `/obstacle_stop/active`、`/obstacle_stop/stopped` | Bool | 保护状态、障碍停止状态 |
 | `/obstacle_stop/detection_marker` | MarkerArray | 各启用方向的完整3D区域框、状态和占用格计数 |
 | `/obstacle_stop/occupied_columns` | MarkerArray | 去重后的2.5D高度柱 |
 | `/obstacle_stop/occupied_cells` | PointCloud2 | 占用格中心与统计字段 |

@@ -8,6 +8,8 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <memory>
+#include <navigation_interfaces/msg/obstacle_stop_status.hpp>
+#include <navigation_interfaces/msg/planner_motion_mode.hpp>
 #include <mutex>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
@@ -22,7 +24,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
-#include "obstacle_stop/directional_obstacle_policy.hpp"
+#include "obstacle_stop/planner_velocity_guard.hpp"
 #include "obstacle_stop/height_cell.hpp"
 #include "obstacle_stop/detection_zone.hpp"
 
@@ -50,9 +52,38 @@ class ObstacleStop {
     kClear,
     kObstacleSlowdown,
     kObstacleStop,
+    kPlannerMotion,
+    kPlannerMotionBlocked,
     kPostureStop,
     kEmergencyStop,
     kSensorFault,
+  };
+
+  struct ControlInputs {
+    geometry_msgs::msg::Twist planned;
+    navigation_interfaces::msg::PlannerMotionMode mode;
+    imu_stair_detector::Status stairs;
+    bool has_mode{false}, has_command{false};
+    bool command_fresh{false}, finite_command{false};
+    bool mode_fresh{false}, command_after_mode{false};
+    bool lidar_fresh{false}, lidar_valid{false};
+    bool hard_stop{false}, slowdown{false};
+    bool emergency_stop{false}, posture_stop{false}, enabled{true};
+    std::array<const char *, 2> lidar_status{"waiting", "waiting"};
+
+    bool sensorsValid() const { return lidar_fresh && lidar_valid; }
+    bool environmentReady() const {
+      return sensorsValid() && !emergency_stop && !posture_stop && enabled;
+    }
+    bool directionalMotion() const {
+      return has_mode && mode.mode != navigation_interfaces::msg::PlannerMotionMode::NORMAL;
+    }
+  };
+
+  struct ControlDecision {
+    geometry_msgs::msg::Twist velocity;
+    State state{State::kClear};
+    std::string reason{"clear"};
   };
 
   struct ObstacleStopConfig {
@@ -77,12 +108,9 @@ class ObstacleStop {
     double angular_velocity_factor{1.0};
     double hard_stop_clear_delay{0.30};
     double slowdown_clear_delay{0.50};
-    bool directional_release_enabled{false};
-    double directional_center_half_width{0.20};
-    double directional_escape_velocity_threshold{0.05};
-    bool center_lateral_escape_enabled{false};
-    double center_escape_max_forward_velocity{0.02};
-    double center_escape_max_angular_velocity{0.10};
+    bool planner_velocity_guard_enabled{false};
+    PlannerVelocityGuardConfig velocity_guard;
+    double planner_mode_timeout_sec{0.30};
 
     // 数据时效和调试参数。
     double lidar_timeout_sec{0.30};
@@ -137,6 +165,8 @@ class ObstacleStop {
   void applyRegionProfile(const RegionProfile *region);
   void plannedVelocityCallback(
       const geometry_msgs::msg::Twist::ConstSharedPtr message);
+  void plannerMotionModeCallback(
+      const navigation_interfaces::msg::PlannerMotionMode::ConstSharedPtr message);
   void emergencyStopCallback(const std_msgs::msg::Bool::ConstSharedPtr message);
   void postureStopCallback(const std_msgs::msg::Bool::ConstSharedPtr message);
   void obstacleStopEnabledCallback(
@@ -146,12 +176,28 @@ class ObstacleStop {
                            bool longitudinal_hard_stop, const rclcpp::Time &now);
   // 周期检查传感器、指令和障碍物状态，发布最终安全速度。
   void controlCallback();
+  ControlInputs readControlInputs();
+  ControlDecision evaluateVelocity(const ControlInputs &inputs,
+      const std::array<MotionPermission, 4> &permissions) const;
+  navigation_interfaces::msg::ObstacleStopStatus publishControlStatus(
+      const ControlInputs &inputs, const std::array<MotionPermission, 4> &permissions);
+  void logControlStatus(const ControlInputs &inputs, const ControlDecision &decision,
+      const navigation_interfaces::msg::ObstacleStopStatus &status);
   void publishZeroVelocity();
-  void logStateChange(State state, const std::string &reason);
   static const char *stateName(State state);
+  static double steadySeconds();
 
   // 点云变换、过滤与栅格占用统计（obstacle_stop_detection.cpp）。
   bool sourceRequired(unsigned source) const;
+  struct DirectionPrecheck {
+    bool valid{false};
+    std::size_t occupied_cells{0U};
+    double available_distance{-1.0};
+  };
+  DirectionPrecheck directionPrecheck(std::size_t direction) const;
+  void refreshDirectionPrechecks(bool sensors_valid);
+  std::array<MotionPermission, 4> directionPermissions(
+      const std::array<DirectionPrecheck, 4> &prechecks, bool healthy) const;
   void initializeGridLookup();
   void lidarCallback(
       const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr message);
@@ -205,6 +251,7 @@ class ObstacleStop {
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
       rear_pointcloud2_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr planned_cmd_sub_;
+  rclcpp::Subscription<navigation_interfaces::msg::PlannerMotionMode>::SharedPtr planner_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr posture_stop_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
@@ -212,8 +259,7 @@ class ObstacleStop {
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
       localization_pose_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr safe_cmd_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_active_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr obstacle_stopped_pub_;
+  rclcpp::Publisher<navigation_interfaces::msg::ObstacleStopStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
@@ -256,15 +302,19 @@ class ObstacleStop {
   std::vector<HeightCell> fused_height_grid_;
   bool occupancy_dirty_{true};
   std::array<bool, 2> cached_usable_{};
+  // Spatial results only; mode, command and global protections are checked live.
+  std::array<DirectionPrecheck, 4> direction_prechecks_{};
+  bool prechecks_dirty_{true};
   std::vector<HeightCell> visual_height_grid_;
   std::vector<std::size_t> visual_occupied_;
 
   // 回调与控制定时器可能并发访问以下状态。
   mutable std::mutex mutex_;
   geometry_msgs::msg::Twist planned_cmd_;
-  rclcpp::Time last_lidar_time_;
-  rclcpp::Time rear_last_lidar_time_;
-  rclcpp::Time last_command_time_;
+  // Receive heartbeats use a monotonic clock, independent of ROS /clock.
+  double front_lidar_receive_steady_{0.0};
+  double rear_lidar_receive_steady_{0.0};
+  double command_receive_steady_{0.0};
   rclcpp::Time hard_stop_clear_deadline_;
   rclcpp::Time slowdown_clear_deadline_;
   bool has_lidar_{false};
@@ -274,7 +324,16 @@ class ObstacleStop {
   bool has_command_{false};
   bool hard_stop_active_{false};
   bool slowdown_active_{false};
-  bool directional_escape_release_active_{false};
+  // Mode/command snapshots under mutex_; mode transitions require a new command.
+  navigation_interfaces::msg::PlannerMotionMode planner_mode_;
+  bool has_planner_mode_{false};
+  double planner_mode_receive_steady_{0.0};
+  std::uint64_t command_sequence_{0U}, mode_command_barrier_{0U};
+  // Log snapshots only; STOP does not track planner action progress.
+  std::string last_state_reason_;
+  std::array<bool, 4> last_stop_triggered_{};
+  double last_diagnostic_steady_{-1.0};
+  bool stopped_{false};
   bool emergency_stop_active_{false};
   bool posture_stop_active_{false};
   bool obstacle_stop_enabled_{true};

@@ -105,4 +105,18 @@ sudo systemctl enable --now uwb-aoa.service
 sudo systemctl disable --now uwb-aoa.service
 ```
 
-修改启动脚本后重启服务即可；移动部署目录后需重新运行服务安装脚本。
+source /opt/ros/humble/setup.bash
+source /home/jw/uwb_ws/install/setup.bash
+
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=/home/jw/dds/fastdds.xml
+
+# 重启发现服务，让新环境生效
+ros2 daemon stop
+ros2 daemon start
+
+# 查看 UWB 话题
+ros2 topic list | grep -Ei 'uwb|libAoa'
+
+# 查看 UWB 数据
+ros2 topic echo /libAoa_robot_publisher

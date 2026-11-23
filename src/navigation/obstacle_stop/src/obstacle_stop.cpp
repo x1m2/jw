@@ -9,6 +9,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <sstream>
 #include <utility>
 
 #include "obstacle_stop/region_profile_loader.hpp"
@@ -42,11 +43,13 @@ bool pointInPolygon(double x, double y,
 }
 }  // namespace
 
+double ObstacleStop::steadySeconds() {
+  return std::chrono::duration<double>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 ObstacleStop::ObstacleStop(rclcpp::Node::SharedPtr node)
     : node_(std::move(node)),
-      last_lidar_time_(0, 0, node_->get_clock()->get_clock_type()),
-      rear_last_lidar_time_(0, 0, node_->get_clock()->get_clock_type()),
-      last_command_time_(0, 0, node_->get_clock()->get_clock_type()),
       hard_stop_clear_deadline_(0, 0, node_->get_clock()->get_clock_type()),
       slowdown_clear_deadline_(0, 0, node_->get_clock()->get_clock_type()) {}
 
@@ -75,9 +78,12 @@ bool ObstacleStop::initialize(std::string &message) {
         std::bind(&ObstacleStop::rearPointCloud2Callback, this, std::placeholders::_1));
   }
   planned_cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-      planned_cmd_topic_, 10,
+      planned_cmd_topic_, rclcpp::QoS(1).reliable(),
       std::bind(&ObstacleStop::plannedVelocityCallback, this,
                 std::placeholders::_1));
+  planner_mode_sub_ = node_->create_subscription<navigation_interfaces::msg::PlannerMotionMode>(
+      "/scan_planner/motion_mode", rclcpp::QoS(1).reliable(),
+      std::bind(&ObstacleStop::plannerMotionModeCallback, this, std::placeholders::_1));
   emergency_stop_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
       "/emergency_stop", 10,
       std::bind(&ObstacleStop::emergencyStopCallback, this,
@@ -101,10 +107,8 @@ bool ObstacleStop::initialize(std::string &message) {
 
   safe_cmd_pub_ =
       node_->create_publisher<geometry_msgs::msg::Twist>(safe_cmd_topic_, 10);
-  stop_active_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
-      "/obstacle_stop/active", rclcpp::QoS(1).transient_local());
-  obstacle_stopped_pub_ = node_->create_publisher<std_msgs::msg::Bool>(
-      "/obstacle_stop/stopped", rclcpp::QoS(1).reliable().transient_local());
+  status_pub_ = node_->create_publisher<navigation_interfaces::msg::ObstacleStopStatus>(
+      "/obstacle_stop/status", rclcpp::QoS(1).reliable());
   control_timer_ = node_->create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::duration<double>(1.0 / config_.control_frequency)),
@@ -119,6 +123,14 @@ bool ObstacleStop::initialize(std::string &message) {
               lidar_type_ == 1 ? "Livox CustomMsg" : "PointCloud2",
               rear_lidar_enabled_ ? rear_lidar_topic_.c_str() : "disabled",
               planned_cmd_topic_.c_str(), safe_cmd_topic_.c_str());
+  RCLCPP_INFO(node_->get_logger(),
+      "[VELOCITY_GUARD] owner=planner enabled=%s check_distance=%.3f "
+      "velocity_limit=%.3f mode_timeout=%.3f min_points_per_cell=%zu "
+      "status=/obstacle_stop/status mode=/scan_planner/motion_mode",
+      config_.planner_velocity_guard_enabled ? "true" : "false",
+      config_.velocity_guard.check_distance,
+      config_.velocity_guard.velocity,
+      config_.planner_mode_timeout_sec, config_.min_points_per_cell);
   message = "obstacle stop initialized";
   return true;
 }
@@ -183,26 +195,14 @@ void ObstacleStop::loadParameters() {
       "hard_stop_clear_delay", config_.hard_stop_clear_delay);
   config_.slowdown_clear_delay = node_->declare_parameter<double>(
       "slowdown_clear_delay", config_.slowdown_clear_delay);
-  config_.directional_release_enabled = node_->declare_parameter<bool>(
-      "directional_release_enabled", config_.directional_release_enabled);
-  config_.directional_center_half_width = std::clamp(
-      node_->declare_parameter<double>("directional_center_half_width",
-                                       config_.directional_center_half_width),
-      0.0, config_.robot_width * 0.5);
-  config_.directional_escape_velocity_threshold =
-      std::max(0.0, node_->declare_parameter<double>(
-                        "directional_escape_velocity_threshold",
-                        config_.directional_escape_velocity_threshold));
-  config_.center_lateral_escape_enabled = node_->declare_parameter<bool>(
-      "center_lateral_escape_enabled", config_.center_lateral_escape_enabled);
-  config_.center_escape_max_forward_velocity =
-      std::max(0.0, node_->declare_parameter<double>(
-                        "center_escape_max_forward_velocity",
-                        config_.center_escape_max_forward_velocity));
-  config_.center_escape_max_angular_velocity =
-      std::max(0.0, node_->declare_parameter<double>(
-                        "center_escape_max_angular_velocity",
-                        config_.center_escape_max_angular_velocity));
+  config_.planner_velocity_guard_enabled = node_->declare_parameter<bool>(
+      "planner_velocity_guard_enabled", config_.planner_velocity_guard_enabled);
+  config_.velocity_guard.velocity = node_->declare_parameter<double>(
+      "planner_velocity_limit", config_.velocity_guard.velocity);
+  config_.velocity_guard.check_distance = node_->declare_parameter<double>(
+      "clearance_check_distance", config_.velocity_guard.check_distance);
+  config_.planner_mode_timeout_sec = node_->declare_parameter<double>(
+      "planner_motion_mode_timeout_sec", config_.planner_mode_timeout_sec);
   config_.lidar_timeout_sec = node_->declare_parameter<double>(
       "lidar_timeout_sec", config_.lidar_timeout_sec);
   config_.command_timeout_sec = node_->declare_parameter<double>(
@@ -424,52 +424,31 @@ void ObstacleStop::localizationPoseCallback(
         message->header.frame_id.c_str(), global_frame_.c_str());
     return;
   }
-  applyRegionProfile(
-      findRegion(message->pose.position.x, message->pose.position.y));
+  if (std::isfinite(message->pose.position.x) && std::isfinite(message->pose.position.y))
+    applyRegionProfile(findRegion(message->pose.position.x, message->pose.position.y));
 }
 
 void ObstacleStop::updateZoneState() {
   const auto now = node_->now();
+  const double steady_now = steadySeconds();
   std::array<bool, 2> usable;
-  geometry_msgs::msg::Twist planned;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    const double front_age = (now-last_lidar_time_).seconds();
-    const double rear_age = (now-rear_last_lidar_time_).seconds();
+    const double front_age = steady_now-front_lidar_receive_steady_;
+    const double rear_age = steady_now-rear_lidar_receive_steady_;
     usable = {has_lidar_ && lidar_valid_ && front_age >= 0.0 && front_age <= config_.lidar_timeout_sec,
               rear_has_lidar_ && rear_lidar_valid_ && rear_age >= 0.0 && rear_age <= config_.lidar_timeout_sec};
-    planned = planned_cmd_;
   }
   // Timeouts invalidate cached occupancy even when no new packet arrives.
   refreshZoneOccupancy(usable);
-  bool hard = false, slow = false, released = false, longitudinal_hard = false;
+  bool hard = false, slow = false, longitudinal_hard = false;
   for (std::size_t i = 0; i < config_.zones.size(); ++i) {
     const auto &zone = config_.zones[i];
     auto &runtime = zone_runtime_[i];
     if (!zone.enabled) continue;
-    const auto decide = [&](const std::vector<std::size_t> &cells, const ZoneRectangle &box) {
-      if (i >= 2U || !config_.directional_release_enabled) return cells.size() >= zone.obstacle_cell_threshold;
-      std::array<std::size_t, 3> counts{};
-      const double cy = (box.y_min+box.y_max)*0.5;
-      for (const auto index : cells) {
-        const int my = static_cast<int>(index/config_.grid_width);
-        const double y = (my-config_.grid_height*0.5+0.5)*config_.grid_resolution - cy;
-        ++counts[y > config_.directional_center_half_width ? 0U :
-                 y < -config_.directional_center_half_width ? 2U : 1U];
-      }
-      const DirectionalZoneOccupancy occupancy{counts[0]>=zone.obstacle_cell_threshold,
-          counts[1]>=zone.obstacle_cell_threshold, counts[2]>=zone.obstacle_cell_threshold};
-      const double x = (box.x_min+box.x_max)*0.5;
-      const auto decision = evaluateDirectionalEscape(occupancy,
-          {planned.linear.x, planned.linear.y, planned.angular.z*x},
-          config_.directional_escape_velocity_threshold, config_.center_escape_max_forward_velocity,
-          config_.center_escape_max_angular_velocity*std::abs(x), true, config_.center_lateral_escape_enabled);
-      released = released || decision.released_left || decision.released_center || decision.released_right;
-      return decision.active;
-    };
-    runtime.hard_active = decide(runtime.hard_occupied, runtime.hard_box);
+    runtime.hard_active = runtime.hard_occupied.size() >= zone.obstacle_cell_threshold;
     if (runtime.slow) {
-      runtime.slow->active = decide(runtime.slow->occupied, runtime.slow->box);
+      runtime.slow->active = runtime.slow->occupied.size() >= zone.obstacle_cell_threshold;
       slow = slow || runtime.slow->active;
     }
     hard = hard || runtime.hard_active;
@@ -477,15 +456,25 @@ void ObstacleStop::updateZoneState() {
   }
   std::lock_guard<std::mutex> lock(mutex_);
   updateObstacleState(hard, slow, longitudinal_hard, now);
-  directional_escape_release_active_ = !hard && released;
 }
 
 void ObstacleStop::plannedVelocityCallback(
     const geometry_msgs::msg::Twist::ConstSharedPtr message) {
   std::lock_guard<std::mutex> lock(mutex_);
   planned_cmd_ = *message;
-  last_command_time_ = node_->now();
+  ++command_sequence_;
+  command_receive_steady_ = steadySeconds();
   has_command_ = true;
+}
+
+void ObstacleStop::plannerMotionModeCallback(
+    const navigation_interfaces::msg::PlannerMotionMode::ConstSharedPtr message) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!has_planner_mode_ || planner_mode_.mode != message->mode)
+    mode_command_barrier_ = command_sequence_;
+  planner_mode_ = *message;
+  has_planner_mode_ = true;
+  planner_mode_receive_steady_ = steadySeconds();
 }
 
 void ObstacleStop::emergencyStopCallback(
@@ -526,172 +515,260 @@ void ObstacleStop::updateObstacleState(bool raw_hard_stop, bool raw_slowdown,
   slowdown_active_ = raw_slowdown || now < slowdown_clear_deadline_;
 }
 
-void ObstacleStop::controlCallback() {
-  std::lock_guard<std::mutex> config_lock(config_mutex_);
-  updateZoneState();
-  geometry_msgs::msg::Twist planned;
-  bool has_lidar = false;
-  bool lidar_valid = false;
-  bool rear_has_lidar = false;
-  bool rear_lidar_valid = false;
-  bool has_command = false;
-  bool hard_stop = false;
-  bool slowdown = false;
-  bool emergency_stop = false;
-  bool posture_stop = false;
-  bool obstacle_stop_enabled = true;
-  bool directional_escape_release = false;
-  imu_stair_detector::Status stairs;
-  rclcpp::Time lidar_time(0, 0, node_->get_clock()->get_clock_type());
-  rclcpp::Time rear_lidar_time(0, 0, node_->get_clock()->get_clock_type());
-  rclcpp::Time command_time(0, 0, node_->get_clock()->get_clock_type());
+std::array<MotionPermission, 4> ObstacleStop::directionPermissions(
+    const std::array<DirectionPrecheck, 4> &prechecks, bool healthy) const {
+  std::array<MotionPermission, 4> permissions;
+  const bool sides_enabled = config_.zones[2].enabled && config_.zones[3].enabled;
+  for (std::size_t direction = 1; direction < 4; ++direction) {
+    auto &permission = permissions[direction];
+    const auto &precheck = prechecks[direction];
+    if (!healthy) permission.reason = "sensor or global protection unavailable";
+    else if (!config_.planner_velocity_guard_enabled) permission.reason = "planner velocity guard disabled";
+    else if (!sides_enabled || !config_.zones[direction].enabled ||
+        (direction == 1 && !config_.zones[0].enabled))
+      permission.reason = "required motion stop zones disabled";
+    else if (zone_runtime_[direction].hard_active ||
+        (direction == 1 && (zone_runtime_[2].hard_active || zone_runtime_[3].hard_active)))
+      permission.reason = "destination or backward side stop zone triggered";
+    else if (!precheck.valid) permission.reason = "destination precheck unavailable";
+    else if (precheck.available_distance <= 0.0)
+      permission.reason = "destination clearance insufficient";
+    else {
+      permission.allowed = true;
+      permission.velocity_limit = config_.velocity_guard.velocity;
+      permission.reason = "destination safe";
+    }
+  }
+  return permissions;
+}
+
+ObstacleStop::ControlInputs ObstacleStop::readControlInputs() {
+  using Mode = navigation_interfaces::msg::PlannerMotionMode;
+  ControlInputs inputs;
+  bool has_lidar, lidar_valid, rear_has_lidar, rear_lidar_valid;
+  std::uint64_t command_sequence, mode_command_barrier;
+  double mode_receive_steady;
+  double lidar_receive_steady, rear_lidar_receive_steady, command_receive_steady;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    planned = planned_cmd_;
-    has_lidar = has_lidar_;
-    lidar_valid = lidar_valid_;
-    rear_has_lidar = rear_has_lidar_;
-    rear_lidar_valid = rear_lidar_valid_;
-    has_command = has_command_;
-    hard_stop = hard_stop_active_;
-    slowdown = slowdown_active_;
-    emergency_stop = emergency_stop_active_;
-    posture_stop = posture_stop_active_;
-    obstacle_stop_enabled = obstacle_stop_enabled_;
-    directional_escape_release = directional_escape_release_active_;
-    lidar_time = last_lidar_time_;
-    rear_lidar_time = rear_last_lidar_time_;
-    command_time = last_command_time_;
-    if (imu_stairs_enabled_) stairs = imu_stair_detector_.status(node_->now().seconds());
+    inputs.planned = planned_cmd_;
+    has_lidar = has_lidar_; lidar_valid = lidar_valid_;
+    rear_has_lidar = rear_has_lidar_; rear_lidar_valid = rear_lidar_valid_;
+    inputs.has_command = has_command_;
+    inputs.hard_stop = hard_stop_active_; inputs.slowdown = slowdown_active_;
+    inputs.emergency_stop = emergency_stop_active_; inputs.posture_stop = posture_stop_active_;
+    inputs.enabled = obstacle_stop_enabled_;
+    lidar_receive_steady = front_lidar_receive_steady_;
+    rear_lidar_receive_steady = rear_lidar_receive_steady_;
+    command_receive_steady = command_receive_steady_;
+    inputs.mode = planner_mode_; inputs.has_mode = has_planner_mode_;
+    mode_receive_steady = planner_mode_receive_steady_;
+    command_sequence = command_sequence_; mode_command_barrier = mode_command_barrier_;
+    if (imu_stairs_enabled_) inputs.stairs = imu_stair_detector_.status(node_->now().seconds());
   }
   const auto now = node_->now();
-  const double lidar_age = has_lidar ? (now - lidar_time).seconds()
-                                     : std::numeric_limits<double>::infinity();
-  const double rear_lidar_age =
-      rear_has_lidar ? (now - rear_lidar_time).seconds()
-                     : std::numeric_limits<double>::infinity();
-  const double command_age = has_command
-                                 ? (now - command_time).seconds()
-                                 : std::numeric_limits<double>::infinity();
-  const bool front_lidar_fresh =
-      !sourceRequired(1U) || (has_lidar && lidar_age >= 0.0 && lidar_age <= config_.lidar_timeout_sec);
-  const bool rear_lidar_fresh =
-      !sourceRequired(2U) ||
-      (rear_has_lidar && rear_lidar_age >= 0.0 &&
-       rear_lidar_age <= config_.lidar_timeout_sec);
-  const bool lidar_fresh = front_lidar_fresh && rear_lidar_fresh;
-  const bool all_lidar_valid =
-      (!sourceRequired(1U) || lidar_valid) && (!sourceRequired(2U) || rear_lidar_valid);
-  const bool command_fresh = has_command && command_age >= 0.0 &&
-                             command_age <= config_.command_timeout_sec;
+  const double steady_now = steadySeconds();
+  const double lidar_age = has_lidar ? steady_now-lidar_receive_steady : std::numeric_limits<double>::infinity();
+  const double rear_lidar_age = rear_has_lidar ? steady_now-rear_lidar_receive_steady : std::numeric_limits<double>::infinity();
+  const double command_age = inputs.has_command ? steady_now-command_receive_steady : std::numeric_limits<double>::infinity();
+  const bool front_required = sourceRequired(1U), rear_required = sourceRequired(2U);
+  const bool front_fresh = !front_required ||
+      (has_lidar && lidar_age >= 0.0 && lidar_age <= config_.lidar_timeout_sec);
+  const bool rear_fresh = !rear_required ||
+      (rear_has_lidar && rear_lidar_age >= 0.0 && rear_lidar_age <= config_.lidar_timeout_sec);
+  inputs.lidar_fresh = front_fresh && rear_fresh;
+  inputs.lidar_valid = (!front_required || lidar_valid) && (!rear_required || rear_lidar_valid);
+  const auto lidar_status = [](bool required, bool received, bool fresh, bool valid) {
+    return !required ? "unused" : !received ? "waiting" : !fresh ? "timeout" : !valid ? "invalid" : "ok";
+  };
+  inputs.lidar_status = {lidar_status(front_required, has_lidar, front_fresh, lidar_valid),
+                        lidar_status(rear_required, rear_has_lidar, rear_fresh, rear_lidar_valid)};
+  inputs.command_fresh = inputs.has_command && command_age >= 0.0 && command_age <= config_.command_timeout_sec;
+  const auto &planned = inputs.planned;
+  inputs.finite_command = std::isfinite(planned.linear.x) && std::isfinite(planned.linear.y) &&
+      std::isfinite(planned.linear.z) && std::isfinite(planned.angular.x) &&
+      std::isfinite(planned.angular.y) && std::isfinite(planned.angular.z);
+  const auto &mode = inputs.mode;
+  const double mode_stamp = static_cast<double>(mode.stamp.sec) +
+      static_cast<double>(mode.stamp.nanosec) * 1e-9;
+  const double mode_age = now.seconds() - mode_stamp;
+  const bool mode_known = mode.mode == Mode::NORMAL || mode.mode == Mode::LATERAL_LEFT ||
+      mode.mode == Mode::LATERAL_RIGHT || mode.mode == Mode::BACKWARD;
+  inputs.mode_fresh = inputs.has_mode && mode_known &&
+      mode.stamp.nanosec < 1000000000U && mode_stamp > 0.0 &&
+      mode_age >= 0.0 && mode_age <= config_.planner_mode_timeout_sec &&
+      steady_now >= mode_receive_steady &&
+      steady_now-mode_receive_steady <= config_.planner_mode_timeout_sec;
+  inputs.command_after_mode = !inputs.has_mode || command_sequence > mode_command_barrier;
+  return inputs;
+}
 
-  const bool suppress_slowdown = stairs.valid && stairs.on_stairs;
+ObstacleStop::ControlDecision ObstacleStop::evaluateVelocity(
+    const ControlInputs &inputs, const std::array<MotionPermission, 4> &permissions) const {
+  using Mode = navigation_interfaces::msg::PlannerMotionMode;
+  const geometry_msgs::msg::Twist zero;
+  if (inputs.emergency_stop) return {zero, State::kEmergencyStop, "external emergency stop"};
+  if (inputs.posture_stop) return {zero, State::kPostureStop, "navigation blocked by robot posture"};
+  if (!inputs.command_fresh) return {zero, State::kWaitingForCommand,
+      inputs.has_command ? "planned velocity timed out" : "waiting for planned velocity"};
+  if (!inputs.finite_command) return {zero, State::kSensorFault, "non-finite planned velocity"};
+  // Before the first mode message, retain legacy control. A lost mode heartbeat
+  // after integration must stop output rather than silently revert to NORMAL.
+  if (inputs.has_mode && !inputs.mode_fresh) return {zero, State::kPlannerMotionBlocked,
+      "planner mode invalid or timed out; require fresh mode heartbeat"};
+  if (!inputs.command_after_mode) return {zero, State::kWaitingForCommand,
+      "waiting for new planned velocity after mode change"};
+  if ((inputs.enabled || inputs.directionalMotion()) && !inputs.lidar_fresh)
+    return {zero, State::kWaitingForLidar, "required lidar unavailable or timed out"};
+  if ((inputs.enabled || inputs.directionalMotion()) && !inputs.lidar_valid)
+    return {zero, State::kSensorFault, "required lidar point cloud invalid"};
+  if (inputs.directionalMotion()) {
+    const auto &permission = permissions[motionDirection(inputs.mode.mode)];
+    if (!permission.allowed) return {zero, State::kPlannerMotionBlocked, permission.reason};
+    const auto decision = evaluatePlannerVelocityDecision(inputs.mode.mode, inputs.planned,
+                                                         permission.velocity_limit);
+    if (!decision.allowed) return {zero, State::kPlannerMotionBlocked, decision.reason};
+    geometry_msgs::msg::Twist velocity;
+    if (inputs.mode.mode == Mode::BACKWARD) velocity.linear.x = decision.velocity;
+    else velocity.linear.y = decision.velocity;
+    return {velocity, State::kPlannerMotion, decision.reason};
+  }
+  if (!inputs.enabled) return {inputs.planned, State::kClear, "obstacle stop disabled"};
+  if (inputs.hard_stop) return {zero, State::kObstacleStop, "obstacle in hard stop rectangle or clearance delay"};
+  auto velocity = inputs.planned;
+  if (inputs.slowdown && !(inputs.stairs.valid && inputs.stairs.on_stairs)) {
+    velocity.linear.x *= config_.linear_velocity_factor;
+    velocity.linear.y *= config_.linear_velocity_factor;
+    velocity.angular.z *= config_.angular_velocity_factor;
+    return {velocity, State::kObstacleSlowdown, "obstacle in slowdown rectangle or clearance delay"};
+  }
+  return {velocity, State::kClear, "clear"};
+}
+
+navigation_interfaces::msg::ObstacleStopStatus ObstacleStop::publishControlStatus(
+    const ControlInputs &inputs, const std::array<MotionPermission, 4> &permissions) {
+  navigation_interfaces::msg::ObstacleStopStatus status;
+  for (std::size_t direction = 0; direction < 4; ++direction)
+    status.stop_triggered[direction] = config_.zones[direction].enabled && zone_runtime_[direction].hard_active;
+  // Environmental permission; freshness and velocity validity are checked separately.
+  status.move_allowed[0] = inputs.environmentReady() && !inputs.hard_stop;
+  // FRONT has no distance precheck; its distance remains the default zero.
+  for (std::size_t direction = 1; direction < 4; ++direction) {
+    status.move_allowed[direction] = permissions[direction].allowed;
+    status.available_distance[direction] = status.move_allowed[direction]
+        ? static_cast<float>(direction_prechecks_[direction].available_distance) : 0.0F;
+  }
+  status_pub_->publish(status);
+  return status;
+}
+
+void ObstacleStop::controlCallback() {
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
+  if (stopped_) return;
+  updateZoneState();
+  const auto inputs = readControlInputs();
+  refreshDirectionPrechecks(inputs.sensorsValid());
+  const auto permissions = directionPermissions(direction_prechecks_, inputs.environmentReady());
+  const auto decision = evaluateVelocity(inputs, permissions);
+  safe_cmd_pub_->publish(decision.velocity);
+  const auto status = publishControlStatus(inputs, permissions);
+
+  const bool suppress_slowdown = inputs.stairs.valid && inputs.stairs.on_stairs;
   if (stairs_active_pub_) {
-    std_msgs::msg::Bool active;
-    active.data = suppress_slowdown;
-    stairs_active_pub_->publish(active);
+    std_msgs::msg::Bool active; active.data = suppress_slowdown; stairs_active_pub_->publish(active);
   }
   if (suppress_slowdown != last_stairs_active_) {
     RCLCPP_INFO(node_->get_logger(), "IMU stairs slowdown suppression=%s, valid=%s pitch=%.2f deg",
-        suppress_slowdown ? "on" : "off", stairs.valid ? "true" : "false", stairs.pitch_deg);
+        suppress_slowdown ? "on" : "off", inputs.stairs.valid ? "true" : "false", inputs.stairs.pitch_deg);
     last_stairs_active_ = suppress_slowdown;
   }
+  logControlStatus(inputs, decision, status);
+}
 
-  // safe_command默认是零速度，因此所有异常分支都会失效停车。
-  geometry_msgs::msg::Twist safe_command;
-  State state = State::kClear;
-  std::string reason = "clear";
-  if (emergency_stop) {
-    state = State::kEmergencyStop;
-    reason = "external emergency stop";
-  } else if (posture_stop) {
-    state = State::kPostureStop;
-    reason = "navigation blocked by robot posture";
-  } else if (!command_fresh) {
-    state = State::kWaitingForCommand;
-    reason = has_command ? "planned velocity timed out"
-                         : "waiting for planned velocity";
-  } else if (!obstacle_stop_enabled) {
-    // 停障未启用时仅绕过雷达停车和减速，外部急停与指令超时仍然有效。
-    safe_command = planned;
-  } else if (!lidar_fresh) {
-    state = State::kWaitingForLidar;
-    if (!front_lidar_fresh) {
-      reason = has_lidar ? "front lidar data timed out"
-                         : "waiting for front lidar data";
-    } else {
-      reason = rear_has_lidar ? "rear lidar data timed out"
-                              : "waiting for rear lidar data";
+void ObstacleStop::logControlStatus(const ControlInputs &inputs, const ControlDecision &decision,
+    const navigation_interfaces::msg::ObstacleStopStatus &status) {
+  using Mode = navigation_interfaces::msg::PlannerMotionMode;
+  const auto mode_name = [](std::uint8_t mode) {
+    switch (mode) {
+      case Mode::NORMAL: return "NORMAL";
+      case Mode::LATERAL_LEFT: return "LEFT";
+      case Mode::LATERAL_RIGHT: return "RIGHT";
+      case Mode::BACKWARD: return "BACKWARD";
+      default: return "INVALID";
     }
-  } else if (!all_lidar_valid) {
-    state = State::kSensorFault;
-    reason = sourceRequired(1U) && !lidar_valid ? "front lidar point cloud is invalid"
-                          : "rear lidar point cloud is invalid";
-  } else if (hard_stop && !directional_escape_release) {
-    state = State::kObstacleStop;
-    reason = "obstacle in hard stop rectangle";
-  } else if (hard_stop && directional_escape_release) {
-    safe_command = planned;
-    reason = "directional escape away from side obstacle";
-  } else if (slowdown && !suppress_slowdown) {
-    safe_command = planned;
-    // 远矩形有障碍时降低速度，近矩形仍具有更高优先级。
-    safe_command.linear.x *= config_.linear_velocity_factor;
-    safe_command.linear.y *= config_.linear_velocity_factor;
-    safe_command.angular.z *= config_.angular_velocity_factor;
-    state = State::kObstacleSlowdown;
-    reason = "obstacle in slowdown rectangle";
-  } else {
-    safe_command = planned;
+  };
+  const char *mode = inputs.has_mode ? mode_name(inputs.mode.mode) : "LEGACY";
+  const auto &zones = config_.zones;
+  const auto &runtime = zone_runtime_;
+  if (!has_logged_state_ || decision.state != last_state_ || decision.reason != last_state_reason_ ||
+      status.stop_triggered != last_stop_triggered_) {
+    std::ostringstream event;
+    event << "[STOP_EVENT] state=" << stateName(decision.state) << " mode=" << mode
+          << '(' << static_cast<unsigned>(inputs.mode.mode) << ") reason='" << decision.reason
+          << "' stop_cells(F/R/L/R)=";
+    for (std::size_t direction = 0; direction < 4; ++direction) {
+      if (direction != 0U) event << ',';
+      event << runtime[direction].hard_occupied.size() << '/' << zones[direction].obstacle_cell_threshold;
+    }
+    event << " triggered=";
+    for (bool triggered : status.stop_triggered) event << triggered;
+    const auto message = event.str();
+    if (decision.state == State::kClear || decision.state == State::kPlannerMotion ||
+        decision.state == State::kObstacleSlowdown)
+      RCLCPP_INFO(node_->get_logger(), "%s", message.c_str());
+    else
+      RCLCPP_WARN(node_->get_logger(), "%s", message.c_str());
+    has_logged_state_ = true; last_state_ = decision.state; last_state_reason_ = decision.reason;
+    last_stop_triggered_ = status.stop_triggered;
   }
 
-  safe_cmd_pub_->publish(safe_command);
-  std_msgs::msg::Bool stop_active;
-  stop_active.data = state != State::kClear;
-  stop_active_pub_->publish(stop_active);
-  std_msgs::msg::Bool obstacle_stopped;
-  obstacle_stopped.data = state == State::kObstacleStop;
-  obstacle_stopped_pub_->publish(obstacle_stopped);
-  logStateChange(state, reason);
-  // Report observed stop-zone obstacles independently of command availability
-  // or release-delay holds. Slowdown-only occupancy produces no periodic log.
-  if (std::none_of(zone_runtime_.begin(), zone_runtime_.end(),
-                   [](const ZoneRuntime &zone) {
-                     return !zone.hard_occupied.empty();
-                   })) {
-    return;
-  }
-  const auto lidar_status = [&](unsigned source, bool received, bool valid,
-                                 double age) {
-    if (!sourceRequired(source)) return "unused";
-    if (!received) return "waiting";
-    if (age < 0.0 || age > config_.lidar_timeout_sec) return "timeout";
-    return valid ? "ok" : "invalid";
-  };
-  RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-      "[STOP_STATUS] state=%s enabled=%s command=%s "
-      "front_lidar=%s rear_lidar=%s "
-      "front(stop/slow)=%zu/%zu rear(stop/slow)=%zu/%zu "
-      "left(stop)=%zu right(stop)=%zu output(vx/vy/wz)=%.3f/%.3f/%.3f",
-      stateName(state), obstacle_stop_enabled ? "true" : "false",
-      command_fresh ? "ok" : has_command ? "timeout" : "waiting",
-      lidar_status(1U, has_lidar, lidar_valid, lidar_age),
-      lidar_status(2U, rear_has_lidar, rear_lidar_valid, rear_lidar_age),
-      zone_runtime_[0].hard_occupied.size(),
-      zone_runtime_[0].slow ? zone_runtime_[0].slow->occupied.size() : 0U,
-      zone_runtime_[1].hard_occupied.size(),
-      zone_runtime_[1].slow ? zone_runtime_[1].slow->occupied.size() : 0U,
-      zone_runtime_[2].hard_occupied.size(), zone_runtime_[3].hard_occupied.size(),
-      safe_command.linear.x, safe_command.linear.y, safe_command.angular.z);
+  const bool any_occupied = std::any_of(runtime.begin(), runtime.end(), [](const ZoneRuntime &zone) {
+    return !zone.hard_occupied.empty() || (zone.slow && !zone.slow->occupied.empty());
+  });
+  if (!any_occupied && decision.state == State::kClear && !inputs.directionalMotion()) return;
+  const double now = steadySeconds();
+  if (last_diagnostic_steady_ >= 0.0 && now-last_diagnostic_steady_ < 1.0) return;
+  last_diagnostic_steady_ = now;
+  const auto &input = inputs.planned;
+  const auto &output = decision.velocity;
+  RCLCPP_INFO(node_->get_logger(),
+      "[STOP_STATUS] state=%s mode=%s enabled=%d command=%s mode_status=%s lidar(F/R)=%s/%s "
+      "stop_cells(F/R/L/R)=%zu/%zu,%zu/%zu,%zu/%zu,%zu/%zu slow_cells(F/R)=%zu/%zu,%zu/%zu "
+      "allowed(F/R/L/R)=%d%d%d%d in(vx/vy/wz)=%.3f/%.3f/%.3f out=%.3f/%.3f/%.3f",
+      stateName(decision.state), mode, inputs.enabled,
+      !inputs.has_command ? "waiting" : !inputs.command_fresh ? "timeout" : !inputs.finite_command ? "invalid" : "ok",
+      !inputs.has_mode ? "legacy" : inputs.mode_fresh ? "ok" : "invalid_or_timeout",
+      inputs.lidar_status[0], inputs.lidar_status[1],
+      runtime[0].hard_occupied.size(), zones[0].obstacle_cell_threshold,
+      runtime[1].hard_occupied.size(), zones[1].obstacle_cell_threshold,
+      runtime[2].hard_occupied.size(), zones[2].obstacle_cell_threshold,
+      runtime[3].hard_occupied.size(), zones[3].obstacle_cell_threshold,
+      runtime[0].slow ? runtime[0].slow->occupied.size() : 0U, zones[0].obstacle_cell_threshold,
+      runtime[1].slow ? runtime[1].slow->occupied.size() : 0U, zones[1].obstacle_cell_threshold,
+      status.move_allowed[0], status.move_allowed[1], status.move_allowed[2], status.move_allowed[3],
+      input.linear.x, input.linear.y, input.angular.z, output.linear.x, output.linear.y, output.angular.z);
+
+  const auto &rear = direction_prechecks_[1];
+  const auto &left = direction_prechecks_[2], &right = direction_prechecks_[3];
+  RCLCPP_INFO(node_->get_logger(),
+      "[STOP_CLEARANCE] unit=m order=B/L/R valid=%d%d%d cells=%zu/%zu,%zu/%zu,%zu/%zu "
+      "measured=%.3f/%.3f/%.3f available=%.3f/%.3f/%.3f",
+      rear.valid, left.valid, right.valid,
+      rear.occupied_cells, zones[1].obstacle_cell_threshold,
+      left.occupied_cells, zones[2].obstacle_cell_threshold,
+      right.occupied_cells, zones[3].obstacle_cell_threshold,
+      rear.available_distance, left.available_distance, right.available_distance,
+      status.available_distance[1], status.available_distance[2], status.available_distance[3]);
 }
 
 void ObstacleStop::stop() {
   if (control_timer_) control_timer_->cancel();
   if (visualization_timer_) visualization_timer_->cancel();
-  if (obstacle_stopped_pub_) {
-    std_msgs::msg::Bool stopped;
-    stopped.data = false;
-    obstacle_stopped_pub_->publish(stopped);
+  std::lock_guard<std::mutex> config_lock(config_mutex_);
+  stopped_ = true;
+  if (status_pub_) {
+    navigation_interfaces::msg::ObstacleStopStatus status;
+    status_pub_->publish(status);
   }
   // Worker停止前主动发送一次零速度。
   publishZeroVelocity();
@@ -699,19 +776,6 @@ void ObstacleStop::stop() {
 
 void ObstacleStop::publishZeroVelocity() {
   if (safe_cmd_pub_) safe_cmd_pub_->publish(geometry_msgs::msg::Twist());
-}
-
-void ObstacleStop::logStateChange(State state, const std::string &reason) {
-  if (has_logged_state_ && state == last_state_) return;
-  has_logged_state_ = true;
-  last_state_ = state;
-  if (state == State::kClear) {
-    RCLCPP_INFO(node_->get_logger(), "Obstacle stop state=%s: %s",
-                stateName(state), reason.c_str());
-  } else {
-    RCLCPP_WARN(node_->get_logger(), "Obstacle stop state=%s: %s",
-                stateName(state), reason.c_str());
-  }
 }
 
 const char *ObstacleStop::stateName(State state) {
@@ -726,6 +790,10 @@ const char *ObstacleStop::stateName(State state) {
       return "obstacle_slowdown";
     case State::kObstacleStop:
       return "obstacle_stop";
+    case State::kPlannerMotion:
+      return "planner_motion";
+    case State::kPlannerMotionBlocked:
+      return "planner_motion_blocked";
     case State::kPostureStop:
       return "posture_stop";
     case State::kEmergencyStop:

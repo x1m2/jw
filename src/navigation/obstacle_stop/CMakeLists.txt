@@ -12,6 +12,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(navigation_interfaces REQUIRED)
 find_package(imu_stair_detector REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -38,6 +39,7 @@ target_include_directories(obstacle_stop_node PRIVATE
 
 ament_target_dependencies(obstacle_stop_node
   geometry_msgs
+  navigation_interfaces
   livox_ros_driver2
   rclcpp
   sensor_msgs

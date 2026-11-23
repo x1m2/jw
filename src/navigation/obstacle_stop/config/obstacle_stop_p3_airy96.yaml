@@ -14,7 +14,7 @@
     range_max: 1.5
 
     # 每格在当前帧内达到此有效点数才占用；高度跨度不作触发门槛。
-    min_points_per_cell: 1
+    min_points_per_cell: 2
     grid_resolution: 0.03
     grid_width: 100
     grid_height: 100
@@ -26,35 +26,34 @@
         sources: [front]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 10
       rear:
         enabled: true
         sources: [rear]
         stop_distance: 0.30
         slowdown_distance: 0.20
-        obstacle_cell_threshold: 3
+        obstacle_cell_threshold: 10
       left:
         enabled: true
         sources: [front, rear]
         stop_distance: 0.10
-        obstacle_cell_threshold: 2
+        obstacle_cell_threshold: 5
       right:
         enabled: true
         sources: [front, rear]
         stop_distance: 0.10
-        obstacle_cell_threshold: 2
+        obstacle_cell_threshold: 5
 
     linear_velocity_factor: 0.40
     angular_velocity_factor: 1.0
     hard_stop_clear_delay: 0.30
     slowdown_clear_delay: 0.50
 
-    directional_release_enabled: false
-    directional_center_half_width: 0.20
-    directional_escape_velocity_threshold: 0.05
-    center_lateral_escape_enabled: false
-    center_escape_max_forward_velocity: 0.02
-    center_escape_max_angular_velocity: 0.10
+    # STOP仅检测净空、反馈状态并校验SCAN速度；脱困动作流程由SCAN负责。
+    planner_velocity_guard_enabled: true  # 允许校验并放行规划器横移/后退模式；没有模式消息不自动横移。
+    planner_velocity_limit: 0.25  # 规划器横移/后退速度上限(m/s)；指令+y向右、-y向左。
+    clearance_check_distance: 0.50 # 从目标方向停止区外边界再向外预检的距离(m)，不含停止区。
+    planner_motion_mode_timeout_sec: 0.30 # 模式源时间和接收心跳超时(s)，模式话题须持续发布。
 
     lidar_timeout_sec: 0.30
     command_timeout_sec: 0.30

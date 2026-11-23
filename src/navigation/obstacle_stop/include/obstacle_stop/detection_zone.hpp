@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <vector>
 #include "obstacle_stop/height_cell.hpp"
 
 namespace obstacle_stop {
@@ -57,6 +58,51 @@ inline ZoneRectangle sideStopRectangle(
   return direction == 2U
       ? ZoneRectangle{x_min, x_max, half_width, half_width + thickness}
       : ZoneRectangle{x_min, x_max, -half_width - thickness, -half_width};
+}
+
+// Check only the space beyond the stop-zone outer boundary. Normal stop zones
+// remain independent and continue protecting the inner strip.
+inline ZoneRectangle clearanceCheckRectangle(std::size_t direction,
+    const ZoneRectangle &stop_box, double robot_width, double robot_length,
+    double distance) {
+  if (direction == 1U) {
+    const double rear = std::min(-robot_length * 0.5, stop_box.x_min);
+    return {rear-distance, rear, -robot_width*0.5, robot_width*0.5};
+  }
+  const double side = direction == 2U ? stop_box.y_max : stop_box.y_min;
+  return {stop_box.x_min, stop_box.x_max,
+          direction == 2U ? side : side-distance,
+          direction == 2U ? side+distance : side};
+}
+
+inline double gridClearance(std::size_t direction, const ZoneRectangle &box,
+    double check_distance, int width, int height, double resolution,
+    std::size_t minimum_points, std::size_t obstacle_cell_threshold,
+    const std::vector<HeightCell> *front, const std::vector<HeightCell> *rear,
+    std::size_t &count) {
+  double clearance = check_distance;
+  count = 0U;
+  for (int my = 0; my < height; ++my) {
+    const double y = (my-height*0.5+0.5)*resolution;
+    if (y < box.y_min || y > box.y_max) continue;
+    // A cell centered on the shared boundary belongs to the stop zone.
+    if ((direction == 2U && y <= box.y_min) ||
+        (direction == 3U && y >= box.y_max)) continue;
+    for (int mx = 0; mx < width; ++mx) {
+      const double x = (mx-width*0.5+0.5)*resolution;
+      if (x < box.x_min || x > box.x_max) continue;
+      if (direction == 1U && x >= box.x_max) continue;
+      const auto index = static_cast<std::size_t>(my*width+mx);
+      if ((front && (*front)[index].occupied(minimum_points)) ||
+          (rear && (*rear)[index].occupied(minimum_points))) {
+        ++count; // Sources must qualify independently; shared cells count once.
+        const double distance = direction == 1U ? box.x_max-x :
+            direction == 2U ? y-box.y_min : box.y_max-y;
+        clearance = std::min(clearance, distance-resolution*0.5);
+      }
+    }
+  }
+  return count >= obstacle_cell_threshold ? std::max(0.0, clearance) : check_distance;
 }
 
 // Merge occupancy only after each source independently meets its point threshold.
