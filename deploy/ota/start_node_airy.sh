@@ -93,7 +93,7 @@ export RMW_FASTRTPS_USE_QOS_FROM_XML=1
 # ==================================================
 BINARIES=(
   "$SLAM_DIR/lidar/rslidar_sdk_node"
-  # "$SLAM_DIR/lidar/dual_airy_fusion_node"  # Temporarily disabled for latency comparison.
+  "$SLAM_DIR/lidar/dual_airy_fusion_node"
   "$SLAM_DIR/imu/woodox_imu_bridge_node"
   "$SLAM_DIR/mapping/fastlio_mapping_node"
   "$SLAM_DIR/pgo_sc/pgo_sc_node"
@@ -116,7 +116,7 @@ CONFIG_FILES=(
   "$AIRY_CONFIG"
   "$AIRY_FASTDDS_CONFIG"
   "$AIRY_MAPPING_CONFIG"
-  # "$FUSION_CONFIG"  # Fusion is temporarily disabled.
+  "$FUSION_CONFIG"
   "$IMU_BRIDGE_CONFIG"
   "$NAV_FASTDDS_CONFIG"
   "$LOCALIZATION_CONFIG"
@@ -364,16 +364,15 @@ sleep 2
 # ==================================================
 # Dual Airy Fusion
 # ==================================================
-# Temporarily disabled to isolate localization latency.
-# echo "[START] dual_airy_fusion"
-#
-# stdbuf -oL -eL \
-#   "$SLAM_DIR/lidar/dual_airy_fusion_node" \
-#   --ros-args \
-#   --params-file "$FUSION_CONFIG" \
-#   2>&1 | tee -a "$LOG_DIR/dual_airy_fusion.log" &
-#
-# sleep 1
+echo "[START] dual_airy_fusion"
+
+stdbuf -oL -eL \
+  "$SLAM_DIR/lidar/dual_airy_fusion_node" \
+  --ros-args \
+  --params-file "$FUSION_CONFIG" \
+  2>&1 | tee -a "$LOG_DIR/dual_airy_fusion.log" &
+
+sleep 1
 
 # ==================================================
 # Woodox IMU Bridge
@@ -527,7 +526,7 @@ for node in "${NODE_PATTERNS[@]}"; do
   # Both localization algorithms are cleaned up, but only the selected one runs.
   [[ "$node" == *_localization_node && "$node" != "$LOCALIZATION_NODE" ]] && continue
   # Inactive sensor drivers remain in the cleanup list only.
-  [[ "$node" == "dual_airy_fusion_node" || "$node" == "livox_ros_driver2_node" ]] && continue
+  [[ "$node" == "livox_ros_driver2_node" ]] && continue
   if pgrep -f "$node" >/dev/null 2>&1; then
     echo "[RUNNING] $node"
   else
@@ -559,7 +558,7 @@ while true; do
   for node in "${NODE_PATTERNS[@]}"; do
     [[ "$node" == *_localization_node && "$node" != "$LOCALIZATION_NODE" ]] && continue
     # Inactive sensor drivers remain in the cleanup list only.
-    [[ "$node" == "dual_airy_fusion_node" || "$node" == "livox_ros_driver2_node" ]] && continue
+    [[ "$node" == "livox_ros_driver2_node" ]] && continue
     if pgrep -f "$node" >/dev/null 2>&1; then
       running=$((running + 1))
     fi
