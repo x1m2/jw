@@ -8,6 +8,7 @@ Type=simple
 
 # Run permission setup as root, including the map conversion helper.
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/lidar/rslidar_sdk_node"
+ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/lidar/dual_airy_fusion_node"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/imu/woodox_imu_bridge_node"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/@LOCALIZATION_NODE@"
 ExecStartPre=+/usr/bin/chmod 755 "@OTA_ROOT@/slam/pack/content/localization/voxelmaps_saver"

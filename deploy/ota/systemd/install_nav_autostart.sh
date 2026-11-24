@@ -8,7 +8,7 @@ case "$LIDAR_TYPE" in
   airy|mid360s_3d|mid360s_2d) shift ;;
   *) echo "Usage: bash $0 {airy|mid360s_3d|mid360s_2d} [--localization fastlio|superlio] [运行用户名] [OTA目录]" >&2; exit 1 ;;
 esac
-LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
+LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-superlio}"
 POSITIONAL_ARGS=()
 while (( $# )); do
   case "$1" in

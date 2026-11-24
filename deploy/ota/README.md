@@ -36,7 +36,8 @@ bash deploy/ota/start_node_mid360s_2d.sh
 
 默认 OTA 目录为 `/home/jw/ota`；可通过 `OTA_ROOT=/路径` 指定。加 `--check` 只检查文件，不启动节点。
 
-三个启动脚本均支持 `--localization fastlio|superlio`，默认 `fastlio`。
+三个启动脚本均支持 `--localization fastlio|superlio`；Airy、Mid360 2D 和 Mid360 3D 均默认 `superlio`。
+自启动服务安装脚本使用相同默认值。
 也可设置环境变量 `LOCALIZATION_ALGORITHM`；命令行选项优先。
 例如 Airy 使用 Super LIO，先检查再启动：
 

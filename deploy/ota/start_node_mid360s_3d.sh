@@ -3,7 +3,7 @@
 
 set -u
 CHECK_ONLY=false
-LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-fastlio}"
+LOCALIZATION_ALGORITHM="${LOCALIZATION_ALGORITHM:-superlio}"
 while (( $# )); do
   case "$1" in
     --check) CHECK_ONLY=true; shift ;;
