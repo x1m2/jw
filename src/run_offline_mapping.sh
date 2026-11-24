@@ -104,7 +104,7 @@ case "${LIDAR_TYPE}" in
         PGO_CONFIG="pgo_airy96.yaml"
         # Packet 解码为点云；Airy 的 IMU 已作为独立话题录入 bag，
         # rslidar_sdk 从 packet 回放时不会重新发布这一路 IMU。
-        BAG_TOPICS=(/rslidar_packets /rslidar_imu_data /imu/data)
+        BAG_TOPICS=(/rslidar_front/packets /rslidar_front/imu)
         [[ -f "${AIRY_CONFIG}" ]] || fail "未找到 Airy 配置文件: ${AIRY_CONFIG}"
         [[ -f "${AIRY_FASTRTPS_PROFILE}" ]] || \
             fail "未找到 Airy Fast DDS 配置文件: ${AIRY_FASTRTPS_PROFILE}"
@@ -120,8 +120,8 @@ if config.get('common', {}).get('msg_source') != 2:
 if not config.get('common', {}).get('send_point_cloud_ros'):
     raise SystemExit(f'{path}: common.send_point_cloud_ros 必须设为 true')
 lidars = config.get('lidar', [])
-if not lidars or lidars[0].get('ros', {}).get('ros_recv_packet_topic') != '/rslidar_packets':
-    raise SystemExit(f'{path}: ros_recv_packet_topic 必须为 /rslidar_packets')
+if not lidars or lidars[0].get('ros', {}).get('ros_recv_packet_topic') != '/rslidar_front/packets':
+    raise SystemExit(f'{path}: ros_recv_packet_topic 必须为 /rslidar_front/packets')
 PY
         ;;
     mid360)
