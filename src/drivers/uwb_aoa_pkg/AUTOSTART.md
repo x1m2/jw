@@ -1,54 +1,57 @@
 # UWB 开机自启动
 
-板子目录结构如下：
+将源码包解压到 `/home/jw/uwb_aoa_pkg`，以 jw 用户执行：
+
+```bash
+bash /home/jw/uwb_aoa_pkg/install_uwb_service.sh
+```
+
+脚本自动创建 `/home/jw/uwb_ws/src`，将包复制到其中（保留解压目录，排除 build/install/log 等生成文件），
+在 `/home/jw/uwb_ws` 下执行 colcon 编译，然后安装服务、重载 systemd、启用开机自启并重启服务。
+每次执行均重新同步源码并增量编译；仅编译成功后更新服务。
 
 ```text
 /home/jw/uwb_ws/
+├── build/
 ├── install/
+├── log/
 └── src/
     └── uwb_aoa_pkg/
+        ├── dds/fastdds.xml
+        ├── dds/uwb-aoa.service
         ├── start_libAoa_robot.sh
         └── install_uwb_service.sh
 ```
 
-启动脚本加载上两级的 `../../install/setup.bash`。
-先在机器人上进入 `/home/jw/uwb_ws`，编译一次：
+目标机需已安装 ROS 2 Humble、Fast DDS RMW、colcon 和本包编译依赖，
+并使用目标平台匹配的 lib/uwb_robot_algo.a。
+安装前核对解压包的 dds/fastdds.xml，网卡 IP 白名单当前是 192.168.50.104，需匹配本机实际 IP。
+服务不额外设置 ROS_DOMAIN_ID 和 ROS_LOCALHOST_ONLY，使用 ROS 默认值。
+
+编译使用普通用户，服务安装通过 sudo 完成。
+root 执行时默认运行用户 jw，也可在命令末尾指定用户名。
+默认工作空间为运行用户家目录下的 uwb_ws，可用 UWB_WS 指定绝对路径。
+解压目录及工作空间需允许运行用户读取/写入。
+
+服务模板来自 dds/uwb-aoa.service，安装时按实际路径、运行用户和 ROS 配置生成。
+模板保持原内容，仅更新 Fast DDS XML 路径；没有 WantedBy，安装脚本通过
+`systemctl add-wants multi-user.target uwb-aoa.service` 建立开机启动关联。
+启动脚本只加载 ROS 和 uwb_ws/install/setup.bash 并启动节点，开机不编译。
+DDS XML 路径仅由 service 的 FASTRTPS_DEFAULT_PROFILES_FILE 环境变量指定，
+指向 uwb_ws/src/uwb_aoa_pkg/dds/fastdds.xml；启动脚本仅检查该变量已设置、文件可读并打印路径，不设置 DDS 环境变量。
+串口优先 /dev/ttyUSB0，其次 /dev/ttyUSB1；设置 dialout 组读写权限。
+串口缺失或异常退出时每 5 秒重试。确认该串口确实为 UWB 设备。
 
 ```bash
-cd /home/jw/uwb_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select uwb_aoa_pkg
-```
-
-随后以运行 ROS 节点的普通用户执行（可在任意目录运行）：
-
-```bash
-bash /home/jw/uwb_ws/src/uwb_aoa_pkg/install_uwb_service.sh
-```
-
-安装脚本会通过 sudo 安装并立即启动 `uwb-aoa.service`，同时启用开机启动。
-以 root 执行时，需在脚本后指定普通用户名。安装后移动工作区需重新安装服务。
-可使用 `bash install_uwb_service.sh --print` 仅查看生成的服务配置。
-
-服务调用 `start_libAoa_robot.sh`，固定连接 `/dev/ttyFT232`，默认加载 ROS Humble，
-开机时不编译。安装前可用 `ROS_DISTRO` 指定其他已安装的 ROS 版本。
-串口缺失或节点异常退出时，每 5 秒重试；串口出现后为其设置 dialout 组读写权限。
-服务通过附加 dialout 组运行，不要求用户修改个人组成员关系。
-
-```bash
+# 预览最终服务内容，不复制、不编译、不安装
+bash /home/jw/uwb_aoa_pkg/install_uwb_service.sh --print
 systemctl status uwb-aoa.service
 journalctl -u uwb-aoa.service -f
 sudo systemctl restart uwb-aoa.service
 sudo systemctl disable --now uwb-aoa.service
-```
-
-启动脚本只加载环境并启动节点，不执行编译。
-手动启动时需事先具备串口读写权限。
-
-卸载服务（停止节点、取消开机自启并删除服务配置）：
-
-```bash
 bash /home/jw/uwb_ws/src/uwb_aoa_pkg/uninstall_uwb_service.sh
 ```
 
-卸载脚本会自动通过 sudo 提权，可重复执行；保留工作区及编译产物。
+修改解压包后可重新执行安装脚本；同名文件会覆盖到工作空间，不删除额外文件。
+也可直接修改工作空间内的包，并从该目录执行安装脚本重新编译、更新服务。
+卸载服务保留源码和编译产物。
